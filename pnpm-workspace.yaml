@@ -1,0 +1,9 @@
+packages:
+  - apps/*
+  - packages/*
+overrides:
+  glob>minimatch: ^10.2.5
+onlyBuiltDependencies:
+  - esbuild
+allowBuilds:
+  esbuild: true

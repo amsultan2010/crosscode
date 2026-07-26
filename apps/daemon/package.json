@@ -1,0 +1,14 @@
+{
+  "name": "@crosscode/daemon",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@crosscode/core": "workspace:*",
+    "@crosscode/git": "workspace:*",
+    "@crosscode/protocol": "workspace:*",
+    "chokidar": "^4.0.3",
+    "minimatch": "^10.2.5",
+    "yaml": "^2.9.0",
+    "zod": "^3.25.76"
+  }
+}

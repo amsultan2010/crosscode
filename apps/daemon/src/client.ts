@@ -1,0 +1,77 @@
+import { readFile, stat } from "node:fs/promises";
+import type { Claim, Task, Validation } from "@crosscode/protocol";
+import { daemonConnectionSchema, type DaemonConnection } from "@crosscode/protocol";
+import type { CheckpointRecord } from "./state.js";
+import type { StoredOperation } from "./types.js";
+import { daemonConnectionPath } from "./runtime.js";
+
+type Status = {
+  root: string;
+  head?: string;
+  branch?: string;
+  worktree: string;
+  remotes: string[];
+  dirty: boolean;
+  workspaceId: string;
+  replicaId: string;
+  tasks: number;
+  claims: number;
+  proposals: number;
+  materializationPaused: boolean;
+  eventSequence: number;
+};
+
+export class DaemonClient {
+  private constructor(private readonly connection: DaemonConnection) {}
+
+  static async connect(directory: string): Promise<DaemonClient> {
+    const path = await daemonConnectionPath(directory);
+    const metadata = await stat(path);
+    if ((metadata.mode & 0o077) !== 0) throw new Error("Crosscode daemon descriptor permissions are unsafe");
+    if (typeof process.getuid === "function" && metadata.uid !== process.getuid()) throw new Error("Crosscode daemon descriptor is owned by another user");
+    const connection = daemonConnectionSchema.parse(JSON.parse(await readFile(path, "utf8")));
+    const client = new DaemonClient(connection);
+    await client.status().catch((error) => { throw new Error(`Crosscode daemon is unavailable: ${error instanceof Error ? error.message : "connection failed"}`); });
+    return client;
+  }
+
+  static from(connection: DaemonConnection): DaemonClient {
+    return new DaemonClient(daemonConnectionSchema.parse(connection));
+  }
+
+  status(): Promise<Status> { return this.request("GET", "/v1/status"); }
+  workspace(): Promise<{ root: string; workspaceId: string; replicaId: string; actorId: string }> { return this.request("GET", "/v1/workspace"); }
+  tasks(): Promise<Task[]> { return this.request("GET", "/v1/tasks"); }
+  createTask(input: { title: string; intent?: string; paths?: string[]; status?: Task["status"] }): Promise<Task> { return this.request("POST", "/v1/tasks", input); }
+  createClaim(input: { taskId: string; kind: Claim["kind"]; target: string; mode: Claim["mode"]; expiresAt?: string }): Promise<Claim> { return this.request("POST", "/v1/claims", input); }
+  operations(): Promise<StoredOperation[]> { return this.request("GET", "/v1/operations"); }
+  analyze(id: string): Promise<{ operation: StoredOperation; analysis: string }> { return this.request("GET", `/v1/operations/${encodeURIComponent(id)}/analysis`); }
+  accept(id: string): Promise<StoredOperation> { return this.request("POST", `/v1/operations/${encodeURIComponent(id)}/accept`, {}); }
+  reject(id: string): Promise<StoredOperation> { return this.request("POST", `/v1/operations/${encodeURIComponent(id)}/reject`, {}); }
+  checkpoints(): Promise<CheckpointRecord[]> { return this.request("GET", "/v1/checkpoints"); }
+  checkpoint(message?: string): Promise<{ ref: string; commit: string; tree: string }> { return this.request("POST", "/v1/checkpoints", message ? { message } : {}); }
+  inspectCheckpoint(ref: string): Promise<{ ref: string; commit: string; tree: string; files: string[] }> { return this.request("POST", "/v1/checkpoints/inspect", { ref }); }
+  restoreCheckpoint(ref: string, path: string): Promise<{ restored: string }> { return this.request("POST", "/v1/checkpoints/restore", { ref, path }); }
+  capture(intent: string): Promise<StoredOperation> { return this.request("POST", "/v1/transactions", { intent }); }
+  validate(profile: string): Promise<Validation[]> { return this.request("POST", "/v1/validate", { profile }); }
+
+  private async request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+    let response: Response;
+    try {
+      response = await fetch(`http://127.0.0.1:${this.connection.port}${path}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${this.connection.secret}`,
+          ...(body === undefined ? {} : { "content-type": "application/json" })
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(3_000)
+      });
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : "Daemon request failed");
+    }
+    const envelope = await response.json().catch(() => undefined) as { ok?: boolean; data?: T; error?: string } | undefined;
+    if (!response.ok || !envelope?.ok) throw new Error(envelope?.error ?? `Daemon request failed with status ${response.status}`);
+    return envelope.data as T;
+  }
+}

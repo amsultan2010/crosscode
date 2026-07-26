@@ -1,0 +1,7 @@
+{
+  "name": "@crosscode/mcp-server",
+  "private": true,
+  "type": "module",
+  "bin": { "crosscode-mcp": "./src/main.ts" },
+  "dependencies": { "@crosscode/daemon": "workspace:*" }
+}

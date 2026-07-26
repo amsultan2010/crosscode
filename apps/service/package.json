@@ -1,0 +1,6 @@
+{
+  "name": "@crosscode/service",
+  "private": true,
+  "type": "module",
+  "dependencies": { "@crosscode/protocol": "workspace:*" }
+}

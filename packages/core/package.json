@@ -1,0 +1,7 @@
+{
+  "name": "@crosscode/core",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": { "@crosscode/protocol": "workspace:*" }
+}
