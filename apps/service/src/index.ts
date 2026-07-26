@@ -22,3 +22,8 @@ export class CoordinationService {
 
   list(workspaceId: string, afterSequence = 0): RemoteOperation[] { return (this.operations.get(workspaceId) ?? []).filter((operation) => operation.sequence > afterSequence); }
 }
+
+export * from "./auth.js";
+export * from "./crypto.js";
+export * from "./http.js";
+export * from "./store.js";

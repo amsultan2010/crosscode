@@ -25,7 +25,7 @@ import {
 } from "@crosscode/protocol";
 import type { CoordinationService } from "../../service/src/index.js";
 import { configuredExcludedPaths, matchesConfiguredExclusion, validationCommands } from "./config.js";
-import { DaemonStateStore, type CheckpointRecord, type GitState } from "./state.js";
+import { DaemonStateStore, type CheckpointRecord, type GitState, type OutboundRecord } from "./state.js";
 import type { StoredOperation } from "./types.js";
 
 const exec = promisify(execFile);
@@ -39,15 +39,26 @@ function decodeText(content: Buffer, path: string): string {
 function assertText(content: string, path: string): void {
   if (content.includes("\0") || Buffer.from(content, "utf8").toString("utf8") !== content) throw new Error(`Binary or invalid text content is not supported: ${path}`);
 }
+function assertChangeIntegrity(change: ChangeTransaction["changes"][number]): void {
+  if (change.kind !== "delete") {
+    if (change.afterContent === undefined || change.afterHash !== contentHash(change.afterContent)) throw new Error(`Transaction content hash is invalid: ${change.path}`);
+  }
+}
 export type DaemonOptions = { workspaceId: string; replicaId: string; actorId: string };
+export type RemoteSyncTransport = {
+  upload(record: OutboundRecord): Promise<import("../../service/src/index.js").RemoteOperation>;
+  list(after: number): Promise<{ operations: import("../../service/src/index.js").RemoteOperation[]; nextCursor: number }>;
+};
 
 export class LocalDaemon {
   readonly tasks = new Map<string, Task>(); readonly claims = new Map<string, Claim>(); readonly operations = new Map<string, StoredOperation>(); readonly validations: Validation[] = []; readonly checkpoints: CheckpointRecord[] = [];
+  readonly outbound = new Map<string, OutboundRecord>();
   private remoteCursor = 0;
   private eventSequence = 0;
   private readonly capturedHashes = new Map<string, string | null>();
   private gitState: GitState;
   private materializationPaused = false;
+  private serviceStatus: { configured: boolean; online: boolean; lastSyncAt?: string; lastSyncError?: string } = { configured: false, online: false };
   private mutationTail: Promise<void> = Promise.resolve();
   private readonly transactionListeners = new Set<(operation: StoredOperation) => void>();
   private constructor(readonly root: string, readonly options: DaemonOptions, private readonly state: DaemonStateStore, gitState: GitState) { this.gitState = gitState; }
@@ -60,9 +71,11 @@ export class LocalDaemon {
       const risk = transactionRisk(transaction);
       daemon.operations.set(operation.id, { ...operation, transaction: { ...transaction, safety: { risk, requiresApproval: risk === "critical" } } });
     }
-    daemon.validations.push(...saved.validations); daemon.checkpoints.push(...saved.checkpoints); daemon.remoteCursor = saved.remoteCursor; daemon.eventSequence = saved.eventSequence; daemon.materializationPaused = saved.materializationPaused; for (const [path, hash] of Object.entries(saved.capturedHashes)) daemon.capturedHashes.set(path, hash); await daemon.reconcileInterruptedMaterializations(); return daemon;
+    daemon.validations.push(...saved.validations); daemon.checkpoints.push(...saved.checkpoints); for (const record of saved.outbound) daemon.outbound.set(record.event.id, record); daemon.remoteCursor = saved.remoteCursor; daemon.eventSequence = saved.eventSequence; daemon.materializationPaused = saved.materializationPaused; for (const [path, hash] of Object.entries(saved.capturedHashes)) daemon.capturedHashes.set(path, hash); await daemon.reconcileInterruptedMaterializations(); return daemon;
   }
-  async status() { const repository = await discoverRepository(this.root); return { ...repository, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, tasks: this.tasks.size, claims: this.claims.size, proposals: [...this.operations.values()].filter((operation) => operation.status === "proposed").length, materializationPaused: this.materializationPaused, eventSequence: this.eventSequence }; }
+  async status() { const repository = await discoverRepository(this.root); return { ...repository, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, tasks: this.tasks.size, claims: this.claims.size, proposals: [...this.operations.values()].filter((operation) => operation.status === "proposed").length, materializationPaused: this.materializationPaused, eventSequence: this.eventSequence, remoteCursor: this.remoteCursor, pendingOutbound: [...this.outbound.values()].filter((record) => record.acknowledgedServerSequence === undefined).length, service: { ...this.serviceStatus } }; }
+  configureRemoteSync(): void { this.serviceStatus = { ...this.serviceStatus, configured: true }; }
+  recordRemoteSyncFailure(): void { this.serviceStatus = { ...this.serviceStatus, configured: true, online: false, lastSyncError: "Coordination service is unavailable" }; }
   async createTask(input: Pick<Task, "title"> & Partial<Pick<Task, "intent" | "paths" | "status">>): Promise<Task> { const task = taskSchema.parse({ id: randomUUID(), title: input.title, ownerId: this.options.actorId, status: input.status ?? "active", intent: input.intent, paths: input.paths ?? [], createdAt: now(), updatedAt: now() }); const previous = this.tasks.get(task.id); this.tasks.set(task.id, task); try { await this.persist("task.created", task); } catch (error) { if (previous) this.tasks.set(task.id, previous); else this.tasks.delete(task.id); throw error; } return task; }
   async createClaim(input: Omit<Claim, "id" | "ownerId" | "createdAt">): Promise<Claim> { const claim = claimSchema.parse({ ...input, id: randomUUID(), ownerId: this.options.actorId, createdAt: now() }); this.claims.set(claim.id, claim); try { await this.persist("claim.created", claim); } catch (error) { this.claims.delete(claim.id); throw error; } return claim; }
   async checkpoint(message = "Crosscode safety checkpoint") {
@@ -172,22 +185,72 @@ export class LocalDaemon {
     const { repository, changes } = snapshot;
     const transaction = changeTransactionSchema.parse({ id: randomUUID(), intent, base: { headCommit: repository.head, files: changes.filter((change) => change.beforeHash).map((change) => ({ path: change.path, contentHash: change.beforeHash! })) }, changes, provenance: { source: "filesystem", confidence: "known" }, safety: { risk: transactionRisk({ changes }), requiresApproval: transactionRisk({ changes }) === "critical" } });
     const local = { id: transaction.id, workspaceId: this.options.workspaceId, senderReplicaId: this.options.replicaId, transaction, sequence: 0, createdAt: now(), status: "local" as const };
+    const event = { id: transaction.id, schemaVersion: 1 as const, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "transaction.created", clientSequence: this.eventSequence + 1, createdAt: now(), payload: transaction };
+    const outbound = { event, transaction };
     const previousHashes = changes.map((change) => [change.path, this.capturedHashes.get(change.path)] as const);
     changes.forEach((change) => this.capturedHashes.set(change.path, change.afterHash ?? null));
     this.operations.set(local.id, local);
+    this.outbound.set(event.id, outbound);
     try { await this.persist("transaction.created", local); }
     catch (error) {
       this.operations.delete(local.id);
+      this.outbound.delete(event.id);
       previousHashes.forEach(([path, hash]) => { if (hash === undefined) this.capturedHashes.delete(path); else this.capturedHashes.set(path, hash); });
       throw error;
     }
     if (!service) return local;
-    const remote = service.receive({ id: randomUUID(), schemaVersion: 1, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "transaction.created", clientSequence: this.eventSequence, createdAt: now(), payload: transaction }, transaction);
+    const remote = service.receive(event, transaction);
     const published = { ...remote, status: "local" as const };
     this.operations.set(published.id, published);
+    this.outbound.set(event.id, { ...outbound, acknowledgedServerSequence: remote.sequence });
     try { await this.persist("transaction.published", published); }
-    catch (error) { this.operations.set(local.id, local); throw error; }
+    catch (error) { this.operations.set(local.id, local); this.outbound.set(event.id, outbound); throw error; }
     return published;
+  }
+
+  async syncRemote(transport: RemoteSyncTransport): Promise<{ uploaded: number; downloaded: number; cursor: number }> {
+    let uploaded = 0;
+    for (const record of [...this.outbound.values()].filter((item) => item.acknowledgedServerSequence === undefined).sort((left, right) => left.event.clientSequence - right.event.clientSequence)) {
+      const remote = await transport.upload(record);
+      if (remote.id !== record.transaction.id || remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId !== this.options.replicaId) throw new Error("Service acknowledgement did not match the outbound operation");
+      const existing = this.operations.get(remote.id);
+      if (existing) this.operations.set(remote.id, { ...existing, sequence: remote.sequence, createdAt: remote.createdAt });
+      this.outbound.set(record.event.id, { ...record, acknowledgedServerSequence: remote.sequence });
+      try { await this.persist("transaction.published", { eventId: record.event.id, operationId: remote.id, serverSequence: remote.sequence }); }
+      catch (error) {
+        this.outbound.set(record.event.id, record);
+        if (existing) this.operations.set(remote.id, existing);
+        throw error;
+      }
+      uploaded += 1;
+    }
+    const page = await transport.list(this.remoteCursor);
+    const ordered = page.operations.every((operation, index) => operation.sequence === (index === 0 ? this.remoteCursor + 1 : page.operations[index - 1]!.sequence + 1));
+    const expectedCursor = page.operations.at(-1)?.sequence ?? this.remoteCursor;
+    if (!ordered || page.nextCursor !== expectedCursor || page.operations.some((operation) => operation.workspaceId !== this.options.workspaceId || operation.sequence <= this.remoteCursor)) throw new Error("Service cursor response was invalid");
+    const previousCursor = this.remoteCursor;
+    const insertedIds: string[] = [];
+    let downloaded = 0;
+    for (const remote of page.operations) {
+      const transaction = changeTransactionSchema.parse(remote.transaction);
+      transaction.changes.forEach(assertChangeIntegrity);
+      if (remote.senderReplicaId === this.options.replicaId || this.operations.has(remote.id)) continue;
+      const risk = transactionRisk(transaction);
+      this.operations.set(remote.id, { ...remote, transaction: { ...transaction, safety: { risk, requiresApproval: risk === "critical" } }, status: "proposed" });
+      insertedIds.push(remote.id);
+      downloaded += 1;
+    }
+    if (page.nextCursor !== this.remoteCursor || downloaded) {
+      this.remoteCursor = page.nextCursor;
+      try { await this.persist("remote.synchronized", { cursor: this.remoteCursor, downloaded }); }
+      catch (error) {
+        this.remoteCursor = previousCursor;
+        insertedIds.forEach((id) => this.operations.delete(id));
+        throw error;
+      }
+    }
+    this.serviceStatus = { configured: true, online: true, lastSyncAt: now() };
+    return { uploaded, downloaded, cursor: this.remoteCursor };
   }
 
   async sync(service: CoordinationService): Promise<StoredOperation[]> {
@@ -286,6 +349,7 @@ export class LocalDaemon {
   }
   private async assertChangeApplicable(operation: StoredOperation, change: ChangeTransaction["changes"][number]): Promise<void> {
     await this.eligiblePath(change.path);
+    assertChangeIntegrity(change);
     if (change.afterContent !== undefined) assertText(change.afterContent, change.path);
     const current = await this.readWorkingText(change.path); const baseMatches = (current === undefined ? undefined : contentHash(current)) === change.beforeHash;
     const analysis = analyzeOperation({ path: change.path, baseMatches: change.kind === "add" ? current === undefined : baseMatches, overlaps: false, kind: change.kind });
@@ -382,7 +446,7 @@ export class LocalDaemon {
   }
   private ignoredPath(path: string): boolean { const relative = path.startsWith(this.root) ? path.slice(this.root.length + 1) : path; return /(^|\/)(\.git|node_modules|dist|build|coverage)(\/|$)/.test(relative) || /(^|\/)\.[^/]+\.[0-9a-f-]+\.crosscode$/.test(relative) || redactPath(relative); }
   private redactValidationOutput(output: string): string { return output.slice(0, 64 * 1024).replace(/((?:api[_-]?key|token|password|secret|authorization)\s*[:=]\s*)([^\s]+)/gi, "$1[REDACTED]"); }
-  private async persist(type: string, payload: unknown): Promise<void> { this.eventSequence = this.state.record({ tasks: [...this.tasks.values()], claims: [...this.claims.values()], operations: [...this.operations.values()], validations: [...this.validations], checkpoints: [...this.checkpoints], remoteCursor: this.remoteCursor, capturedHashes: Object.fromEntries(this.capturedHashes), gitState: this.gitState, materializationPaused: this.materializationPaused }, { type, payload }); }
+  private async persist(type: string, payload: unknown): Promise<void> { this.eventSequence = this.state.record({ tasks: [...this.tasks.values()], claims: [...this.claims.values()], operations: [...this.operations.values()], validations: [...this.validations], checkpoints: [...this.checkpoints], outbound: [...this.outbound.values()], remoteCursor: this.remoteCursor, capturedHashes: Object.fromEntries(this.capturedHashes), gitState: this.gitState, materializationPaused: this.materializationPaused }, { type, payload }); }
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;

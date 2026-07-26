@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { DaemonClient } from "../../daemon/src/client.js";
 import { readDaemonConfig, writeDaemonConfig } from "../../daemon/src/runtime.js";
+import { CoordinationServiceClient } from "../../daemon/src/service-client.js";
 
 type CliResult = { value?: unknown; exitCode?: number };
 
@@ -21,6 +22,15 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
   }
   if (command === "join") {
     const settings = await readDaemonConfig(directory);
+    const serviceUrl = valueAfter(args, "--service");
+    if (serviceUrl) {
+      const enrollmentToken = process.env.CROSSCODE_ENROLLMENT_TOKEN;
+      if (!enrollmentToken) throw new Error("CROSSCODE_ENROLLMENT_TOKEN is required for service enrollment");
+      const enrollment = await CoordinationServiceClient.enroll(serviceUrl, enrollmentToken);
+      const updated = { workspaceId: enrollment.principal.workspaceId, actorId: enrollment.principal.actorId, replicaId: enrollment.principal.replicaId, service: { url: serviceUrl, replicaSecret: enrollment.replicaSecret } };
+      await writeDaemonConfig(directory, updated);
+      return { value: { ...updated, service: { url: serviceUrl, configured: true } } };
+    }
     const updated = { ...settings, workspaceId: args[1] ?? settings.workspaceId };
     await writeDaemonConfig(directory, updated);
     return { value: updated };

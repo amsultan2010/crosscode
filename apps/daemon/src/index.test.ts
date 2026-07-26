@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { CoordinationService } from "../../service/src/index.js";
+import { contentHash } from "@crosscode/core";
 import { LocalDaemon } from "./index.js";
 
 const exec = promisify(execFile); const directories: string[] = [];
@@ -221,6 +222,35 @@ describe("local daemon coordination", () => {
     await daemon.capture("durable publish", service);
 
     expect(durableAtPublish).toBe(true);
+  });
+
+  it("persists a stable outbox event and reconnects without applying remote files", async () => {
+    const root = await repo();
+    let daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
+    await writeFile(join(root, "a.txt"), "offline\n");
+    const local = await daemon.capture("offline durable event");
+    const queued = [...daemon.outbound.values()].find((record) => record.event.id === local.id)!;
+    daemon.close();
+
+    daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
+    expect(daemon.outbound.get(queued.event.id)?.event).toEqual(queued.event);
+    const remoteTransaction = {
+      ...local.transaction,
+      id: "remote-operation",
+      changes: [{ ...local.transaction.changes[0]!, afterContent: "remote\n", afterHash: contentHash("remote\n") }]
+    };
+    const result = await daemon.syncRemote({
+      upload: async (record) => ({ id: record.transaction.id, workspaceId: "w", senderReplicaId: "replica", transaction: record.transaction, sequence: 1, createdAt: new Date().toISOString() }),
+      list: async () => ({ operations: [
+        { id: local.id, workspaceId: "w", senderReplicaId: "replica", transaction: local.transaction, sequence: 1, createdAt: new Date().toISOString() },
+        { id: remoteTransaction.id, workspaceId: "w", senderReplicaId: "other", transaction: remoteTransaction, sequence: 2, createdAt: new Date().toISOString() }
+      ], nextCursor: 2 })
+    });
+
+    expect(result).toEqual({ uploaded: 1, downloaded: 1, cursor: 2 });
+    expect(daemon.outbound.get(queued.event.id)?.acknowledgedServerSequence).toBe(1);
+    expect(daemon.operations.get("remote-operation")?.status).toBe("proposed");
+    expect(await readFile(join(root, "a.txt"), "utf8")).toBe("offline\n");
   });
 
   it("recognizes a same-HEAD hard reset as a Git transition", async () => {

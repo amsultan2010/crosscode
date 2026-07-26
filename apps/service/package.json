@@ -2,5 +2,19 @@
   "name": "@crosscode/service",
   "private": true,
   "type": "module",
-  "dependencies": { "@crosscode/protocol": "workspace:*" }
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "migrate": "tsx src/migrate.ts",
+    "provision": "tsx src/provision-admin.ts"
+  },
+  "dependencies": {
+    "@crosscode/core": "workspace:*",
+    "@crosscode/protocol": "workspace:*",
+    "jose": "^6.2.4",
+    "pg": "^8.22.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.20.0"
+  }
 }

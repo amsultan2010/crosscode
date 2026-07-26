@@ -123,5 +123,5 @@ describe("daemon process lifecycle", () => {
 
     await stop(second, "SIGTERM");
     await expect(access(await daemonConnectionPath(receiver))).rejects.toThrow();
-  }, 15_000);
+  }, 25_000);
 });

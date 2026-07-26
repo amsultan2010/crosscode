@@ -5,9 +5,13 @@
   "scripts": {
     "build": "tsc --noEmit",
     "test": "vitest run --coverage",
+    "test:postgres": "node -e \"if (!process.env.CROSSCODE_TEST_DATABASE_URL) { console.error('CROSSCODE_TEST_DATABASE_URL is required'); process.exit(1) }\" && vitest run apps/service/src/store.integration.test.ts apps/daemon/src/reconnect.integration.test.ts",
     "test:watch": "vitest",
     "crosscode": "tsx apps/cli/src/index.ts",
-    "daemon": "tsx apps/daemon/src/main.ts"
+    "daemon": "tsx apps/daemon/src/main.ts",
+    "service": "tsx apps/service/src/main.ts",
+    "service:migrate": "tsx apps/service/src/migrate.ts",
+    "service:provision": "tsx apps/service/src/provision-admin.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

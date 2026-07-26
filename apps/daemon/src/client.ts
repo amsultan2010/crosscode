@@ -19,6 +19,9 @@ type Status = {
   proposals: number;
   materializationPaused: boolean;
   eventSequence: number;
+  remoteCursor: number;
+  pendingOutbound: number;
+  service: { configured: boolean; online: boolean; lastSyncAt?: string; lastSyncError?: string };
 };
 
 export class DaemonClient {

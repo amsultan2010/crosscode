@@ -5,6 +5,7 @@ import type { FSWatcher } from "chokidar";
 import { discoverRepository, resolveGitPath } from "@crosscode/git";
 import { daemonConfigSchema, daemonConnectionSchema, type DaemonConfig, type DaemonConnection } from "@crosscode/protocol";
 import { startDaemon, type RunningDaemon } from "./index.js";
+import { CoordinationServiceClient } from "./service-client.js";
 
 export async function daemonConfigPath(directory: string): Promise<string> {
   const repository = await discoverRepository(directory);
@@ -84,23 +85,40 @@ export type ManagedDaemon = {
   stop: () => Promise<void>;
 };
 
-export async function runDaemonProcess(directory: string, options: { gitPollMs?: number } = {}): Promise<ManagedDaemon> {
+export async function runDaemonProcess(directory: string, options: { gitPollMs?: number; syncPollMs?: number } = {}): Promise<ManagedDaemon> {
   const config = await readDaemonConfig(directory);
   const connectionPath = await daemonConnectionPath(directory);
   const lock = await acquireDaemonLock(connectionPath);
   let running: RunningDaemon;
-  try { running = await startDaemon(directory, config); }
+  const daemonOptions = { workspaceId: config.workspaceId, replicaId: config.replicaId, actorId: config.actorId };
+  try { running = await startDaemon(directory, daemonOptions); }
   catch (error) { await removeOwnedLock(lock); throw error; }
   let watcher: FSWatcher | undefined;
   let timer: NodeJS.Timeout | undefined;
+  let syncTimer: NodeJS.Timeout | undefined;
   let stopped = false;
   let observing = false;
+  let syncing = false;
   const connection = daemonConnectionSchema.parse({ pid: process.pid, port: running.port, secret: running.secret, startedAt: new Date().toISOString() });
   try {
     watcher = await running.daemon.watch({ onError: (error) => console.error("Crosscode watcher error", error) });
     await running.daemon.runExclusive(() => running.daemon.capture("Recovered offline filesystem edits")).catch((error) => {
       if (!(error instanceof Error) || error.message !== "No eligible working-tree changes to capture") throw error;
     });
+    if (config.service) {
+      const serviceClient = new CoordinationServiceClient(config, config.service);
+      running.daemon.configureRemoteSync();
+      const synchronize = async () => {
+        if (syncing || stopped) return;
+        syncing = true;
+        try { await running.daemon.runExclusive(() => running.daemon.syncRemote(serviceClient)); }
+        catch { running.daemon.recordRemoteSyncFailure(); }
+        finally { syncing = false; }
+      };
+      void synchronize();
+      syncTimer = setInterval(synchronize, options.syncPollMs ?? 1_000);
+      syncTimer.unref();
+    }
     timer = setInterval(async () => {
       if (observing || stopped) return;
       observing = true;
@@ -119,6 +137,7 @@ export async function runDaemonProcess(directory: string, options: { gitPollMs?:
     await writeConnection(connectionPath, connection);
   } catch (error) {
     if (timer) clearInterval(timer);
+    if (syncTimer) clearInterval(syncTimer);
     if (watcher) await watcher.close();
     try { await running.close(); } finally { await removeOwnedLock(lock); }
     throw error;
@@ -129,6 +148,7 @@ export async function runDaemonProcess(directory: string, options: { gitPollMs?:
     stopped = true;
     await removeOwnedConnection(connectionPath, connection);
     if (timer) clearInterval(timer);
+    if (syncTimer) clearInterval(syncTimer);
     await activeWatcher.close();
     await running.daemon.drain();
     try { await running.close(); } finally { await removeOwnedLock(lock); }

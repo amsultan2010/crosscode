@@ -21,7 +21,7 @@ export const changeTransactionSchema = z.object({
   changes: z.array(z.object({ path: z.string().min(1), kind: z.enum(["add", "modify", "delete", "rename"]), beforeHash: z.string().optional(), afterHash: z.string().optional(), unifiedPatch: z.string().optional(), afterContent: z.string().optional() })).min(1),
   provenance: z.object({ source: z.enum(["filesystem", "cli-wrapper", "mcp", "hook", "extension"]), confidence: z.enum(["known", "inferred", "unknown"]) }),
   safety: z.object({ risk: riskSchema, requiresApproval: z.boolean() })
-}).superRefine((transaction, context) => {
+}).strict().superRefine((transaction, context) => {
   transaction.changes.forEach((change, index) => {
     if (change.kind === "rename") {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["changes", index, "kind"], message: "Rename changes require explicit delete and add operations" });
@@ -39,6 +39,91 @@ export const eventEnvelopeSchema = z.object({
   type: z.string().min(1), clientSequence: z.number().int().nonnegative(), serverSequence: z.number().int().positive().optional(), createdAt: z.string().datetime(), payload: z.unknown(), signature: z.string().optional()
 });
 export type EventEnvelope = z.infer<typeof eventEnvelopeSchema>;
+
+export const transactionCreatedEventSchema = eventEnvelopeSchema.extend({
+  type: z.literal("transaction.created"),
+  payload: changeTransactionSchema
+}).strict().superRefine((event, context) => {
+  if (event.id !== event.payload.id) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["payload", "id"],
+      message: "Transaction payload ID must match the event ID"
+    });
+  }
+});
+export type TransactionCreatedEvent = z.infer<typeof transactionCreatedEventSchema>;
+
+export const workspaceRoleSchema = z.enum(["owner", "member", "viewer"]);
+export type WorkspaceRole = z.infer<typeof workspaceRoleSchema>;
+
+export const principalSchema = z.object({
+  workspaceId: z.string().min(1),
+  actorId: z.string().min(1),
+  replicaId: z.string().min(1),
+  role: workspaceRoleSchema
+}).strict();
+export type Principal = z.infer<typeof principalSchema>;
+
+export const enrollmentRequestSchema = z.object({
+  token: z.string().min(1)
+}).strict();
+export type EnrollmentRequest = z.infer<typeof enrollmentRequestSchema>;
+
+export const enrollmentResponseSchema = z.object({
+  accessToken: z.string().min(1),
+  expiresAt: z.string().datetime(),
+  principal: principalSchema,
+  replicaSecret: z.string().min(1)
+}).strict();
+export type EnrollmentResponse = z.infer<typeof enrollmentResponseSchema>;
+
+export const replicaTokenExchangeRequestSchema = z.object({
+  workspaceId: z.string().min(1),
+  actorId: z.string().min(1),
+  replicaId: z.string().min(1),
+  replicaSecret: z.string().min(1)
+}).strict();
+export type ReplicaTokenExchangeRequest = z.infer<typeof replicaTokenExchangeRequestSchema>;
+
+export const replicaTokenExchangeResponseSchema = enrollmentResponseSchema.omit({
+  replicaSecret: true
+});
+export type ReplicaTokenExchangeResponse = z.infer<typeof replicaTokenExchangeResponseSchema>;
+
+export const serviceIngestRequestSchema = z.object({
+  event: transactionCreatedEventSchema
+}).strict();
+export type ServiceIngestRequest = z.infer<typeof serviceIngestRequestSchema>;
+
+export const serviceIngestReceiptSchema = z.object({
+  eventId: z.string().min(1),
+  operationId: z.string().min(1),
+  serverSequence: z.number().int().positive()
+}).strict();
+export type ServiceIngestReceipt = z.infer<typeof serviceIngestReceiptSchema>;
+
+export const remoteOperationSchema = z.object({
+  id: z.string().min(1),
+  eventId: z.string().min(1),
+  workspaceId: z.string().min(1),
+  senderReplicaId: z.string().min(1),
+  transaction: changeTransactionSchema,
+  serverSequence: z.number().int().positive(),
+  createdAt: z.string().datetime()
+}).strict();
+export type RemoteOperation = z.infer<typeof remoteOperationSchema>;
+
+export const cursorQuerySchema = z.object({
+  afterSequence: z.number().int().nonnegative()
+}).strict();
+export type CursorQuery = z.infer<typeof cursorQuerySchema>;
+
+export const cursorResponseSchema = z.object({
+  operations: z.array(remoteOperationSchema),
+  nextCursor: z.number().int().nonnegative()
+}).strict();
+export type CursorResponse = z.infer<typeof cursorResponseSchema>;
 
 export const validationSchema = z.object({ id: z.string(), profile: z.string(), command: z.string(), exitCode: z.number().int(), durationMs: z.number().nonnegative(), tree: z.string().optional(), output: z.string(), createdAt: z.string().datetime() });
 export type Validation = z.infer<typeof validationSchema>;
@@ -87,9 +172,22 @@ export const daemonConnectionSchema = z.object({
 }).strict();
 export type DaemonConnection = z.infer<typeof daemonConnectionSchema>;
 
+export const daemonServiceConfigSchema = z.object({
+  url: z.string().url().refine((value) => {
+    const url = new URL(value);
+    return url.protocol === "https:" || (
+      url.protocol === "http:"
+      && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+    );
+  }, "Service URL must use HTTPS or loopback HTTP"),
+  replicaSecret: z.string().min(1)
+}).strict();
+export type DaemonServiceConfig = z.infer<typeof daemonServiceConfigSchema>;
+
 export const daemonConfigSchema = z.object({
   workspaceId: z.string().min(1),
   replicaId: z.string().min(1),
-  actorId: z.string().min(1)
+  actorId: z.string().min(1),
+  service: daemonServiceConfigSchema.optional()
 }).strict();
 export type DaemonConfig = z.infer<typeof daemonConfigSchema>;

@@ -1,5 +1,60 @@
 # Crosscode — Functional Build Instructions
 
+## 0. Current implementation status
+
+Last updated: 2026-07-26.
+
+Crosscode currently has a tested local safety core, but it is not yet a deployable multi-machine collaboration product. The daemon is the sole local authority; the CLI and current MCP-shaped entry point communicate through its authenticated loopback API.
+
+### Completed
+
+- A real per-worktree daemon executable with exclusive lifecycle locking, a mode-`0600` discovery descriptor, loopback-only HTTP, filesystem observation, Git polling, and graceful shutdown.
+- Runtime-validated local API contracts with bearer authentication, strict JSON schemas, malformed-body handling, a 1 MiB request limit, safe error envelopes, and trusted validation profiles.
+- SQLite append-only local events and atomic projections for tasks, claims, operations, validations, checkpoints, cursors, captured hashes, and Git/materialization state.
+- Stable transaction capture across repository, reflog, index, operation, checkpoint-tree, and per-file hash boundaries.
+- Hidden Git checkpoints that include eligible untracked work without moving HEAD or modifying the user's real index or visible branch history.
+- Explicit proposal acceptance/rejection, stale-base refusal, pre-application checkpoints, temporary-file materialization, and restart reconciliation.
+- Crash recovery that rolls back only proposal-matching bytes, preserves newer developer edits, and marks ambiguous recovery as conflicted.
+- Built-in and committed path exclusions, symlink traversal protection, checkpoint-ref validation, critical-path risk recomputation, text-only transaction enforcement, and byte-preserving checkpoint restoration.
+- Same-HEAD reset detection through the HEAD reflog plus branch, HEAD, index, merge, rebase, cherry-pick, revert, and worktree observation.
+- HTTP-backed CLI commands for initialization, join metadata, status, tasks, path claims, checkpoints, proposals, accept/reject, configured validation, and command wrapping.
+- An MCP-shaped stdio tool mapping backed by the daemon HTTP client.
+- A real child-process fixture covering daemon exclusivity, authenticated readiness, offline edits, pending proposals, branch transitions, `SIGKILL`, restart recovery, checkpoint persistence, and graceful shutdown.
+- Milestone B1: a standalone PostgreSQL service with one-time enrollment, short-lived authenticated replica access, current-membership authorization, idempotent ordered operation ingest, cursor reconnect, audit records, and daemon polling from a durable SQLite outbox.
+
+Current verification baseline:
+
+- TypeScript build passes.
+- 45 tests pass, including the real-PostgreSQL B1 reconnect fixture.
+- Statement coverage is 87.87%; function coverage is 86.88%.
+- Dependency audit reports no known vulnerabilities.
+- Final correctness, TypeScript, and security reviews found no remaining critical or high findings.
+
+### Partially implemented
+
+- The network coordination service implements the B1 durable HTTP path. WebSocket fan-out, live presence, durable session summaries, and task/claim synchronization remain for B2.
+- Deterministic conflict analysis handles independent, stale-base, critical-path, and basic Git three-way analysis. Hunk overlap, delete-vs-modify records, interface impact, dependency graphs, and proposal diff artifacts are incomplete.
+- Validation runs committed profiles locally and binds results to an exact tree. Validation policy enforcement before publish and shared validation reporting are incomplete.
+- The MCP tool names exist, but the process is not yet a standards-compliant MCP server with initialization, tool discovery, JSON Schema declarations, and documented client configurations. Some coordination tools remain placeholders.
+
+### Not implemented
+
+- WebSocket proposal fan-out, presence, and full three-daemon live coordination.
+- Publish planning and safe ordinary Git commit/push workflow.
+- VS Code/Cursor extension.
+- Provider-neutral AI semantic review.
+- Full three-participant end-to-end acceptance fixture.
+
+### Known foundation debt
+
+- `LocalEvent` is still represented internally as an open `type: string` plus `payload: unknown`; define a discriminated, runtime-validated event union while adding service event contracts.
+- The repository does not yet contain the planned `packages/test-fixtures` package, committed config example, protocol/security documents, or a dedicated threat model.
+- `docs/architecture.md` still describes the in-process sequencer as the MVP boundary and should be revised when Milestone B replaces it.
+
+### Recommended next gate
+
+Implement Milestone B2 next: WebSocket proposal fan-out, presence, and the full three-daemon live acceptance fixture. B1's durable authenticated HTTP/reconnect vertical is complete.
+
 ## 1. Product definition
 
 Build **Crosscode**, a local-first multiplayer coordination layer for people and coding agents working in the same Git repository from different tools.
@@ -733,7 +788,7 @@ Target high coverage for protocol/core/git packages. Do not chase a global perce
 
 Implement in order. Do not begin later phases until the preceding acceptance criteria pass.
 
-### Phase 0 — foundation
+### Phase 0 — foundation — PARTIAL
 
 - Create monorepo, TypeScript conventions, runtime validation, linting, test harness, and fixture repos.
 - Define protocol types, local SQLite schema, workspace configuration, and threat model.
@@ -741,7 +796,7 @@ Implement in order. Do not begin later phases until the preceding acceptance cri
 
 **Exit criteria:** `crosscode status --json` correctly reports repository/worktree/HEAD state in fixture repos and all protocol schemas are tested.
 
-### Phase 1 — local safety core
+### Phase 1 — local safety core — COMPLETE
 
 - Implement filesystem observation, debounce/transaction assembly, local append-only log, and hidden Git checkpoint creation.
 - Build CLI commands for init, status, checkpoint, and transaction inspection.
@@ -749,7 +804,7 @@ Implement in order. Do not begin later phases until the preceding acceptance cri
 
 **Exit criteria:** ordinary edits create reproducible transactions and hidden checkpoint refs without modifying HEAD, index, staging, or visible branch history.
 
-### Phase 2 — service and basic sync
+### Phase 2 — service and basic sync — PARTIAL
 
 - Implement authentication suitable for local development, workspace/member lifecycle, durable operation log, and WebSocket fan-out.
 - Implement daemon join/reconnect and remote transaction proposals.
@@ -757,7 +812,7 @@ Implement in order. Do not begin later phases until the preceding acceptance cri
 
 **Exit criteria:** two daemons in separate temporary Git worktrees can exchange an independent change only after the receiver accepts it; local conflicting edits remain intact.
 
-### Phase 3 — task coordination and validation
+### Phase 3 — task coordination and validation — PARTIAL
 
 - Add tasks, claims, intent events, presence, handoffs, and configured validation commands.
 - Add deterministic conflict/risk classification and shared validation status.
@@ -765,7 +820,7 @@ Implement in order. Do not begin later phases until the preceding acceptance cri
 
 **Exit criteria:** three fixture participants can see claims, receive overlap warnings, accept safe work, and attribute a validation result to the exact tree tested.
 
-### Phase 4 — MCP and tool adapters
+### Phase 4 — MCP and tool adapters — PARTIAL
 
 - Implement MCP server and generic CLI wrapper.
 - Add Codex, Claude Code, and OpenCode configuration/documentation adapters built on the same MCP contract.
@@ -773,21 +828,21 @@ Implement in order. Do not begin later phases until the preceding acceptance cri
 
 **Exit criteria:** an MCP-capable client can claim a task, declare intent, query overlap, and create a checkpoint; the same workspace still works with an unwrapped generic editor.
 
-### Phase 5 — VS Code/Cursor extension
+### Phase 5 — VS Code/Cursor extension — NOT STARTED
 
 - Build status, tasks/claims, proposal review, file decoration, and validation views.
 - Use normal diff/confirmation UI and the daemon API only.
 
 **Exit criteria:** a VS Code/Cursor user can complete all common review/accept/reject actions without the terminal; disabling the extension does not disrupt daemon sync.
 
-### Phase 6 — AI review and publishing
+### Phase 6 — AI review and publishing — NOT STARTED
 
 - Add provider-agnostic semantic-review interface, strict structured output, redaction, audit, policy controls, and test gates.
 - Implement conservative publish workflow for accepted validated state.
 
 **Exit criteria:** ambiguous changes receive a non-authoritative AI proposal, high-risk changes require approval, and publishing creates/pushes normal Git commits without force operations.
 
-### Phase 7 — later enhancements
+### Phase 7 — later enhancements — NOT STARTED
 
 - Symbol/AST-aware analysis for a narrowly selected language.
 - Isolated shared validation workers.
@@ -820,7 +875,7 @@ Before calling the functional MVP complete, demonstrate all of the following wit
 - [ ] Independent changes from three separate worktrees preserve all participants' work.
 - [ ] Same-file/same-symbol and delete-vs-modify collisions never silently overwrite files.
 - [ ] A user can keep using ordinary `git commit`, `git pull`, branches, worktrees, and rebase; Crosscode detects and safely reconciles state changes.
-- [ ] Automatic checkpoints are recoverable and do not pollute normal branch history.
+- [x] Automatic checkpoints are recoverable and do not pollute normal branch history.
 - [ ] Offline edits persist and reconnect without duplicate events or blind overwrites.
 - [ ] High-risk paths and all AI-generated resolutions require explicit approval by default.
 - [ ] Repository secrets and excluded files never leave the machine through Crosscode events or AI review.
@@ -833,68 +888,73 @@ Keep the first build small and observable. For every behavior that can affect a 
 
 If a choice trades convenience against preserving uncommitted work, preserve the work. The entire product is only credible if it is safer than manual late-stage merging.
 
-## 24. Post-MVP delivery plan: make Crosscode work across real replicas
+## 24. Delivery plan: make Crosscode work across real replicas
 
-The initial implementation proves the local safety model: runtime-validated transactions, hidden checkpoints, explicit proposal acceptance, stale-base refusal, local task/claim state, a loopback daemon API, a CLI, and an MCP tool mapping. It is **not yet a deployable multi-machine collaboration product**. The next work must close the following gaps in order.
+The implementation now proves the durable local safety model described above. It is **not yet a deployable multi-machine collaboration product**. Status markers below are authoritative for delivery sequencing.
 
-### Milestone A — durable local daemon
+### Milestone A — durable local daemon — COMPLETE
 
 Replace the temporary in-memory and JSON-backed daemon state with the specified SQLite append-only event store and materialized projections. Add filesystem observation with `chokidar`, debounce settled writes, and Git-transition observation.
 
-- Persist events, transactions, operations, task/claim history, checkpoints, and validation results atomically in `<git-dir>/crosscode/state.sqlite`.
-- Recover the complete local state after daemon restart without changing files, Git refs, index, or branch.
-- Watch tracked and eligible untracked files; exclude `.git`, dependency directories, outputs, configured exclusions, `.env`, keys, and certificates.
-- Assemble a transaction only from a stable before/after snapshot; retry if a file changes during assembly.
-- Detect checkout, pull, merge, rebase, reset, cherry-pick, and worktree changes. Pause pending materialization, checkpoint when safe, and re-analyze proposals afterward.
+- [x] Persist events, transactions, operations, task/claim history, checkpoints, and validation results atomically in `<git-dir>/crosscode/state.sqlite`.
+- [x] Recover the complete local state after daemon restart without changing files, Git refs, index, or branch.
+- [x] Watch tracked and eligible untracked files; exclude `.git`, dependency directories, outputs, configured exclusions, `.env`, keys, and certificates.
+- [x] Assemble a transaction only from a stable before/after snapshot; retry if a file changes during assembly.
+- [x] Detect checkout, pull, merge, rebase, reset, cherry-pick, and worktree changes. Pause pending materialization, checkpoint when safe, and re-analyze proposals afterward.
 
-**Acceptance test:** kill and restart a daemon while a proposal is pending and while the participant is offline. The participant retains the proposal, local edits, event sequence, and checkpoint; no file is written automatically.
+**Acceptance test: passed.** The real child-process fixture kills and restarts a daemon while a proposal is pending and the participant has offline work. The proposal, local transaction, event sequence, and checkpoints survive; no remote proposal is written automatically.
 
-### Milestone B — real shared coordination service and authenticated sync
+### Milestone B — real shared coordination service and authenticated sync — PARTIAL (B1 COMPLETE)
 
 Turn the in-process service into a standalone HTTP/WebSocket service with PostgreSQL durable storage. Add authenticated workspace membership and per-workspace authorization before allowing operations to sync.
 
-- Implement the tables named in section 7, including append-only `operations` and `audit_events`.
-- Authenticate users and replicas with short-lived credentials; store local credentials in the OS keychain where practical, never in committed config.
-- Assign idempotent server sequence numbers and expose cursor-based reconnect sync.
-- Fan out presence and proposals through WebSockets; retain durable summaries for disconnected replicas.
-- Validate every inbound payload with the protocol schemas and enforce owner/member/viewer permissions at the service boundary.
-- Bind the local daemon to loopback only and require its generated local secret on every API request.
+- [x] Implement the tables named in section 7, beginning with workspaces, members, replicas, operations, and audit events.
+- [x] Authenticate users and replicas with one-time enrollment, short-lived credentials, and current PostgreSQL membership checks. OS-keychain storage remains a hardening task; the current headless fallback is mode `0600` under the Git directory.
+- [x] Assign idempotent server sequence numbers and expose cursor-based reconnect sync.
+- [ ] Fan out presence and proposals through WebSockets; retain durable summaries for disconnected replicas.
+- [x] Validate every inbound payload with the protocol schemas and enforce owner/member/viewer permissions at the service boundary.
+- [x] Bind the local daemon to loopback only and require its generated local secret on every API request.
+- [x] Add a daemon-owned network sync client and durable outbound delivery state. The in-memory `CoordinationService` remains only as a compatibility test double.
 
 **Acceptance test:** run three daemons in separate worktrees against one service process. Restart the service and reconnect an offline daemon; each event appears once, in order, and no proposal is applied before explicit local acceptance.
 
-### Milestone C — safe multi-replica integration pipeline
+**B1 acceptance: passed.** Real PostgreSQL integration covers one-time enrollment, exact idempotent retry, conflicting client-sequence rejection, service restart, offline outbox recovery, ordered cursor download, duplicate-free proposals, and no automatic file write. The full three-daemon/WebSocket acceptance remains B2.
+
+### Milestone C — safe multi-replica integration pipeline — PARTIAL
 
 Complete the deterministic analysis and materialization path before adding any automated convenience.
 
-- Compare per-file base blob/content hashes before every application, immediately before atomic rename.
-- Use Git three-way merge or proven patch application for stale bases; never build a custom text merge engine.
-- Classify independent, non-overlapping, stale-base, delete-vs-modify, interface, and critical-path changes according to section 11.
-- Preserve both inputs and all candidate patches for conflict recovery and audit.
-- Add restore/inspect checkpoint commands and a proposal diff command.
-- Enforce a policy that only explicitly accepted low-risk operations can materialize; high/critical work always requests human approval.
+- [x] Compare per-file base content hashes before application and immediately before atomic rename.
+- [x] Use Git three-way merge for stale-base analysis; never build a custom text merge engine.
+- [ ] Complete classification for non-overlapping hunks, delete-vs-modify, interface, and dependency-impact changes. Independent, stale-base, and critical-path cases are implemented.
+- [ ] Preserve both inputs and candidate patches as explicit conflict-recovery/audit artifacts.
+- [ ] Add a proposal diff command. Checkpoint inspect/restore commands are implemented.
+- [x] Require explicit acceptance before materialization and block locally classified high/critical work.
+- [x] Journal in-progress materialization and recover safely after crashes without overwriting newer developer edits.
 
 **Acceptance test:** a deterministic three-worktree fixture preserves all independent changes; same-file/same-symbol and delete-vs-modify cases leave files untouched and provide a recovery/proposal record.
 
-### Milestone D — validation and publish workflow
+### Milestone D — validation and publish workflow — PARTIAL
 
 Implement team configuration parsing and publishing only after the integration pipeline is reliable.
 
-- Parse committed `.crosscode/config.yaml` and run only trusted configured commands.
-- Record command, runner, exit code, duration, output summary, and exact tested tree.
-- Require passing applicable validation for the exact accepted tree before publish.
-- Implement `publish --branch <branch>` with explicit confirmation or explicit noninteractive `--yes` policy. It must create ordinary commits only from accepted state, never stage unrelated user work, force-push, reset, rebase, or alter remotes.
-- Add a dry-run publish plan explaining the commit tree and changed paths before any branch/ref update.
+- [x] Parse committed `.crosscode/config.yaml` and run only trusted configured commands.
+- [x] Record command, exit code, duration, bounded/redacted output, and exact tested tree. Runner identity is still missing.
+- [ ] Require passing applicable validation for the exact accepted tree before publish.
+- [ ] Implement `publish --branch <branch>` with explicit confirmation or explicit noninteractive `--yes` policy. It must create ordinary commits only from accepted state, never stage unrelated user work, force-push, reset, rebase, or alter remotes.
+- [ ] Add a dry-run publish plan explaining the commit tree and changed paths before any branch/ref update.
 
 **Acceptance test:** accepted work in a fixture is validated and published as a normal commit on a test remote; unstaged unrelated files and the active branch remain unchanged.
 
-### Milestone E — production agent and editor entry points
+### Milestone E — production agent and editor entry points — PARTIAL
 
 Keep the daemon as the correctness authority; integrations only add context.
 
-- Make the MCP server a standards-compliant transport backed by the daemon HTTP API, with tools listed in section 13 and JSON-schema inputs.
-- Provide documented MCP configurations for Codex, Claude Code, and OpenCode.
-- Test `crosscode run -- <tool>` argument and exit-code pass-through.
-- Build the VS Code/Cursor extension last: status, tasks, claims, proposals, validation, diff review, and confirmation UI only. It must not contain sync authority.
+- [ ] Make the current MCP-shaped stdio process a standards-compliant MCP transport backed by the daemon HTTP API, with initialization, tool discovery, JSON-schema inputs, and the tools listed in section 13.
+- [ ] Replace placeholder MCP coordination methods with persisted daemon/service operations.
+- [ ] Provide documented MCP configurations for Codex, Claude Code, and OpenCode.
+- [ ] Add automated coverage for `crosscode run -- <tool>` argument and exit-code pass-through; the wrapper implementation exists.
+- [ ] Build the VS Code/Cursor extension last: status, tasks, claims, proposals, validation, diff review, and confirmation UI only. It must not contain sync authority.
 
 **Acceptance test:** an unwrapped editor, each MCP client, and the VS Code extension can collaborate in the same workspace; disabling any integration leaves daemon coordination intact.
 
