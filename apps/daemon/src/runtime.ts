@@ -6,6 +6,7 @@ import { discoverRepository, resolveGitPath } from "@crosscode/git";
 import { daemonConfigSchema, daemonConnectionSchema, type DaemonConfig, type DaemonConnection } from "@crosscode/protocol";
 import { startDaemon, type RunningDaemon } from "./index.js";
 import { CoordinationServiceClient } from "./service-client.js";
+import { LiveSyncClient } from "./ws-client.js";
 
 export async function daemonConfigPath(directory: string): Promise<string> {
   const repository = await discoverRepository(directory);
@@ -96,6 +97,7 @@ export async function runDaemonProcess(directory: string, options: { gitPollMs?:
   let watcher: FSWatcher | undefined;
   let timer: NodeJS.Timeout | undefined;
   let syncTimer: NodeJS.Timeout | undefined;
+  let liveSync: LiveSyncClient | undefined;
   let stopped = false;
   let observing = false;
   let syncing = false;
@@ -118,6 +120,15 @@ export async function runDaemonProcess(directory: string, options: { gitPollMs?:
       void synchronize();
       syncTimer = setInterval(synchronize, options.syncPollMs ?? 1_000);
       syncTimer.unref();
+      liveSync = new LiveSyncClient(config, config.service, {
+        onOperation: (operation) => {
+          if (operation.workspaceId === config.workspaceId) void synchronize();
+        },
+        onPresence: (presence) => {
+          console.error(`Crosscode presence: ${presence.actorId} (${presence.replicaId}) is ${presence.status}`);
+        }
+      });
+      liveSync.start();
     }
     timer = setInterval(async () => {
       if (observing || stopped) return;
@@ -138,6 +149,7 @@ export async function runDaemonProcess(directory: string, options: { gitPollMs?:
   } catch (error) {
     if (timer) clearInterval(timer);
     if (syncTimer) clearInterval(syncTimer);
+    liveSync?.stop();
     if (watcher) await watcher.close();
     try { await running.close(); } finally { await removeOwnedLock(lock); }
     throw error;
@@ -149,6 +161,7 @@ export async function runDaemonProcess(directory: string, options: { gitPollMs?:
     await removeOwnedConnection(connectionPath, connection);
     if (timer) clearInterval(timer);
     if (syncTimer) clearInterval(syncTimer);
+    liveSync?.stop();
     await activeWatcher.close();
     await running.daemon.drain();
     try { await running.close(); } finally { await removeOwnedLock(lock); }

@@ -8,7 +8,11 @@
     "@crosscode/protocol": "workspace:*",
     "chokidar": "^4.0.3",
     "minimatch": "^10.2.5",
+    "ws": "^8.21.1",
     "yaml": "^2.9.0",
     "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
   }
 }

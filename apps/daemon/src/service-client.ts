@@ -62,14 +62,22 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
   }
 
   private async refresh(): Promise<void> {
-    const data = await request(this.service.url, "/v1/token", "POST", undefined, {
-      workspaceId: this.identity.workspaceId,
-      actorId: this.identity.actorId,
-      replicaId: this.identity.replicaId,
-      replicaSecret: this.service.replicaSecret
-    });
-    this.accessToken = replicaTokenExchangeResponseSchema.parse(data).accessToken;
+    this.accessToken = await fetchAccessToken(this.service.url, this.identity, this.service);
   }
+}
+
+export async function fetchAccessToken(
+  url: string,
+  identity: Pick<DaemonConfig, "workspaceId" | "actorId" | "replicaId">,
+  service: Pick<NonNullable<DaemonConfig["service"]>, "replicaSecret">
+): Promise<string> {
+  const data = await request(url, "/v1/token", "POST", undefined, {
+    workspaceId: identity.workspaceId,
+    actorId: identity.actorId,
+    replicaId: identity.replicaId,
+    replicaSecret: service.replicaSecret
+  });
+  return replicaTokenExchangeResponseSchema.parse(data).accessToken;
 }
 
 class ServiceHttpError extends Error {

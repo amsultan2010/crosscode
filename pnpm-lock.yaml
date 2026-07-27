@@ -56,12 +56,19 @@ importers:
       minimatch:
         specifier: ^10.2.5
         version: 10.2.5
+      ws:
+        specifier: ^8.21.1
+        version: 8.21.1
       yaml:
         specifier: ^2.9.0
         version: 2.9.0
       zod:
         specifier: ^3.25.76
         version: 3.25.76
+    devDependencies:
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
 
   apps/mcp-server:
     dependencies:
