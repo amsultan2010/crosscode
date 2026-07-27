@@ -191,3 +191,40 @@ export const daemonConfigSchema = z.object({
   service: daemonServiceConfigSchema.optional()
 }).strict();
 export type DaemonConfig = z.infer<typeof daemonConfigSchema>;
+
+export const wsSubscribeRequestSchema = z.object({
+  type: z.literal("subscribe"),
+  workspaceId: z.string().min(1),
+  replicaId: z.string().min(1),
+  accessToken: z.string().min(1)
+}).strict();
+export type WsSubscribeRequest = z.infer<typeof wsSubscribeRequestSchema>;
+
+export const presenceStatusSchema = z.enum(["online", "idle", "offline"]);
+export type PresenceStatus = z.infer<typeof presenceStatusSchema>;
+
+export const presenceUpdateSchema = z.object({
+  replicaId: z.string().min(1),
+  actorId: z.string().min(1),
+  status: presenceStatusSchema,
+  lastSeenAt: z.string().datetime()
+}).strict();
+export type PresenceUpdate = z.infer<typeof presenceUpdateSchema>;
+
+export const wsFanOutMessageSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("operation"), operation: remoteOperationSchema }).strict(),
+  z.object({ type: z.literal("presence"), presence: presenceUpdateSchema }).strict()
+]);
+export type WsFanOutMessage = z.infer<typeof wsFanOutMessageSchema>;
+
+export const wsSubscribeAckSchema = z.object({
+  type: z.literal("subscribed"),
+  cursor: z.number().int().nonnegative()
+}).strict();
+export type WsSubscribeAck = z.infer<typeof wsSubscribeAckSchema>;
+
+export const wsErrorMessageSchema = z.object({
+  type: z.literal("error"),
+  message: z.string().min(1)
+}).strict();
+export type WsErrorMessage = z.infer<typeof wsErrorMessageSchema>;
