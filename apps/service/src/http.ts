@@ -14,6 +14,7 @@ import { contentHash, redactPath } from "@crosscode/core";
 import { ZodError } from "zod";
 import { issueAccessToken, verifyAccessToken, type AccessClaims } from "./auth.js";
 import { PgStore, StoreConflictError, StoreUnauthorizedError, type StoredOperation } from "./store.js";
+import { attachWebSocketGateway } from "./ws.js";
 
 export type ServiceServerOptions = {
   store: PgStore;
@@ -34,18 +35,21 @@ export function assertSafeServiceBinding(host: string, tlsEnabled: boolean): voi
 export function createServiceServer(options: ServiceServerOptions): Server {
   const limiter = new FixedWindowRateLimiter();
   const listener = (request: IncomingMessage, response: ServerResponse) => {
-    void handleRequest(request, response, options, limiter).catch((error: unknown) => {
+    void handleRequest(request, response, options, limiter, gateway).catch((error: unknown) => {
       sendError(response, statusFor(error), messageFor(error));
     });
   };
-  return options.tls ? createHttpsServer(options.tls, listener) : createHttpServer(listener);
+  const server = options.tls ? createHttpsServer(options.tls, listener) : createHttpServer(listener);
+  const gateway = attachWebSocketGateway(server, options);
+  return server;
 }
 
 async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
   options: ServiceServerOptions,
-  limiter: FixedWindowRateLimiter
+  limiter: FixedWindowRateLimiter,
+  gateway: ReturnType<typeof attachWebSocketGateway>
 ): Promise<void> {
   response.setHeader("cache-control", "no-store");
   const method = request.method ?? "GET";
@@ -102,6 +106,7 @@ async function handleRequest(
       }
     }
     const operation = await options.store.appendOperation(identity, body.event);
+    gateway.broadcastOperation(identity.workspaceId, toRemoteOperation(operation), identity.replicaId);
     send(response, 200, serviceIngestReceiptSchema.parse({
       eventId: operation.eventId,
       operationId: operation.id,

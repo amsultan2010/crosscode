@@ -256,6 +256,15 @@ export class PgStore {
     });
   }
 
+  async getCursor(workspaceId: string): Promise<number> {
+    const result = await this.pool.query<{ next_sequence: string }>(
+      "SELECT next_sequence FROM workspaces WHERE id = $1",
+      [workspaceId]
+    );
+    if (!result.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
+    return Number(result.rows[0].next_sequence);
+  }
+
   async listOperations(workspaceId: string, cursor: number, limit: number): Promise<{
     items: StoredOperation[]; nextCursor: number; hasMore: boolean;
   }> {

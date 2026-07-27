@@ -12,9 +12,11 @@
     "@crosscode/protocol": "workspace:*",
     "jose": "^6.2.4",
     "pg": "^8.22.0",
+    "ws": "^8.21.1",
     "zod": "^3.25.76"
   },
   "devDependencies": {
-    "@types/pg": "^8.20.0"
+    "@types/pg": "^8.20.0",
+    "@types/ws": "^8.18.1"
   }
 }
