@@ -1,5 +1,5 @@
 import type { AddressInfo } from "node:net";
-import type { TransactionCreatedEvent, WsFanOutMessage, WsSubscribeAck } from "@crosscode/protocol";
+import type { HandoffRequestedEvent, IntentPublishedEvent, TransactionCreatedEvent, WsFanOutMessage, WsSubscribeAck } from "@crosscode/protocol";
 import { contentHash } from "@crosscode/core";
 import { WebSocket } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
@@ -29,7 +29,9 @@ describe("service WebSocket fan-out", () => {
   it("completes the subscribe handshake and returns the current cursor", async () => {
     const store = {
       reauthorize: async (claims: AccessClaims) => claims,
-      getCursor: async () => 7
+      getCursor: async () => 7,
+      recordSessionStart: async () => {},
+      recordSessionEnd: async () => {}
     } as unknown as PgStore;
     const base = await listen(store);
     const token = await issueAccessToken(claimsA, jwtSecret);
@@ -39,7 +41,7 @@ describe("service WebSocket fan-out", () => {
   });
 
   it("rejects a subscribe handshake with an invalid access token", async () => {
-    const store = { reauthorize: async (claims: AccessClaims) => claims, getCursor: async () => 0 } as unknown as PgStore;
+    const store = { reauthorize: async (claims: AccessClaims) => claims, getCursor: async () => 0, recordSessionStart: async () => {}, recordSessionEnd: async () => {} } as unknown as PgStore;
     const base = await listen(store);
     const socket = openSocket(base);
     const closeCode = await new Promise<number>((resolve) => {
@@ -52,7 +54,7 @@ describe("service WebSocket fan-out", () => {
   });
 
   it("broadcasts presence online and offline to other connected replicas", async () => {
-    const store = { reauthorize: async (claims: AccessClaims) => claims, getCursor: async () => 0 } as unknown as PgStore;
+    const store = { reauthorize: async (claims: AccessClaims) => claims, getCursor: async () => 0, recordSessionStart: async () => {}, recordSessionEnd: async () => {} } as unknown as PgStore;
     const base = await listen(store);
     const tokenA = await issueAccessToken(claimsA, jwtSecret);
     const tokenB = await issueAccessToken(claimsB, jwtSecret);
@@ -79,7 +81,9 @@ describe("service WebSocket fan-out", () => {
     const store = {
       reauthorize: async (claims: AccessClaims) => claims,
       getCursor: async () => 0,
-      appendOperation: async () => operation
+      appendOperation: async () => operation,
+      recordSessionStart: async () => {},
+      recordSessionEnd: async () => {}
     } as unknown as PgStore;
     const base = await listen(store);
     const tokenA = await issueAccessToken(claimsA, jwtSecret);
@@ -106,6 +110,48 @@ describe("service WebSocket fan-out", () => {
     expect(fanOut).toEqual({ type: "operation", operation: expect.objectContaining({ id: operation.id }) });
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(senderSawMessage).toBe(false);
+  });
+
+  it("fans out a live handoff and intent to other replicas while excluding the sender", async () => {
+    const handoffEvent = makeHandoffEvent();
+    const remoteHandoff = { eventId: handoffEvent.id, workspaceId: claimsA.workspaceId, senderReplicaId: claimsA.replicaId, handoff: handoffEvent.payload, updatedAt: "2026-01-01T00:00:01.000Z" };
+    const intentEvent = makeIntentEvent();
+    const remoteIntent = { eventId: intentEvent.id, workspaceId: claimsA.workspaceId, senderReplicaId: claimsA.replicaId, intent: intentEvent.payload, updatedAt: "2026-01-01T00:00:01.000Z" };
+    const store = {
+      reauthorize: async (claims: AccessClaims) => claims,
+      getCursor: async () => 0,
+      recordSessionStart: async () => {},
+      recordSessionEnd: async () => {},
+      upsertHandoff: async () => remoteHandoff,
+      upsertIntent: async () => remoteIntent
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const tokenA = await issueAccessToken(claimsA, jwtSecret);
+    const tokenB = await issueAccessToken(claimsB, jwtSecret);
+    const { socket: socketA } = await connect(base, claimsA, tokenA);
+    const { socket: socketB } = await connect(base, claimsB, tokenB);
+    await nextMessage(socketA); // presence.online for replica-b, ignored here
+
+    const httpBase = base.replace("ws://", "http://");
+    const accessToken = await issueAccessToken(claimsA, jwtSecret);
+
+    const handoffReceiverMessage = nextMessage(socketB);
+    const handoffResponse = await fetch(`${httpBase}/v1/handoffs`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ event: handoffEvent })
+    });
+    expect(handoffResponse.status).toBe(200);
+    expect(await handoffReceiverMessage).toEqual({ type: "handoff", handoff: expect.objectContaining({ handoff: expect.objectContaining({ id: handoffEvent.id }) }) });
+
+    const intentReceiverMessage = nextMessage(socketB);
+    const intentResponse = await fetch(`${httpBase}/v1/intents`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ event: intentEvent })
+    });
+    expect(intentResponse.status).toBe(200);
+    expect(await intentReceiverMessage).toEqual({ type: "intent", intent: expect.objectContaining({ intent: expect.objectContaining({ id: intentEvent.id }) }) });
   });
 });
 
@@ -168,5 +214,33 @@ function storedOperation(event: TransactionCreatedEvent): StoredOperation {
     serverSequence: 1,
     createdAt: "2026-01-01T00:00:00.000Z",
     event: { ...event, serverSequence: 1 }
+  };
+}
+
+function makeHandoffEvent(): HandoffRequestedEvent {
+  return {
+    id: "handoff-1",
+    schemaVersion: 1,
+    workspaceId: claimsA.workspaceId,
+    replicaId: claimsA.replicaId,
+    actorId: claimsA.actorId,
+    type: "handoff.requested",
+    clientSequence: 1,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    payload: { id: "handoff-1", operationId: "operation-1", requestedBy: claimsA.actorId, status: "pending", createdAt: "2026-01-01T00:00:00.000Z" }
+  };
+}
+
+function makeIntentEvent(): IntentPublishedEvent {
+  return {
+    id: "intent-1",
+    schemaVersion: 1,
+    workspaceId: claimsA.workspaceId,
+    replicaId: claimsA.replicaId,
+    actorId: claimsA.actorId,
+    type: "intent.published",
+    clientSequence: 1,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    payload: { id: "intent-1", actorId: claimsA.actorId, text: "Rename foo to bar", createdAt: "2026-01-01T00:00:00.000Z" }
   };
 }

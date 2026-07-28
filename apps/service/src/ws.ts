@@ -7,6 +7,8 @@ import {
   wsSubscribeRequestSchema,
   type PresenceStatus,
   type RemoteClaim,
+  type RemoteHandoff,
+  type RemoteIntent,
   type RemoteOperation,
   type RemoteTask,
   type WsFanOutMessage
@@ -23,6 +25,8 @@ export type WebSocketGateway = {
   broadcastOperation: (workspaceId: string, operation: RemoteOperation, excludeReplicaId: string) => void;
   broadcastTask: (workspaceId: string, task: RemoteTask, excludeReplicaId: string) => void;
   broadcastClaim: (workspaceId: string, claim: RemoteClaim, excludeReplicaId: string) => void;
+  broadcastHandoff: (workspaceId: string, handoff: RemoteHandoff, excludeReplicaId: string) => void;
+  broadcastIntent: (workspaceId: string, intent: RemoteIntent, excludeReplicaId: string) => void;
 };
 
 const STREAM_PATH = "/v1/stream";
@@ -80,6 +84,12 @@ export function attachWebSocketGateway(server: Server, options: WebSocketGateway
     },
     broadcastClaim(workspaceId, claim, excludeReplicaId) {
       broadcast(connectionsByWorkspace, workspaceId, { type: "claim", claim }, excludeReplicaId);
+    },
+    broadcastHandoff(workspaceId, handoff, excludeReplicaId) {
+      broadcast(connectionsByWorkspace, workspaceId, { type: "handoff", handoff }, excludeReplicaId);
+    },
+    broadcastIntent(workspaceId, intent, excludeReplicaId) {
+      broadcast(connectionsByWorkspace, workspaceId, { type: "intent", intent }, excludeReplicaId);
     }
   };
 }
@@ -109,6 +119,7 @@ function handleConnection(
         const cursor = await options.store.getCursor(identity.workspaceId);
         send(socket, wsSubscribeAckSchema.parse({ type: "subscribed", cursor }));
         broadcastPresence(connectionsByWorkspace, identity.workspaceId, identity.replicaId, identity.actorId, "online");
+        await options.store.recordSessionStart(identity.workspaceId, identity.replicaId);
       } catch {
         send(socket, wsErrorMessageSchema.parse({ type: "error", message: "Subscription rejected" }));
         socket.close(1008, "Subscription rejected");
@@ -128,6 +139,7 @@ function handleConnection(
       registry.delete(connection.replicaId);
       if (registry.size === 0) connectionsByWorkspace.delete(connection.workspaceId);
       broadcastPresence(connectionsByWorkspace, connection.workspaceId, connection.replicaId, connection.actorId, "offline");
+      void options.store.recordSessionEnd(connection.workspaceId, connection.replicaId);
     }
   });
 }

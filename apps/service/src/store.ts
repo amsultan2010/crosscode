@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type {
-  ChangeTransaction, Claim, ClaimCreatedEvent, ClaimReleasedEvent, EventEnvelope, RemoteClaim, RemoteOperation,
+  ChangeTransaction, Claim, ClaimCreatedEvent, ClaimReleasedEvent, EventEnvelope, Handoff, HandoffRequestedEvent,
+  HandoffRespondedEvent, Intent, IntentPublishedEvent, RemoteClaim, RemoteHandoff, RemoteIntent, RemoteOperation,
   RemoteTask, Task, TaskCreatedEvent, TaskUpdatedEvent, TransactionCreatedEvent
 } from "@crosscode/protocol";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
@@ -35,6 +36,8 @@ export class PgStore {
   async migrate(): Promise<void> {
     const sql = await readFile(new URL("../migrations/001_initial.sql", import.meta.url), "utf8");
     await this.pool.query(sql);
+    const handoffsIntentsSql = await readFile(new URL("../migrations/002_handoffs_intents.sql", import.meta.url), "utf8");
+    await this.pool.query(handoffsIntentsSql);
   }
 
   async close(): Promise<void> {
@@ -337,6 +340,93 @@ export class PgStore {
     return { items, nextCursor: items.at(-1)?.updatedAt ?? after };
   }
 
+  async upsertHandoff(identity: AccessClaims, event: HandoffRequestedEvent | HandoffRespondedEvent): Promise<RemoteHandoff> {
+    const handoff = event.payload;
+    const responded = event.type === "handoff.responded";
+    const result = await this.pool.query<HandoffRow>(
+      `INSERT INTO handoffs (id, workspace_id, event_id, replica_id, payload, responded_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, now())
+       ON CONFLICT (workspace_id, id) DO UPDATE
+         SET event_id = excluded.event_id, replica_id = excluded.replica_id, payload = excluded.payload,
+             responded_at = excluded.responded_at, updated_at = now()
+       RETURNING id, workspace_id, event_id, replica_id, payload, responded_at, updated_at`,
+      [handoff.id, identity.workspaceId, event.id, identity.replicaId, JSON.stringify(handoff), responded ? new Date() : null]
+    );
+    return mapHandoff(result.rows[0]!);
+  }
+
+  async listHandoffs(workspaceId: string, after: string, limit: number): Promise<{ items: RemoteHandoff[]; nextCursor: string }> {
+    const result = await this.pool.query<HandoffRow>(
+      `SELECT id, workspace_id, event_id, replica_id, payload, responded_at, updated_at
+         FROM handoffs
+        WHERE workspace_id = $1 AND updated_at > $2
+        ORDER BY updated_at ASC
+        LIMIT $3`,
+      [workspaceId, after, limit]
+    );
+    const items = result.rows.map(mapHandoff);
+    return { items, nextCursor: items.at(-1)?.updatedAt ?? after };
+  }
+
+  async upsertIntent(identity: AccessClaims, event: IntentPublishedEvent): Promise<RemoteIntent> {
+    const intent = event.payload;
+    const result = await this.pool.query<IntentRow>(
+      `INSERT INTO intents (id, workspace_id, event_id, replica_id, payload, updated_at)
+       VALUES ($1, $2, $3, $4, $5::jsonb, now())
+       ON CONFLICT (workspace_id, id) DO UPDATE
+         SET event_id = excluded.event_id, replica_id = excluded.replica_id, payload = excluded.payload, updated_at = now()
+       RETURNING id, workspace_id, event_id, replica_id, payload, updated_at`,
+      [intent.id, identity.workspaceId, event.id, identity.replicaId, JSON.stringify(intent)]
+    );
+    return mapIntent(result.rows[0]!);
+  }
+
+  async listIntents(workspaceId: string, after: string, limit: number): Promise<{ items: RemoteIntent[]; nextCursor: string }> {
+    const result = await this.pool.query<IntentRow>(
+      `SELECT id, workspace_id, event_id, replica_id, payload, updated_at
+         FROM intents
+        WHERE workspace_id = $1 AND updated_at > $2
+        ORDER BY updated_at ASC
+        LIMIT $3`,
+      [workspaceId, after, limit]
+    );
+    const items = result.rows.map(mapIntent);
+    return { items, nextCursor: items.at(-1)?.updatedAt ?? after };
+  }
+
+  async recordSessionStart(workspaceId: string, replicaId: string): Promise<void> {
+    await this.pool.query(
+      "INSERT INTO sessions (id, workspace_id, replica_id) VALUES ($1, $2, $3)",
+      [randomUUID(), workspaceId, replicaId]
+    );
+  }
+
+  async recordSessionEnd(workspaceId: string, replicaId: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE sessions SET ended_at = now()
+        WHERE id = (
+          SELECT id FROM sessions
+           WHERE workspace_id = $1 AND replica_id = $2 AND ended_at IS NULL
+           ORDER BY started_at DESC
+           LIMIT 1
+        )`,
+      [workspaceId, replicaId]
+    );
+  }
+
+  async listActiveSessions(workspaceId: string): Promise<Array<{ replicaId: string; actorId: string; startedAt: string }>> {
+    const result = await this.pool.query<{ replica_id: string; actor_id: string; started_at: Date }>(
+      `SELECT s.replica_id, m.actor_id, s.started_at
+         FROM sessions s
+         JOIN replicas r ON r.id = s.replica_id
+         JOIN members m ON m.id = r.member_id
+        WHERE s.workspace_id = $1 AND s.ended_at IS NULL
+        ORDER BY s.started_at ASC`,
+      [workspaceId]
+    );
+    return result.rows.map((row) => ({ replicaId: row.replica_id, actorId: row.actor_id, startedAt: new Date(row.started_at).toISOString() }));
+  }
+
   private async transaction<T>(body: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
     try {
@@ -447,6 +537,45 @@ function mapClaim(row: ClaimRow): RemoteClaim {
     senderReplicaId: row.replica_id,
     claim: row.payload,
     released: row.released_at !== null,
+    updatedAt: new Date(row.updated_at).toISOString()
+  };
+}
+
+type HandoffRow = {
+  id: string;
+  workspace_id: string;
+  event_id: string;
+  replica_id: string;
+  payload: Handoff;
+  responded_at: Date | null;
+  updated_at: Date;
+};
+
+function mapHandoff(row: HandoffRow): RemoteHandoff {
+  return {
+    eventId: row.event_id,
+    workspaceId: row.workspace_id,
+    senderReplicaId: row.replica_id,
+    handoff: row.payload,
+    updatedAt: new Date(row.updated_at).toISOString()
+  };
+}
+
+type IntentRow = {
+  id: string;
+  workspace_id: string;
+  event_id: string;
+  replica_id: string;
+  payload: Intent;
+  updated_at: Date;
+};
+
+function mapIntent(row: IntentRow): RemoteIntent {
+  return {
+    eventId: row.event_id,
+    workspaceId: row.workspace_id,
+    senderReplicaId: row.replica_id,
+    intent: row.payload,
     updatedAt: new Date(row.updated_at).toISOString()
   };
 }

@@ -18,6 +18,8 @@ import {
   handoffRequestSchema,
   handoffRespondRequestSchema,
   handoffSchema,
+  intentRequestSchema,
+  intentSchema,
   taskRequestSchema,
   taskSchema,
   validationRequestSchema,
@@ -28,7 +30,13 @@ import {
   type ClaimCreatedEvent,
   type ClaimReleasedEvent,
   type Handoff,
+  type HandoffRequestedEvent,
+  type HandoffRespondedEvent,
+  type Intent,
+  type IntentPublishedEvent,
   type RemoteClaim,
+  type RemoteHandoff,
+  type RemoteIntent,
   type RemoteTask,
   type Task,
   type TaskCreatedEvent,
@@ -37,7 +45,7 @@ import {
 } from "@crosscode/protocol";
 import type { CoordinationService } from "../../service/src/index.js";
 import { configuredExcludedPaths, matchesConfiguredExclusion, validationCommands } from "./config.js";
-import { DaemonStateStore, type CheckpointRecord, type ClaimOutboundRecord, type GitState, type OutboundRecord, type TaskOutboundRecord } from "./state.js";
+import { DaemonStateStore, type CheckpointRecord, type ClaimOutboundRecord, type GitState, type HandoffOutboundRecord, type IntentOutboundRecord, type OutboundRecord, type TaskOutboundRecord } from "./state.js";
 import type { StoredOperation } from "./types.js";
 
 const exec = promisify(execFile);
@@ -68,15 +76,22 @@ export type RemoteSyncTransport = {
   listTasks(after: string): Promise<{ tasks: RemoteTask[]; nextCursor: string }>;
   uploadClaim(record: ClaimOutboundRecord): Promise<RemoteClaim>;
   listClaims(after: string): Promise<{ claims: RemoteClaim[]; nextCursor: string }>;
+  uploadHandoff(record: HandoffOutboundRecord): Promise<RemoteHandoff>;
+  listHandoffs(after: string): Promise<{ handoffs: RemoteHandoff[]; nextCursor: string }>;
+  uploadIntent(record: IntentOutboundRecord): Promise<RemoteIntent>;
+  listIntents(after: string): Promise<{ intents: RemoteIntent[]; nextCursor: string }>;
 };
 
 export class LocalDaemon {
-  readonly tasks = new Map<string, Task>(); readonly claims = new Map<string, Claim>(); readonly operations = new Map<string, StoredOperation>(); readonly validations: Validation[] = []; readonly checkpoints: CheckpointRecord[] = []; readonly handoffs = new Map<string, Handoff>();
+  readonly tasks = new Map<string, Task>(); readonly claims = new Map<string, Claim>(); readonly operations = new Map<string, StoredOperation>(); readonly validations: Validation[] = []; readonly checkpoints: CheckpointRecord[] = []; readonly handoffs = new Map<string, Handoff>(); readonly intents = new Map<string, Intent>();
   readonly outbound = new Map<string, OutboundRecord>();
   readonly taskOutbound = new Map<string, TaskOutboundRecord>(); readonly claimOutbound = new Map<string, ClaimOutboundRecord>();
+  readonly handoffOutbound = new Map<string, HandoffOutboundRecord>(); readonly intentOutbound = new Map<string, IntentOutboundRecord>();
   private remoteCursor = 0;
   private remoteTaskCursor = EPOCH_CURSOR;
   private remoteClaimCursor = EPOCH_CURSOR;
+  private remoteHandoffCursor = EPOCH_CURSOR;
+  private remoteIntentCursor = EPOCH_CURSOR;
   private eventSequence = 0;
   private readonly capturedHashes = new Map<string, string | null>();
   private gitState: GitState;
@@ -94,7 +109,7 @@ export class LocalDaemon {
       const risk = transactionRisk(transaction);
       daemon.operations.set(operation.id, { ...operation, transaction: { ...transaction, safety: { risk, requiresApproval: risk === "critical" } } });
     }
-    daemon.validations.push(...saved.validations); daemon.checkpoints.push(...saved.checkpoints); for (const handoff of saved.handoffs) daemon.handoffs.set(handoff.id, handoff); for (const record of saved.outbound) daemon.outbound.set(record.event.id, record); for (const record of saved.taskOutbound) daemon.taskOutbound.set(record.event.id, record); for (const record of saved.claimOutbound) daemon.claimOutbound.set(record.event.id, record); daemon.remoteCursor = saved.remoteCursor; daemon.remoteTaskCursor = saved.remoteTaskCursor; daemon.remoteClaimCursor = saved.remoteClaimCursor; daemon.eventSequence = saved.eventSequence; daemon.materializationPaused = saved.materializationPaused; for (const [path, hash] of Object.entries(saved.capturedHashes)) daemon.capturedHashes.set(path, hash); await daemon.reconcileInterruptedMaterializations(); return daemon;
+    daemon.validations.push(...saved.validations); daemon.checkpoints.push(...saved.checkpoints); for (const handoff of saved.handoffs) daemon.handoffs.set(handoff.id, handoff); for (const intent of saved.intents) daemon.intents.set(intent.id, intent); for (const record of saved.outbound) daemon.outbound.set(record.event.id, record); for (const record of saved.taskOutbound) daemon.taskOutbound.set(record.event.id, record); for (const record of saved.claimOutbound) daemon.claimOutbound.set(record.event.id, record); for (const record of saved.handoffOutbound) daemon.handoffOutbound.set(record.event.id, record); for (const record of saved.intentOutbound) daemon.intentOutbound.set(record.event.id, record); daemon.remoteCursor = saved.remoteCursor; daemon.remoteTaskCursor = saved.remoteTaskCursor; daemon.remoteClaimCursor = saved.remoteClaimCursor; daemon.remoteHandoffCursor = saved.remoteHandoffCursor; daemon.remoteIntentCursor = saved.remoteIntentCursor; daemon.eventSequence = saved.eventSequence; daemon.materializationPaused = saved.materializationPaused; for (const [path, hash] of Object.entries(saved.capturedHashes)) daemon.capturedHashes.set(path, hash); await daemon.reconcileInterruptedMaterializations(); return daemon;
   }
   async status() { const repository = await discoverRepository(this.root); return { ...repository, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, tasks: this.tasks.size, claims: this.claims.size, proposals: [...this.operations.values()].filter((operation) => operation.status === "proposed").length, materializationPaused: this.materializationPaused, eventSequence: this.eventSequence, remoteCursor: this.remoteCursor, pendingOutbound: [...this.outbound.values()].filter((record) => record.acknowledgedServerSequence === undefined).length, service: { ...this.serviceStatus } }; }
   configureRemoteSync(): void { this.serviceStatus = { ...this.serviceStatus, configured: true }; }
@@ -149,16 +164,31 @@ export class LocalDaemon {
   async inspectCheckpoint(ref: string) { return inspectCheckpoint(this.root, ref); }
   async requestHandoff(input: { operationId: string; note?: string }): Promise<Handoff> {
     const handoff = handoffSchema.parse({ id: randomUUID(), operationId: input.operationId, requestedBy: this.options.actorId, note: input.note, status: "pending", createdAt: now() });
+    const event: HandoffRequestedEvent = { id: handoff.id, schemaVersion: 1, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "handoff.requested", clientSequence: this.eventSequence + 1, createdAt: now(), payload: handoff };
     this.handoffs.set(handoff.id, handoff);
-    try { await this.persist("handoff.requested", handoff); } catch (error) { this.handoffs.delete(handoff.id); throw error; }
+    this.handoffOutbound.set(event.id, { event });
+    try { await this.persist("handoff.requested", handoff); }
+    catch (error) { this.handoffs.delete(handoff.id); this.handoffOutbound.delete(event.id); throw error; }
     return handoff;
   }
   async respondHandoff(id: string, decision: "accepted" | "declined"): Promise<Handoff> {
     const handoff = this.handoffs.get(id); if (!handoff || handoff.status !== "pending") throw new Error("Handoff was not found");
     const responded = { ...handoff, status: decision, respondedAt: now() };
+    const event: HandoffRespondedEvent = { id: responded.id, schemaVersion: 1, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "handoff.responded", clientSequence: this.eventSequence + 1, createdAt: now(), payload: responded };
     this.handoffs.set(id, responded);
-    try { await this.persist("handoff.responded", responded); } catch (error) { this.handoffs.set(id, handoff); throw error; }
+    this.handoffOutbound.set(event.id, { event });
+    try { await this.persist("handoff.responded", responded); }
+    catch (error) { this.handoffs.set(id, handoff); this.handoffOutbound.delete(event.id); throw error; }
     return responded;
+  }
+  async publishIntent(input: { text: string; taskId?: string }): Promise<Intent> {
+    const intent = intentSchema.parse({ id: randomUUID(), taskId: input.taskId, actorId: this.options.actorId, text: input.text, createdAt: now() });
+    const event: IntentPublishedEvent = { id: intent.id, schemaVersion: 1, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "intent.published", clientSequence: this.eventSequence + 1, createdAt: now(), payload: intent };
+    this.intents.set(intent.id, intent);
+    this.intentOutbound.set(event.id, { event });
+    try { await this.persist("intent.published", intent); }
+    catch (error) { this.intents.delete(intent.id); this.intentOutbound.delete(event.id); throw error; }
+    return intent;
   }
   async restoreCheckpointFile(ref: string, path: string): Promise<void> {
     await this.eligiblePath(path);
@@ -285,6 +315,8 @@ export class LocalDaemon {
   async syncRemote(transport: RemoteSyncTransport): Promise<{ uploaded: number; downloaded: number; cursor: number }> {
     await this.syncTasks(transport);
     await this.syncClaims(transport);
+    await this.syncHandoffs(transport);
+    await this.syncIntents(transport);
     let uploaded = 0;
     for (const record of [...this.outbound.values()].filter((item) => item.acknowledgedServerSequence === undefined).sort((left, right) => left.event.clientSequence - right.event.clientSequence)) {
       const remote = await transport.upload(record);
@@ -371,6 +403,50 @@ export class LocalDaemon {
       this.remoteClaimCursor = page.nextCursor;
       try { await this.persist("claim.synchronized", { cursor: this.remoteClaimCursor, downloaded: page.claims.length }); }
       catch (error) { this.remoteClaimCursor = previousCursor; previousClaims.forEach((claim, id) => this.claims.set(id, claim)); throw error; }
+    }
+  }
+
+  private async syncHandoffs(transport: RemoteSyncTransport): Promise<void> {
+    for (const record of [...this.handoffOutbound.values()].filter((item) => item.acknowledgedAt === undefined).sort((left, right) => left.event.clientSequence - right.event.clientSequence)) {
+      const remote = await transport.uploadHandoff(record);
+      if (remote.handoff.id !== record.event.payload.id || remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId !== this.options.replicaId) throw new Error("Service acknowledgement did not match the outbound handoff");
+      this.handoffOutbound.set(record.event.id, { ...record, acknowledgedAt: remote.updatedAt });
+      try { await this.persist("handoff.published", { eventId: record.event.id, handoffId: remote.handoff.id, updatedAt: remote.updatedAt }); }
+      catch (error) { this.handoffOutbound.set(record.event.id, record); throw error; }
+    }
+    const page = await transport.listHandoffs(this.remoteHandoffCursor);
+    const previousCursor = this.remoteHandoffCursor;
+    const previousHandoffs = new Map(this.handoffs);
+    for (const remote of page.handoffs) {
+      if (remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId === this.options.replicaId) continue;
+      this.handoffs.set(remote.handoff.id, remote.handoff);
+    }
+    if (page.nextCursor !== this.remoteHandoffCursor) {
+      this.remoteHandoffCursor = page.nextCursor;
+      try { await this.persist("handoff.synchronized", { cursor: this.remoteHandoffCursor, downloaded: page.handoffs.length }); }
+      catch (error) { this.remoteHandoffCursor = previousCursor; previousHandoffs.forEach((handoff, id) => this.handoffs.set(id, handoff)); throw error; }
+    }
+  }
+
+  private async syncIntents(transport: RemoteSyncTransport): Promise<void> {
+    for (const record of [...this.intentOutbound.values()].filter((item) => item.acknowledgedAt === undefined).sort((left, right) => left.event.clientSequence - right.event.clientSequence)) {
+      const remote = await transport.uploadIntent(record);
+      if (remote.intent.id !== record.event.payload.id || remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId !== this.options.replicaId) throw new Error("Service acknowledgement did not match the outbound intent");
+      this.intentOutbound.set(record.event.id, { ...record, acknowledgedAt: remote.updatedAt });
+      try { await this.persist("intent.published_remote", { eventId: record.event.id, intentId: remote.intent.id, updatedAt: remote.updatedAt }); }
+      catch (error) { this.intentOutbound.set(record.event.id, record); throw error; }
+    }
+    const page = await transport.listIntents(this.remoteIntentCursor);
+    const previousCursor = this.remoteIntentCursor;
+    const previousIntents = new Map(this.intents);
+    for (const remote of page.intents) {
+      if (remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId === this.options.replicaId) continue;
+      this.intents.set(remote.intent.id, remote.intent);
+    }
+    if (page.nextCursor !== this.remoteIntentCursor) {
+      this.remoteIntentCursor = page.nextCursor;
+      try { await this.persist("intent.synchronized", { cursor: this.remoteIntentCursor, downloaded: page.intents.length }); }
+      catch (error) { this.remoteIntentCursor = previousCursor; previousIntents.forEach((intent, id) => this.intents.set(id, intent)); throw error; }
     }
   }
 
@@ -614,7 +690,7 @@ export class LocalDaemon {
   }
   private ignoredPath(path: string): boolean { const relative = path.startsWith(this.root) ? path.slice(this.root.length + 1) : path; return /(^|\/)(\.git|node_modules|dist|build|coverage)(\/|$)/.test(relative) || /(^|\/)\.[^/]+\.[0-9a-f-]+\.crosscode$/.test(relative) || redactPath(relative); }
   private redactValidationOutput(output: string): string { return output.slice(0, 64 * 1024).replace(/((?:api[_-]?key|token|password|secret|authorization)\s*[:=]\s*)([^\s]+)/gi, "$1[REDACTED]"); }
-  private async persist(type: string, payload: unknown): Promise<void> { this.eventSequence = this.state.record({ tasks: [...this.tasks.values()], claims: [...this.claims.values()], operations: [...this.operations.values()], validations: [...this.validations], checkpoints: [...this.checkpoints], handoffs: [...this.handoffs.values()], outbound: [...this.outbound.values()], taskOutbound: [...this.taskOutbound.values()], claimOutbound: [...this.claimOutbound.values()], remoteCursor: this.remoteCursor, remoteTaskCursor: this.remoteTaskCursor, remoteClaimCursor: this.remoteClaimCursor, capturedHashes: Object.fromEntries(this.capturedHashes), gitState: this.gitState, materializationPaused: this.materializationPaused }, { type, payload }); }
+  private async persist(type: string, payload: unknown): Promise<void> { this.eventSequence = this.state.record({ tasks: [...this.tasks.values()], claims: [...this.claims.values()], operations: [...this.operations.values()], validations: [...this.validations], checkpoints: [...this.checkpoints], handoffs: [...this.handoffs.values()], intents: [...this.intents.values()], outbound: [...this.outbound.values()], taskOutbound: [...this.taskOutbound.values()], claimOutbound: [...this.claimOutbound.values()], handoffOutbound: [...this.handoffOutbound.values()], intentOutbound: [...this.intentOutbound.values()], remoteCursor: this.remoteCursor, remoteTaskCursor: this.remoteTaskCursor, remoteClaimCursor: this.remoteClaimCursor, remoteHandoffCursor: this.remoteHandoffCursor, remoteIntentCursor: this.remoteIntentCursor, capturedHashes: Object.fromEntries(this.capturedHashes), gitState: this.gitState, materializationPaused: this.materializationPaused }, { type, payload }); }
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -714,6 +790,7 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
         else if (method === "POST" && pathname === "/v1/checkpoints/inspect") { const { ref } = checkpointInspectRequestSchema.parse(payload); data = await daemon.inspectCheckpoint(ref); }
         else if (method === "POST" && pathname === "/v1/checkpoints/restore") { const input = checkpointRestoreRequestSchema.parse(payload); await daemon.restoreCheckpointFile(input.ref, input.path); data = { restored: input.path }; }
         else if (method === "POST" && pathname === "/v1/transactions") { const parsed = captureRequestSchema.parse(payload); data = await daemon.capture(parsed.intent, undefined, parsed.kind ?? "intent"); status = 201; }
+        else if (method === "POST" && pathname === "/v1/intents") { data = await daemon.publishIntent(intentRequestSchema.parse(payload)); status = 201; }
         else if (method === "POST" && pathname === "/v1/validate") { const { profile } = validationRequestSchema.parse(payload); data = await daemon.validateProfile(profile); }
         else if (method === "POST" && pathname === "/v1/handoffs") { data = await daemon.requestHandoff(handoffRequestSchema.parse(payload)); status = 201; }
         else if (method === "POST" && respondHandoffId) { data = await daemon.respondHandoff(respondHandoffId, handoffRespondRequestSchema.parse(payload).decision); }

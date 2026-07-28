@@ -301,13 +301,54 @@ describe("local daemon coordination", () => {
       uploadTask: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", task: record.event.payload, updatedAt: new Date().toISOString() }),
       listTasks: async (after) => ({ tasks: [], nextCursor: after }),
       uploadClaim: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", claim: record.event.payload, released: record.event.type === "claim.released", updatedAt: new Date().toISOString() }),
-      listClaims: async (after) => ({ claims: [], nextCursor: after })
+      listClaims: async (after) => ({ claims: [], nextCursor: after }),
+      uploadHandoff: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", handoff: record.event.payload, updatedAt: new Date().toISOString() }),
+      listHandoffs: async (after) => ({ handoffs: [], nextCursor: after }),
+      uploadIntent: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", intent: record.event.payload, updatedAt: new Date().toISOString() }),
+      listIntents: async (after) => ({ intents: [], nextCursor: after })
     });
 
     expect(result).toEqual({ uploaded: 1, downloaded: 1, cursor: 2 });
     expect(daemon.outbound.get(queued.event.id)?.acknowledgedServerSequence).toBe(1);
     expect(daemon.operations.get("remote-operation")?.status).toBe("proposed");
     expect(await readFile(join(root, "a.txt"), "utf8")).toBe("offline\n");
+  });
+
+  it("enqueues outbound handoff and intent events and synchronizes them with the coordination service", async () => {
+    const root = await repo();
+    const daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
+    await writeFile(join(root, "a.txt"), "changed\n");
+    const captured = await daemon.capture("local edit for handoff");
+    const handoff = await daemon.requestHandoff({ operationId: captured.id, note: "please take over" });
+    expect([...daemon.handoffOutbound.values()].some((record) => record.event.payload.id === handoff.id)).toBe(true);
+    const responded = await daemon.respondHandoff(handoff.id, "accepted");
+    expect(daemon.handoffOutbound.get(responded.id)?.event.type).toBe("handoff.responded");
+
+    const intent = await daemon.publishIntent({ text: "Rename foo to bar", taskId: "task-1" });
+    expect([...daemon.intentOutbound.values()].some((record) => record.event.payload.id === intent.id)).toBe(true);
+
+    const remoteHandoffRecord = { eventId: "remote-handoff-event", workspaceId: "w", senderReplicaId: "other", handoff: { id: "remote-handoff", operationId: "operation-x", requestedBy: "other-actor", status: "pending" as const, createdAt: new Date().toISOString() }, updatedAt: new Date().toISOString() };
+    const remoteIntentRecord = { eventId: "remote-intent-event", workspaceId: "w", senderReplicaId: "other", intent: { id: "remote-intent", actorId: "other-actor", text: "Remote intent", createdAt: new Date().toISOString() }, updatedAt: new Date().toISOString() };
+    const uploadedHandoffs: string[] = [];
+    const uploadedIntents: string[] = [];
+    const result = await daemon.syncRemote({
+      upload: async (record) => ({ id: record.transaction.id, workspaceId: "w", senderReplicaId: "replica", transaction: record.transaction, sequence: 1, createdAt: new Date().toISOString() }),
+      list: async () => ({ operations: [], nextCursor: 0 }),
+      uploadTask: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", task: record.event.payload, updatedAt: new Date().toISOString() }),
+      listTasks: async (after) => ({ tasks: [], nextCursor: after }),
+      uploadClaim: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", claim: record.event.payload, released: record.event.type === "claim.released", updatedAt: new Date().toISOString() }),
+      listClaims: async (after) => ({ claims: [], nextCursor: after }),
+      uploadHandoff: async (record) => { uploadedHandoffs.push(record.event.payload.id); return { eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", handoff: record.event.payload, updatedAt: new Date().toISOString() }; },
+      listHandoffs: async () => ({ handoffs: [remoteHandoffRecord], nextCursor: remoteHandoffRecord.updatedAt }),
+      uploadIntent: async (record) => { uploadedIntents.push(record.event.payload.id); return { eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", intent: record.event.payload, updatedAt: new Date().toISOString() }; },
+      listIntents: async () => ({ intents: [remoteIntentRecord], nextCursor: remoteIntentRecord.updatedAt })
+    });
+
+    expect(uploadedHandoffs).toEqual([responded.id]);
+    expect(uploadedIntents).toEqual([intent.id]);
+    expect(daemon.handoffs.get("remote-handoff")).toEqual(remoteHandoffRecord.handoff);
+    expect(daemon.intents.get("remote-intent")).toEqual(remoteIntentRecord.intent);
+    expect(result.uploaded).toBe(1);
   });
 
   it("recognizes a same-HEAD hard reset as a Git transition", async () => {

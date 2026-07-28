@@ -4,7 +4,8 @@ import { dirname } from "node:path";
 import {
   EPOCH_CURSOR,
   type ChangeTransaction, type Claim, type ClaimCreatedEvent, type ClaimReleasedEvent, type EventEnvelope,
-  type Handoff, type Task, type TaskCreatedEvent, type TaskUpdatedEvent, type Validation
+  type Handoff, type HandoffRequestedEvent, type HandoffRespondedEvent, type Intent, type IntentPublishedEvent,
+  type Task, type TaskCreatedEvent, type TaskUpdatedEvent, type Validation
 } from "@crosscode/protocol";
 import type { StoredOperation } from "./types.js";
 
@@ -15,6 +16,8 @@ export type OutboundRecord = { event: EventEnvelope; transaction: ChangeTransact
 export type ConflictArtifactRecord = { id: string; operationId: string; path: string; classification: string; baseContent?: string; localContent?: string; proposedContent?: string; dependents?: string[]; mergedCandidate?: string; createdAt: string };
 export type TaskOutboundRecord = { event: TaskCreatedEvent | TaskUpdatedEvent; acknowledgedAt?: string };
 export type ClaimOutboundRecord = { event: ClaimCreatedEvent | ClaimReleasedEvent; acknowledgedAt?: string };
+export type HandoffOutboundRecord = { event: HandoffRequestedEvent | HandoffRespondedEvent; acknowledgedAt?: string };
+export type IntentOutboundRecord = { event: IntentPublishedEvent; acknowledgedAt?: string };
 
 export type DaemonSnapshot = {
   tasks: Task[];
@@ -23,12 +26,17 @@ export type DaemonSnapshot = {
   validations: Validation[];
   checkpoints: CheckpointRecord[];
   handoffs: Handoff[];
+  intents: Intent[];
   outbound: OutboundRecord[];
   taskOutbound: TaskOutboundRecord[];
   claimOutbound: ClaimOutboundRecord[];
+  handoffOutbound: HandoffOutboundRecord[];
+  intentOutbound: IntentOutboundRecord[];
   remoteCursor: number;
   remoteTaskCursor: string;
   remoteClaimCursor: string;
+  remoteHandoffCursor: string;
+  remoteIntentCursor: string;
   capturedHashes: Record<string, string | null>;
   gitState?: GitState;
   materializationPaused: boolean;
@@ -42,12 +50,17 @@ const initialSnapshot = (): DaemonSnapshot => ({
   validations: [],
   checkpoints: [],
   handoffs: [],
+  intents: [],
   outbound: [],
   taskOutbound: [],
   claimOutbound: [],
+  handoffOutbound: [],
+  intentOutbound: [],
   remoteCursor: 0,
   remoteTaskCursor: EPOCH_CURSOR,
   remoteClaimCursor: EPOCH_CURSOR,
+  remoteHandoffCursor: EPOCH_CURSOR,
+  remoteIntentCursor: EPOCH_CURSOR,
   capturedHashes: {},
   materializationPaused: false,
   eventSequence: 0
@@ -107,6 +120,10 @@ export class DaemonStateStore {
         id TEXT PRIMARY KEY,
         payload TEXT NOT NULL
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS intent_projection (
+        id TEXT PRIMARY KEY,
+        payload TEXT NOT NULL
+      ) STRICT;
       CREATE TABLE IF NOT EXISTS outbox_projection (
         event_id TEXT PRIMARY KEY,
         payload TEXT NOT NULL
@@ -116,6 +133,14 @@ export class DaemonStateStore {
         payload TEXT NOT NULL
       ) STRICT;
       CREATE TABLE IF NOT EXISTS claim_outbox_projection (
+        event_id TEXT PRIMARY KEY,
+        payload TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS handoff_outbox_projection (
+        event_id TEXT PRIMARY KEY,
+        payload TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS intent_outbox_projection (
         event_id TEXT PRIMARY KEY,
         payload TEXT NOT NULL
       ) STRICT;
@@ -153,12 +178,17 @@ export class DaemonStateStore {
       validations: parseRows<Validation>(this.database.prepare("SELECT payload FROM validation_projection ORDER BY id").all() as Array<{ payload: string }>),
       checkpoints: parseRows<CheckpointRecord>(this.database.prepare("SELECT payload FROM checkpoint_projection ORDER BY ref").all() as Array<{ payload: string }>),
       handoffs: parseRows<Handoff>(this.database.prepare("SELECT payload FROM handoff_projection ORDER BY id").all() as Array<{ payload: string }>),
+      intents: parseRows<Intent>(this.database.prepare("SELECT payload FROM intent_projection ORDER BY id").all() as Array<{ payload: string }>),
       outbound: parseRows<OutboundRecord>(this.database.prepare("SELECT payload FROM outbox_projection ORDER BY event_id").all() as Array<{ payload: string }>),
       taskOutbound: parseRows<TaskOutboundRecord>(this.database.prepare("SELECT payload FROM task_outbox_projection ORDER BY event_id").all() as Array<{ payload: string }>),
       claimOutbound: parseRows<ClaimOutboundRecord>(this.database.prepare("SELECT payload FROM claim_outbox_projection ORDER BY event_id").all() as Array<{ payload: string }>),
+      handoffOutbound: parseRows<HandoffOutboundRecord>(this.database.prepare("SELECT payload FROM handoff_outbox_projection ORDER BY event_id").all() as Array<{ payload: string }>),
+      intentOutbound: parseRows<IntentOutboundRecord>(this.database.prepare("SELECT payload FROM intent_outbox_projection ORDER BY event_id").all() as Array<{ payload: string }>),
       remoteCursor: (meta.get("remoteCursor") as number | undefined) ?? 0,
       remoteTaskCursor: (meta.get("remoteTaskCursor") as string | undefined) ?? EPOCH_CURSOR,
       remoteClaimCursor: (meta.get("remoteClaimCursor") as string | undefined) ?? EPOCH_CURSOR,
+      remoteHandoffCursor: (meta.get("remoteHandoffCursor") as string | undefined) ?? EPOCH_CURSOR,
+      remoteIntentCursor: (meta.get("remoteIntentCursor") as string | undefined) ?? EPOCH_CURSOR,
       capturedHashes: (meta.get("capturedHashes") as Record<string, string | null> | undefined) ?? {},
       gitState: meta.get("gitState") as GitState | undefined,
       materializationPaused: (meta.get("materializationPaused") as boolean | undefined) ?? false,
@@ -176,12 +206,17 @@ export class DaemonStateStore {
       this.replaceProjection("validation_projection", "id", snapshot.validations.map((validation) => [validation.id, validation]));
       this.replaceProjection("checkpoint_projection", "ref", snapshot.checkpoints.map((checkpoint) => [checkpoint.ref, checkpoint]));
       this.replaceProjection("handoff_projection", "id", snapshot.handoffs.map((handoff) => [handoff.id, handoff]));
+      this.replaceProjection("intent_projection", "id", snapshot.intents.map((intent) => [intent.id, intent]));
       this.replaceProjection("outbox_projection", "event_id", snapshot.outbound.map((record) => [record.event.id, record]));
       this.replaceProjection("task_outbox_projection", "event_id", snapshot.taskOutbound.map((record) => [record.event.id, record]));
       this.replaceProjection("claim_outbox_projection", "event_id", snapshot.claimOutbound.map((record) => [record.event.id, record]));
+      this.replaceProjection("handoff_outbox_projection", "event_id", snapshot.handoffOutbound.map((record) => [record.event.id, record]));
+      this.replaceProjection("intent_outbox_projection", "event_id", snapshot.intentOutbound.map((record) => [record.event.id, record]));
       this.replaceMeta("remoteCursor", snapshot.remoteCursor);
       this.replaceMeta("remoteTaskCursor", snapshot.remoteTaskCursor);
       this.replaceMeta("remoteClaimCursor", snapshot.remoteClaimCursor);
+      this.replaceMeta("remoteHandoffCursor", snapshot.remoteHandoffCursor);
+      this.replaceMeta("remoteIntentCursor", snapshot.remoteIntentCursor);
       this.replaceMeta("capturedHashes", snapshot.capturedHashes);
       this.replaceMeta("gitState", snapshot.gitState);
       this.replaceMeta("materializationPaused", snapshot.materializationPaused);
@@ -226,12 +261,17 @@ export class DaemonStateStore {
       this.replaceProjection("validation_projection", "id", snapshot.validations.map((validation) => [validation.id, validation]));
       this.replaceProjection("checkpoint_projection", "ref", snapshot.checkpoints.map((checkpoint) => [checkpoint.ref, checkpoint]));
       this.replaceProjection("handoff_projection", "id", snapshot.handoffs.map((handoff) => [handoff.id, handoff]));
+      this.replaceProjection("intent_projection", "id", snapshot.intents.map((intent) => [intent.id, intent]));
       this.replaceProjection("outbox_projection", "event_id", snapshot.outbound.map((record) => [record.event.id, record]));
       this.replaceProjection("task_outbox_projection", "event_id", snapshot.taskOutbound.map((record) => [record.event.id, record]));
       this.replaceProjection("claim_outbox_projection", "event_id", snapshot.claimOutbound.map((record) => [record.event.id, record]));
+      this.replaceProjection("handoff_outbox_projection", "event_id", snapshot.handoffOutbound.map((record) => [record.event.id, record]));
+      this.replaceProjection("intent_outbox_projection", "event_id", snapshot.intentOutbound.map((record) => [record.event.id, record]));
       this.replaceMeta("remoteCursor", snapshot.remoteCursor);
       this.replaceMeta("remoteTaskCursor", snapshot.remoteTaskCursor);
       this.replaceMeta("remoteClaimCursor", snapshot.remoteClaimCursor);
+      this.replaceMeta("remoteHandoffCursor", snapshot.remoteHandoffCursor);
+      this.replaceMeta("remoteIntentCursor", snapshot.remoteIntentCursor);
       this.replaceMeta("capturedHashes", snapshot.capturedHashes);
       this.replaceMeta("gitState", snapshot.gitState);
       this.replaceMeta("materializationPaused", snapshot.materializationPaused);
