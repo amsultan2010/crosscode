@@ -5,8 +5,8 @@ import { basename, dirname, join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import chokidar, { type FSWatcher } from "chokidar";
-import { analyzeOperation, contentHash, hunksOverlap, looksLikeInterfaceChange, pathOverlaps, redactPath, transactionRisk } from "@crosscode/core";
-import { createCheckpoint, discoverRepository, inspectCheckpoint, readRevisionFile, restoreCheckpointFile, safeRepositoryPath, snapshotWorktreeTree, threeWayMerge } from "@crosscode/git";
+import { analyzeOperation, changedExportedSymbols, contentHash, hunksOverlap, looksLikeInterfaceChange, pathOverlaps, redactPath, transactionRisk, type OperationAnalysis } from "@crosscode/core";
+import { createCheckpoint, discoverRepository, findSymbolReferences, inspectCheckpoint, readRevisionFile, restoreCheckpointFile, safeRepositoryPath, snapshotWorktreeTree, threeWayMerge } from "@crosscode/git";
 import {
   captureRequestSchema,
   changeTransactionSchema,
@@ -468,21 +468,41 @@ export class LocalDaemon {
   private async assertApplicable(operation: StoredOperation): Promise<void> {
     for (const change of operation.transaction.changes) await this.assertChangeApplicable(operation, change);
   }
-  private async assertChangeApplicable(operation: StoredOperation, change: ChangeTransaction["changes"][number]): Promise<void> {
-    await this.eligiblePath(change.path);
-    assertChangeIntegrity(change);
-    if (change.afterContent !== undefined) assertText(change.afterContent, change.path);
+  private async analyzeChange(operationId: string, change: ChangeTransaction["changes"][number]): Promise<{ analysis: OperationAnalysis; beforeText?: string; current?: string; mergedCandidate?: string }> {
     const current = await this.readWorkingText(change.path); const baseMatches = (current === undefined ? undefined : contentHash(current)) === change.beforeHash;
-    const conflicting = this.findConflictingChange(operation.id, change.path);
+    const conflicting = this.findConflictingChange(operationId, change.path);
     const overlaps = conflicting !== undefined && pathOverlaps(change.path, conflicting.path) && changesOverlap(change, conflicting);
     const beforeBytes = await readRevisionFile(this.root, "HEAD", change.path).catch(() => undefined);
     const beforeText = beforeBytes === undefined ? undefined : decodeText(beforeBytes, change.path);
     const semanticOverlap = looksLikeInterfaceChange(beforeText, change.afterContent, change.path);
-    const analysis = analyzeOperation({ path: change.path, baseMatches: change.kind === "add" ? current === undefined : baseMatches, overlaps, kind: change.kind, semanticOverlap });
-    if (analysis.classification === "stale-base" || analysis.classification === "high-risk" || analysis.classification === "semantic-overlap") {
-      await this.persistConflictArtifact(operation.id, change.path, analysis.classification, beforeText, current, change.afterContent);
+    let dependents: string[] | undefined;
+    if (semanticOverlap) {
+      const changedSymbols = changedExportedSymbols(beforeText, change.afterContent);
+      dependents = changedSymbols.length ? await findSymbolReferences(this.root, changedSymbols, change.path) : [];
     }
-    if (analysis.classification === "stale-base") { const conflicted = { ...operation, status: "conflicted" as const }; this.operations.set(operation.id, conflicted); await this.persist("transaction.conflicted", conflicted); throw new Error("Proposal has a stale base; local work was not changed"); }
+    let analysis = analyzeOperation({ path: change.path, baseMatches: change.kind === "add" ? current === undefined : baseMatches, overlaps, kind: change.kind, conflictingKind: conflicting?.kind, semanticOverlap, dependents });
+    let mergedCandidate: string | undefined;
+    if (analysis.classification === "stale-base" && change.kind === "modify" && current !== undefined && change.afterContent !== undefined && beforeText !== undefined) {
+      const merge = await threeWayMerge(beforeText, current, change.afterContent);
+      if (merge.clean) { analysis = { ...analysis, classification: "stale-base-resolved" }; mergedCandidate = merge.content; }
+    }
+    return { analysis, beforeText, current, mergedCandidate };
+  }
+  private async assertChangeApplicable(operation: StoredOperation, change: ChangeTransaction["changes"][number]): Promise<void> {
+    await this.eligiblePath(change.path);
+    assertChangeIntegrity(change);
+    if (change.afterContent !== undefined) assertText(change.afterContent, change.path);
+    const { analysis, beforeText, current, mergedCandidate } = await this.analyzeChange(operation.id, change);
+    if (analysis.requiresApproval) {
+      const stamped = { ...this.operations.get(operation.id)!, transaction: { ...operation.transaction, safety: { risk: analysis.risk, requiresApproval: true } } };
+      this.operations.set(operation.id, stamped);
+      await this.persist("transaction.safety_updated", stamped);
+    }
+    if (analysis.classification === "delete-vs-modify" || analysis.classification === "semantic-overlap" || analysis.classification === "stale-base" || analysis.classification === "stale-base-resolved") {
+      await this.persistConflictArtifact(operation.id, change.path, analysis.classification, beforeText, current, change.afterContent, analysis.dependents, mergedCandidate);
+    }
+    if (analysis.classification === "stale-base") { const conflicted = { ...this.operations.get(operation.id)!, status: "conflicted" as const }; this.operations.set(operation.id, conflicted); await this.persist("transaction.conflicted", conflicted); throw new Error("Proposal has a stale base; local work was not changed"); }
+    if (analysis.classification === "stale-base-resolved") throw new Error("Proposal has a stale base; a three-way merge candidate was prepared and requires human approval");
     if (analysis.requiresApproval) throw new Error("High-risk proposal requires local human approval policy");
   }
   private findConflictingChange(operationId: string, path: string): ChangeTransaction["changes"][number] | undefined {
@@ -494,16 +514,14 @@ export class LocalDaemon {
     }
     return undefined;
   }
-  private async persistConflictArtifact(operationId: string, path: string, classification: string, base: string | undefined, local: string | undefined, proposed: string | undefined): Promise<void> {
-    this.state.recordConflictArtifact({ id: randomUUID(), operationId, path, classification, baseContent: base, localContent: local, proposedContent: proposed, createdAt: now() });
+  private async persistConflictArtifact(operationId: string, path: string, classification: string, base: string | undefined, local: string | undefined, proposed: string | undefined, dependents?: string[], mergedCandidate?: string): Promise<void> {
+    this.state.recordConflictArtifact({ id: randomUUID(), operationId, path, classification, baseContent: base, localContent: local, proposedContent: proposed, dependents, mergedCandidate, createdAt: now() });
   }
-  async diffProposal(id: string): Promise<Array<{ path: string; base?: string; local?: string; proposed?: string }>> {
+  async diffProposal(id: string): Promise<Array<{ path: string; base?: string; local?: string; proposed?: string; classification: string; risk: string; requiresApproval: boolean; dependents?: string[]; mergedCandidate?: string }>> {
     const operation = this.operations.get(id); if (!operation) throw new Error("Proposal was not found");
     return Promise.all(operation.transaction.changes.map(async (change) => {
-      const baseBytes = await readRevisionFile(this.root, "HEAD", change.path).catch(() => undefined);
-      const base = baseBytes === undefined ? undefined : decodeText(baseBytes, change.path);
-      const local = await this.readWorkingText(change.path);
-      return { path: change.path, base, local, proposed: change.afterContent };
+      const { analysis, beforeText, current, mergedCandidate } = await this.analyzeChange(id, change);
+      return { path: change.path, base: beforeText, local: current, proposed: change.afterContent, classification: analysis.classification, risk: analysis.risk, requiresApproval: analysis.requiresApproval, dependents: analysis.dependents, mergedCandidate };
     }));
   }
   private async refuseChangedGitState(): Promise<void> {

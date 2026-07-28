@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import type { ChangeTransaction } from "@crosscode/protocol";
 
-export type OperationAnalysis = { classification: "independent" | "likely-compatible" | "stale-base" | "high-risk" | "semantic-overlap" | "critical"; requiresApproval: boolean };
+export type Classification = "independent" | "likely-compatible" | "delete-vs-modify" | "semantic-overlap" | "stale-base" | "stale-base-resolved" | "critical";
+export type Risk = "low" | "medium" | "high" | "critical";
+export type OperationAnalysis = { classification: Classification; requiresApproval: boolean; risk: Risk; deletedSide?: "incoming" | "local"; dependents?: string[] };
 export type HunkRange = { start: number; length: number };
 
 export function contentHash(content: string | Buffer): string { return createHash("sha256").update(content).digest("hex"); }
@@ -28,17 +30,48 @@ export function looksLikeInterfaceChange(before: string | undefined, after: stri
   for (const line of beforeSignatures) if (!afterSignatures.has(line)) return true;
   return false;
 }
+const exportedSymbolNamePattern = /^\s*export\s+(?:function|class|interface|type|const)\s+([A-Za-z_$][\w$]*)/;
+function exportedSymbolMap(source: string): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const line of source.split("\n")) {
+    const match = exportedSymbolNamePattern.exec(line);
+    if (match) map.set(match[1]!, line);
+  }
+  return map;
+}
+export function changedExportedSymbols(before: string | undefined, after: string | undefined): string[] {
+  const beforeMap = exportedSymbolMap(before ?? "");
+  const afterMap = exportedSymbolMap(after ?? "");
+  const names = new Set<string>();
+  for (const [name, line] of beforeMap) if (afterMap.get(name) !== line) names.add(name);
+  for (const [name, line] of afterMap) if (beforeMap.get(name) !== line) names.add(name);
+  return [...names];
+}
 export function redactPath(path: string): boolean {
   return /(^|\/)(\.env($|\.)|\.envrc$|\.npmrc$|\.netrc$|credentials($|[./])|secrets?($|[./])|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?$)|\.(pem|key|p12|pfx|jks|keystore)$/i.test(path);
 }
 export function riskForPath(path: string): "low" | "critical" {
   return /(^|\/)(auth|migrations?|\.crosscode|\.git|\.github\/workflows)(\/|$)|(^|\/)(package-lock\.json|pnpm-lock\.yaml|deploy|Dockerfile)/i.test(path) ? "critical" : "low";
 }
-export function analyzeOperation(input: { path: string; baseMatches: boolean; overlaps: boolean; kind?: string; semanticOverlap?: boolean }): OperationAnalysis {
-  if (riskForPath(input.path) === "critical") return { classification: "critical", requiresApproval: true };
-  if (!input.baseMatches) return { classification: "stale-base", requiresApproval: true };
-  if (input.kind === "delete" && input.overlaps) return { classification: "high-risk", requiresApproval: true };
-  if (input.overlaps && input.semanticOverlap) return { classification: "semantic-overlap", requiresApproval: true };
-  return input.overlaps ? { classification: "likely-compatible", requiresApproval: true } : { classification: "independent", requiresApproval: false };
+export function riskForClassification(classification: Classification): Risk {
+  switch (classification) {
+    case "critical": return "critical";
+    case "independent": return "low";
+    case "likely-compatible": return "medium";
+    default: return "high";
+  }
+}
+export function analyzeOperation(input: { path: string; baseMatches: boolean; overlaps: boolean; kind?: "add" | "modify" | "delete" | "rename"; conflictingKind?: "add" | "modify" | "delete" | "rename"; semanticOverlap?: boolean; dependents?: string[] }): OperationAnalysis {
+  const decide = (): { classification: Classification; requiresApproval: boolean; deletedSide?: "incoming" | "local" } => {
+    if (riskForPath(input.path) === "critical") return { classification: "critical", requiresApproval: true };
+    if (!input.baseMatches) return { classification: "stale-base", requiresApproval: true };
+    if (input.overlaps && (input.kind === "delete" || input.conflictingKind === "delete") && input.kind !== input.conflictingKind) {
+      return { classification: "delete-vs-modify", requiresApproval: true, deletedSide: input.kind === "delete" ? "incoming" : "local" };
+    }
+    if (input.overlaps && input.semanticOverlap) return { classification: "semantic-overlap", requiresApproval: true };
+    return input.overlaps ? { classification: "likely-compatible", requiresApproval: true } : { classification: "independent", requiresApproval: false };
+  };
+  const decision = decide();
+  return { ...decision, risk: riskForClassification(decision.classification), ...(input.dependents !== undefined ? { dependents: input.dependents } : {}) };
 }
 export function transactionRisk(transaction: Pick<ChangeTransaction, "changes">): "low" | "critical" { return transaction.changes.some((change) => riskForPath(change.path) === "critical") ? "critical" : "low"; }
