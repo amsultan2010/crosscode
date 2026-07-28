@@ -244,7 +244,11 @@ describe("local daemon coordination", () => {
       list: async () => ({ operations: [
         { id: local.id, workspaceId: "w", senderReplicaId: "replica", transaction: local.transaction, sequence: 1, createdAt: new Date().toISOString() },
         { id: remoteTransaction.id, workspaceId: "w", senderReplicaId: "other", transaction: remoteTransaction, sequence: 2, createdAt: new Date().toISOString() }
-      ], nextCursor: 2 })
+      ], nextCursor: 2 }),
+      uploadTask: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", task: record.event.payload, updatedAt: new Date().toISOString() }),
+      listTasks: async (after) => ({ tasks: [], nextCursor: after }),
+      uploadClaim: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", claim: record.event.payload, released: record.event.type === "claim.released", updatedAt: new Date().toISOString() }),
+      listClaims: async (after) => ({ claims: [], nextCursor: after })
     });
 
     expect(result).toEqual({ uploaded: 1, downloaded: 1, cursor: 2 });

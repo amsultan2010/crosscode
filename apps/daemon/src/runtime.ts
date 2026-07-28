@@ -131,6 +131,12 @@ export async function runDaemonProcess(
           onPresence: (presence) => {
             console.error(`Crosscode presence: ${presence.actorId} (${presence.replicaId}) is ${presence.status}`);
             options.onPresence?.(presence);
+          },
+          onTask: (task) => {
+            if (task.workspaceId === config.workspaceId) void synchronize();
+          },
+          onClaim: (claim) => {
+            if (claim.workspaceId === config.workspaceId) void synchronize();
           }
         });
         liveSync.start();
