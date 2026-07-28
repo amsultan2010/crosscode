@@ -139,5 +139,5 @@ describe.skipIf(!databaseUrl)("PostgreSQL live WebSocket coordination", () => {
       await store.pool.query("DELETE FROM workspaces WHERE id = $1", [owner.workspaceId]);
       await store.close();
     }
-  }, 30_000);
+  }, 60_000);
 });

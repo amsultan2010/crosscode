@@ -10,7 +10,7 @@ import { contentHash } from "@crosscode/core";
 import { LocalDaemon } from "./index.js";
 
 const exec = promisify(execFile); const directories: string[] = [];
-async function repo(): Promise<string> { const path = await mkdtemp(join(tmpdir(), "crosscode-daemon-")); directories.push(path); await exec("git", ["init", "-q", path]); await exec("git", ["-C", path, "config", "user.email", "test@example.com"]); await exec("git", ["-C", path, "config", "user.name", "Test"]); await writeFile(join(path, "a.txt"), "one\n"); await exec("git", ["-C", path, "add", "."]); await exec("git", ["-C", path, "commit", "-qm", "initial"]); return path; }
+async function repo(): Promise<string> { const path = await mkdtemp(join(tmpdir(), "crosscode-daemon-")); directories.push(path); await exec("git", ["init", "-q", "-b", "main", path]); await exec("git", ["-C", path, "config", "user.email", "test@example.com"]); await exec("git", ["-C", path, "config", "user.name", "Test"]); await writeFile(join(path, "a.txt"), "one\n"); await exec("git", ["-C", path, "add", "."]); await exec("git", ["-C", path, "commit", "-qm", "initial"]); return path; }
 afterEach(async () => { await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
 
 describe("local daemon coordination", () => {
