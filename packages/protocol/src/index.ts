@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 export const riskSchema = z.enum(["low", "medium", "high", "critical"]);
+export const captureKindSchema = z.enum(["intent", "summary", "interface-change"]);
+export type CaptureKind = z.infer<typeof captureKindSchema>;
 export const taskStatusSchema = z.enum(["planned", "active", "blocked", "review", "complete", "cancelled"]);
 export const taskSchema = z.object({
   id: z.string().min(1), title: z.string().min(1), ownerId: z.string().min(1), status: taskStatusSchema,
@@ -20,7 +22,8 @@ export const changeTransactionSchema = z.object({
   base: z.object({ headCommit: z.string().optional(), files: z.array(z.object({ path: z.string(), blobHash: z.string().optional(), contentHash: z.string() })) }),
   changes: z.array(z.object({ path: z.string().min(1), kind: z.enum(["add", "modify", "delete", "rename"]), beforeHash: z.string().optional(), afterHash: z.string().optional(), unifiedPatch: z.string().optional(), afterContent: z.string().optional() })).min(1),
   provenance: z.object({ source: z.enum(["filesystem", "cli-wrapper", "mcp", "hook", "extension"]), confidence: z.enum(["known", "inferred", "unknown"]) }),
-  safety: z.object({ risk: riskSchema, requiresApproval: z.boolean() })
+  safety: z.object({ risk: riskSchema, requiresApproval: z.boolean() }),
+  kind: captureKindSchema.optional()
 }).strict().superRefine((transaction, context) => {
   transaction.changes.forEach((change, index) => {
     if (change.kind === "rename") {
@@ -253,7 +256,41 @@ export const validationRequestSchema = z.object({
 }).strict();
 
 export const captureRequestSchema = z.object({
-  intent: z.string().trim().min(1).max(5_000)
+  intent: z.string().trim().min(1).max(5_000),
+  kind: captureKindSchema.optional()
+}).strict();
+
+export const changeSummaryRequestSchema = z.object({
+  summary: z.string().trim().min(1).max(5_000)
+}).strict();
+
+export const changeScopeRequestSchema = z.object({
+  paths: z.array(z.string().min(1).max(1_024)).min(1).max(1_000)
+}).strict();
+
+export const handoffStatusSchema = z.enum(["pending", "accepted", "declined"]);
+export type HandoffStatus = z.infer<typeof handoffStatusSchema>;
+
+export const handoffSchema = z.object({
+  id: z.string().min(1),
+  operationId: z.string().min(1),
+  requestedBy: z.string().min(1),
+  note: z.string().optional(),
+  status: handoffStatusSchema,
+  createdAt: z.string().datetime(),
+  respondedAt: z.string().datetime().optional()
+}).strict();
+export type Handoff = z.infer<typeof handoffSchema>;
+
+export const handoffRequestSchema = z.object({
+  operationId: z.string().min(1).max(200),
+  note: z.string().trim().min(1).max(2_000).optional()
+}).strict();
+
+export const handoffDecisionSchema = z.enum(["accepted", "declined"]);
+
+export const handoffRespondRequestSchema = z.object({
+  decision: handoffDecisionSchema
 }).strict();
 
 export const daemonConnectionSchema = z.object({

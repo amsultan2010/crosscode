@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import {
   EPOCH_CURSOR,
   type ChangeTransaction, type Claim, type ClaimCreatedEvent, type ClaimReleasedEvent, type EventEnvelope,
-  type Task, type TaskCreatedEvent, type TaskUpdatedEvent, type Validation
+  type Handoff, type Task, type TaskCreatedEvent, type TaskUpdatedEvent, type Validation
 } from "@crosscode/protocol";
 import type { StoredOperation } from "./types.js";
 
@@ -21,6 +21,7 @@ export type DaemonSnapshot = {
   operations: StoredOperation[];
   validations: Validation[];
   checkpoints: CheckpointRecord[];
+  handoffs: Handoff[];
   outbound: OutboundRecord[];
   taskOutbound: TaskOutboundRecord[];
   claimOutbound: ClaimOutboundRecord[];
@@ -39,6 +40,7 @@ const initialSnapshot = (): DaemonSnapshot => ({
   operations: [],
   validations: [],
   checkpoints: [],
+  handoffs: [],
   outbound: [],
   taskOutbound: [],
   claimOutbound: [],
@@ -100,6 +102,10 @@ export class DaemonStateStore {
         ref TEXT PRIMARY KEY,
         payload TEXT NOT NULL
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS handoff_projection (
+        id TEXT PRIMARY KEY,
+        payload TEXT NOT NULL
+      ) STRICT;
       CREATE TABLE IF NOT EXISTS outbox_projection (
         event_id TEXT PRIMARY KEY,
         payload TEXT NOT NULL
@@ -133,6 +139,7 @@ export class DaemonStateStore {
       operations: parseRows<StoredOperation>(this.database.prepare("SELECT payload FROM operation_projection ORDER BY id").all() as Array<{ payload: string }>),
       validations: parseRows<Validation>(this.database.prepare("SELECT payload FROM validation_projection ORDER BY id").all() as Array<{ payload: string }>),
       checkpoints: parseRows<CheckpointRecord>(this.database.prepare("SELECT payload FROM checkpoint_projection ORDER BY ref").all() as Array<{ payload: string }>),
+      handoffs: parseRows<Handoff>(this.database.prepare("SELECT payload FROM handoff_projection ORDER BY id").all() as Array<{ payload: string }>),
       outbound: parseRows<OutboundRecord>(this.database.prepare("SELECT payload FROM outbox_projection ORDER BY event_id").all() as Array<{ payload: string }>),
       taskOutbound: parseRows<TaskOutboundRecord>(this.database.prepare("SELECT payload FROM task_outbox_projection ORDER BY event_id").all() as Array<{ payload: string }>),
       claimOutbound: parseRows<ClaimOutboundRecord>(this.database.prepare("SELECT payload FROM claim_outbox_projection ORDER BY event_id").all() as Array<{ payload: string }>),
@@ -155,6 +162,7 @@ export class DaemonStateStore {
       this.replaceProjection("operation_projection", "id", snapshot.operations.map((operation) => [operation.id, operation]));
       this.replaceProjection("validation_projection", "id", snapshot.validations.map((validation) => [validation.id, validation]));
       this.replaceProjection("checkpoint_projection", "ref", snapshot.checkpoints.map((checkpoint) => [checkpoint.ref, checkpoint]));
+      this.replaceProjection("handoff_projection", "id", snapshot.handoffs.map((handoff) => [handoff.id, handoff]));
       this.replaceProjection("outbox_projection", "event_id", snapshot.outbound.map((record) => [record.event.id, record]));
       this.replaceProjection("task_outbox_projection", "event_id", snapshot.taskOutbound.map((record) => [record.event.id, record]));
       this.replaceProjection("claim_outbox_projection", "event_id", snapshot.claimOutbound.map((record) => [record.event.id, record]));
@@ -199,6 +207,7 @@ export class DaemonStateStore {
       this.replaceProjection("operation_projection", "id", snapshot.operations.map((operation) => [operation.id, operation]));
       this.replaceProjection("validation_projection", "id", snapshot.validations.map((validation) => [validation.id, validation]));
       this.replaceProjection("checkpoint_projection", "ref", snapshot.checkpoints.map((checkpoint) => [checkpoint.ref, checkpoint]));
+      this.replaceProjection("handoff_projection", "id", snapshot.handoffs.map((handoff) => [handoff.id, handoff]));
       this.replaceProjection("outbox_projection", "event_id", snapshot.outbound.map((record) => [record.event.id, record]));
       this.replaceProjection("task_outbox_projection", "event_id", snapshot.taskOutbound.map((record) => [record.event.id, record]));
       this.replaceProjection("claim_outbox_projection", "event_id", snapshot.claimOutbound.map((record) => [record.event.id, record]));
