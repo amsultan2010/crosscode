@@ -1,5 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
-import type { CaptureKind, Claim, Handoff, Task, Validation } from "@crosscode/protocol";
+import type { CaptureKind, Claim, Handoff, Intent, Task, Validation } from "@crosscode/protocol";
 import { daemonConnectionSchema, type DaemonConnection } from "@crosscode/protocol";
 import type { CheckpointRecord } from "./state.js";
 import type { StoredOperation } from "./types.js";
@@ -59,8 +59,10 @@ export class DaemonClient {
   restoreCheckpoint(ref: string, path: string): Promise<{ restored: string }> { return this.request("POST", "/v1/checkpoints/restore", { ref, path }); }
   capture(intent: string, kind?: CaptureKind): Promise<StoredOperation> { return this.request("POST", "/v1/transactions", kind ? { intent, kind } : { intent }); }
   validate(profile: string): Promise<Validation[]> { return this.request("POST", "/v1/validate", { profile }); }
+  publish(input: { branch: string; profile: string; message?: string; dryRun?: boolean }): Promise<{ branch: string; tree: string; changedPaths: Array<{ path: string; kind: "add" | "modify" | "delete" }> } | { branch: string; commit: string; tree: string; previous?: string }> { return this.request("POST", "/v1/publish", input); }
   requestHandoff(input: { operationId: string; note?: string }): Promise<Handoff> { return this.request("POST", "/v1/handoffs", input); }
   respondHandoff(id: string, decision: "accepted" | "declined"): Promise<Handoff> { return this.request("POST", `/v1/handoffs/${encodeURIComponent(id)}/respond`, { decision }); }
+  publishIntent(input: { text: string; taskId?: string }): Promise<Intent> { return this.request("POST", "/v1/intents", input); }
 
   private async request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
     let response: Response;

@@ -3,6 +3,10 @@ import {
   claimCursorResponseSchema,
   cursorResponseSchema,
   enrollmentResponseSchema,
+  handoffCursorResponseSchema,
+  handoffIngestReceiptSchema,
+  intentCursorResponseSchema,
+  intentIngestReceiptSchema,
   remoteOperationSchema,
   replicaTokenExchangeResponseSchema,
   serviceIngestReceiptSchema,
@@ -12,10 +16,12 @@ import {
   type DaemonConfig,
   type EnrollmentResponse,
   type RemoteClaim,
+  type RemoteHandoff,
+  type RemoteIntent,
   type RemoteTask
 } from "@crosscode/protocol";
 import type { RemoteOperation } from "../../service/src/index.js";
-import type { ClaimOutboundRecord, OutboundRecord, TaskOutboundRecord } from "./state.js";
+import type { ClaimOutboundRecord, HandoffOutboundRecord, IntentOutboundRecord, OutboundRecord, TaskOutboundRecord } from "./state.js";
 import type { RemoteSyncTransport } from "./index.js";
 
 type Envelope<T> = { ok: true; data: T } | { ok: false; error: string };
@@ -87,6 +93,40 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
   async listClaims(after: string): Promise<{ claims: RemoteClaim[]; nextCursor: string }> {
     const data = claimCursorResponseSchema.parse(await this.authorizedRequest(`/v1/claims?after=${encodeURIComponent(after)}`, "GET"));
     return { claims: data.claims, nextCursor: data.nextCursor };
+  }
+
+  async uploadHandoff(record: HandoffOutboundRecord): Promise<RemoteHandoff> {
+    const data = await this.authorizedRequest("/v1/handoffs", "POST", { event: record.event });
+    const receipt = handoffIngestReceiptSchema.parse(data);
+    return {
+      eventId: receipt.eventId,
+      workspaceId: this.identity.workspaceId,
+      senderReplicaId: this.identity.replicaId,
+      handoff: record.event.payload,
+      updatedAt: receipt.updatedAt
+    };
+  }
+
+  async listHandoffs(after: string): Promise<{ handoffs: RemoteHandoff[]; nextCursor: string }> {
+    const data = handoffCursorResponseSchema.parse(await this.authorizedRequest(`/v1/handoffs?after=${encodeURIComponent(after)}`, "GET"));
+    return { handoffs: data.handoffs, nextCursor: data.nextCursor };
+  }
+
+  async uploadIntent(record: IntentOutboundRecord): Promise<RemoteIntent> {
+    const data = await this.authorizedRequest("/v1/intents", "POST", { event: record.event });
+    const receipt = intentIngestReceiptSchema.parse(data);
+    return {
+      eventId: receipt.eventId,
+      workspaceId: this.identity.workspaceId,
+      senderReplicaId: this.identity.replicaId,
+      intent: record.event.payload,
+      updatedAt: receipt.updatedAt
+    };
+  }
+
+  async listIntents(after: string): Promise<{ intents: RemoteIntent[]; nextCursor: string }> {
+    const data = intentCursorResponseSchema.parse(await this.authorizedRequest(`/v1/intents?after=${encodeURIComponent(after)}`, "GET"));
+    return { intents: data.intents, nextCursor: data.nextCursor };
   }
 
   private async authorizedRequest(path: string, method: "GET" | "POST", body?: unknown): Promise<unknown> {

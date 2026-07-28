@@ -6,6 +6,8 @@ import {
   type DaemonConfig,
   type PresenceUpdate,
   type RemoteClaim,
+  type RemoteHandoff,
+  type RemoteIntent,
   type RemoteOperation,
   type RemoteTask
 } from "@crosscode/protocol";
@@ -16,6 +18,8 @@ export type LiveSyncCallbacks = {
   onPresence?: (presence: PresenceUpdate) => void;
   onTask?: (task: RemoteTask) => void;
   onClaim?: (claim: RemoteClaim) => void;
+  onHandoff?: (handoff: RemoteHandoff) => void;
+  onIntent?: (intent: RemoteIntent) => void;
 };
 
 export type LiveSyncOptions = {
@@ -91,7 +95,9 @@ export class LiveSyncClient {
       if (message.data.type === "operation") this.callbacks.onOperation(message.data.operation);
       else if (message.data.type === "presence") this.callbacks.onPresence?.(message.data.presence);
       else if (message.data.type === "task") this.callbacks.onTask?.(message.data.task);
-      else this.callbacks.onClaim?.(message.data.claim);
+      else if (message.data.type === "claim") this.callbacks.onClaim?.(message.data.claim);
+      else if (message.data.type === "handoff") this.callbacks.onHandoff?.(message.data.handoff);
+      else this.callbacks.onIntent?.(message.data.intent);
     });
     socket.on("close", () => {
       if (this.socket === socket) this.socket = undefined;

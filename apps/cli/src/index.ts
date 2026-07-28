@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { DaemonClient } from "../../daemon/src/client.js";
 import { readDaemonConfig, writeDaemonConfig } from "../../daemon/src/runtime.js";
@@ -53,6 +54,9 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
   if (command === "checkpoint") return { value: await client.checkpoint(valueAfter(args, "--message")) };
   if (command === "task" && args[1] === "create") return { value: await client.createTask({ title: args[2] ?? "", paths: valueAfter(args, "--path") ? [valueAfter(args, "--path")!] : [] }) };
   if (command === "claim" && args[1] === "path") return { value: await client.createClaim({ taskId: valueAfter(args, "--task") ?? "", kind: "path", target: args[2] ?? "", mode: "exclusive-preferred" }) };
+  if (command === "intent") return { value: await client.publishIntent({ text: args[1] ?? "", taskId: valueAfter(args, "--task") }) };
+  if (command === "handoff" && args[1] === "request") return { value: await client.requestHandoff({ operationId: args[2] ?? "", note: valueAfter(args, "--note") }) };
+  if (command === "handoff" && args[1] === "respond") return { value: await client.respondHandoff(args[2] ?? "", (valueAfter(args, "--decision") ?? "") as "accepted" | "declined") };
   if (command === "proposals" && args[1] === "list") return { value: (await client.operations()).filter((operation) => operation.status === "proposed") };
   if (command === "proposals" && args[1] === "inspect") return { value: await client.analyze(args[2] ?? "") };
   if (command === "proposals" && args[1] === "diff") return { value: await client.diff(args[2] ?? "") };
@@ -61,6 +65,20 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
   if (command === "validate") {
     if (args.includes("--")) throw new Error("Validation commands must come from trusted .crosscode/config.yaml profiles");
     return { value: await client.validate(valueAfter(args, "--profile") ?? "fast") };
+  }
+  if (command === "publish") {
+    const branch = valueAfter(args, "--branch");
+    const profile = valueAfter(args, "--profile");
+    if (!branch || !profile) throw new Error("Usage: crosscode publish --branch <branch> --profile <name> [--message \"...\"] [--dry-run] [--yes]");
+    const input = { branch, profile, message: valueAfter(args, "--message"), dryRun: args.includes("--dry-run") };
+    if (!args.includes("--yes")) {
+      if (!process.stdout.isTTY) throw new Error("Publishing requires confirmation; pass --yes in noninteractive environments");
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await rl.question(`Publish to branch "${branch}"? [y/N] `);
+      rl.close();
+      if (!/^y(es)?$/i.test(answer.trim())) throw new Error("Publish cancelled");
+    }
+    return { value: await client.publish(input) };
   }
   throw new Error("Unknown command");
 }

@@ -142,6 +142,12 @@ export async function runDaemonProcess(
           },
           onClaim: (claim) => {
             if (claim.workspaceId === config.workspaceId) void synchronize();
+          },
+          onHandoff: (handoff) => {
+            if (handoff.workspaceId === config.workspaceId) void synchronize();
+          },
+          onIntent: (intent) => {
+            if (intent.workspaceId === config.workspaceId) void synchronize();
           }
         });
         liveSync.start();

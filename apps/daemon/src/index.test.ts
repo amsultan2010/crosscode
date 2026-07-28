@@ -31,9 +31,56 @@ describe("local daemon coordination", () => {
 
     const statePath = join(receiverRoot, ".git", "crosscode", "state.sqlite");
     const database = new DatabaseSync(statePath, { readOnly: true });
-    const rows = database.prepare("SELECT operation_id, path, classification, base_content, local_content, proposed_content FROM conflict_artifact").all() as Array<{ operation_id: string; path: string; classification: string; base_content: string; local_content: string; proposed_content: string }>;
+    const rows = database.prepare("SELECT operation_id, path, classification, base_content, local_content, proposed_content, dependents, merged_candidate FROM conflict_artifact").all() as Array<{ operation_id: string; path: string; classification: string; base_content: string; local_content: string; proposed_content: string; dependents: string | null; merged_candidate: string | null }>;
     database.close();
-    expect(rows).toEqual([{ operation_id: operation.id, path: "a.txt", classification: "stale-base", base_content: "one\n", local_content: "receiver\n", proposed_content: "sender\n" }]);
+    expect(rows).toEqual([{ operation_id: operation.id, path: "a.txt", classification: "stale-base", base_content: "one\n", local_content: "receiver\n", proposed_content: "sender\n", dependents: null, merged_candidate: null }]);
+  });
+
+  it("resolves a stale base through a clean three-way merge and records the merged candidate for approval", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const base = "line1\nline2\nline3\n";
+    await writeFile(join(senderRoot, "a.txt"), base); await exec("git", ["-C", senderRoot, "commit", "-aqm", "seed"]);
+    await writeFile(join(receiverRoot, "a.txt"), base); await exec("git", ["-C", receiverRoot, "commit", "-aqm", "seed"]);
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+
+    await writeFile(join(senderRoot, "a.txt"), "LINE1\nline2\nline3\n");
+    const operation = await sender.capture("edit line 1", service);
+    await writeFile(join(receiverRoot, "a.txt"), "line1\nline2\nLINE3\n");
+    await receiver.sync(service);
+
+    await expect(receiver.accept(operation.id)).rejects.toThrow("three-way merge");
+    expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe("line1\nline2\nLINE3\n");
+    expect(receiver.operations.get(operation.id)?.status).toBe("proposed");
+
+    const statePath = join(receiverRoot, ".git", "crosscode", "state.sqlite");
+    const database = new DatabaseSync(statePath, { readOnly: true });
+    const rows = database.prepare("SELECT classification, merged_candidate FROM conflict_artifact WHERE operation_id = ?").all(operation.id) as Array<{ classification: string; merged_candidate: string }>;
+    database.close();
+    expect(rows).toEqual([{ classification: "stale-base-resolved", merged_candidate: "LINE1\nline2\nLINE3\n" }]);
+  });
+
+  it("classifies an overlapping delete-vs-modify conflict distinctly and records which side deleted", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+    await writeFile(join(senderRoot, "a.txt"), "sender-edit\n");
+    const operation = await sender.capture("edit", service);
+    await receiver.sync(service);
+
+    const deleteChange = { path: "a.txt", kind: "delete" as const, beforeHash: contentHash("one\n") };
+    const pendingLocal = { id: "fake-local-op", workspaceId: "w", senderReplicaId: "receiver", transaction: { id: "fake-local-op", base: { files: [] }, changes: [deleteChange], provenance: { source: "filesystem" as const, confidence: "known" as const }, safety: { risk: "low" as const, requiresApproval: false } }, sequence: 1, createdAt: new Date().toISOString(), status: "local" as const };
+    receiver.operations.set(pendingLocal.id, pendingLocal);
+
+    await expect(receiver.accept(operation.id)).rejects.toThrow("requires local human approval");
+    expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe("one\n");
+
+    const statePath = join(receiverRoot, ".git", "crosscode", "state.sqlite");
+    const database = new DatabaseSync(statePath, { readOnly: true });
+    const rows = database.prepare("SELECT classification FROM conflict_artifact WHERE operation_id = ?").all(operation.id) as Array<{ classification: string }>;
+    database.close();
+    expect(rows).toEqual([{ classification: "delete-vs-modify" }]);
+    expect(receiver.operations.get(operation.id)?.transaction.safety).toEqual({ risk: "high", requiresApproval: true });
   });
 
   it("restores local state from its SQLite event store after restart", async () => {
@@ -254,13 +301,54 @@ describe("local daemon coordination", () => {
       uploadTask: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", task: record.event.payload, updatedAt: new Date().toISOString() }),
       listTasks: async (after) => ({ tasks: [], nextCursor: after }),
       uploadClaim: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", claim: record.event.payload, released: record.event.type === "claim.released", updatedAt: new Date().toISOString() }),
-      listClaims: async (after) => ({ claims: [], nextCursor: after })
+      listClaims: async (after) => ({ claims: [], nextCursor: after }),
+      uploadHandoff: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", handoff: record.event.payload, updatedAt: new Date().toISOString() }),
+      listHandoffs: async (after) => ({ handoffs: [], nextCursor: after }),
+      uploadIntent: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", intent: record.event.payload, updatedAt: new Date().toISOString() }),
+      listIntents: async (after) => ({ intents: [], nextCursor: after })
     });
 
     expect(result).toEqual({ uploaded: 1, downloaded: 1, cursor: 2 });
     expect(daemon.outbound.get(queued.event.id)?.acknowledgedServerSequence).toBe(1);
     expect(daemon.operations.get("remote-operation")?.status).toBe("proposed");
     expect(await readFile(join(root, "a.txt"), "utf8")).toBe("offline\n");
+  });
+
+  it("enqueues outbound handoff and intent events and synchronizes them with the coordination service", async () => {
+    const root = await repo();
+    const daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
+    await writeFile(join(root, "a.txt"), "changed\n");
+    const captured = await daemon.capture("local edit for handoff");
+    const handoff = await daemon.requestHandoff({ operationId: captured.id, note: "please take over" });
+    expect([...daemon.handoffOutbound.values()].some((record) => record.event.payload.id === handoff.id)).toBe(true);
+    const responded = await daemon.respondHandoff(handoff.id, "accepted");
+    expect(daemon.handoffOutbound.get(responded.id)?.event.type).toBe("handoff.responded");
+
+    const intent = await daemon.publishIntent({ text: "Rename foo to bar", taskId: "task-1" });
+    expect([...daemon.intentOutbound.values()].some((record) => record.event.payload.id === intent.id)).toBe(true);
+
+    const remoteHandoffRecord = { eventId: "remote-handoff-event", workspaceId: "w", senderReplicaId: "other", handoff: { id: "remote-handoff", operationId: "operation-x", requestedBy: "other-actor", status: "pending" as const, createdAt: new Date().toISOString() }, updatedAt: new Date().toISOString() };
+    const remoteIntentRecord = { eventId: "remote-intent-event", workspaceId: "w", senderReplicaId: "other", intent: { id: "remote-intent", actorId: "other-actor", text: "Remote intent", createdAt: new Date().toISOString() }, updatedAt: new Date().toISOString() };
+    const uploadedHandoffs: string[] = [];
+    const uploadedIntents: string[] = [];
+    const result = await daemon.syncRemote({
+      upload: async (record) => ({ id: record.transaction.id, workspaceId: "w", senderReplicaId: "replica", transaction: record.transaction, sequence: 1, createdAt: new Date().toISOString() }),
+      list: async () => ({ operations: [], nextCursor: 0 }),
+      uploadTask: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", task: record.event.payload, updatedAt: new Date().toISOString() }),
+      listTasks: async (after) => ({ tasks: [], nextCursor: after }),
+      uploadClaim: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", claim: record.event.payload, released: record.event.type === "claim.released", updatedAt: new Date().toISOString() }),
+      listClaims: async (after) => ({ claims: [], nextCursor: after }),
+      uploadHandoff: async (record) => { uploadedHandoffs.push(record.event.payload.id); return { eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", handoff: record.event.payload, updatedAt: new Date().toISOString() }; },
+      listHandoffs: async () => ({ handoffs: [remoteHandoffRecord], nextCursor: remoteHandoffRecord.updatedAt }),
+      uploadIntent: async (record) => { uploadedIntents.push(record.event.payload.id); return { eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", intent: record.event.payload, updatedAt: new Date().toISOString() }; },
+      listIntents: async () => ({ intents: [remoteIntentRecord], nextCursor: remoteIntentRecord.updatedAt })
+    });
+
+    expect(uploadedHandoffs).toEqual([responded.id]);
+    expect(uploadedIntents).toEqual([intent.id]);
+    expect(daemon.handoffs.get("remote-handoff")).toEqual(remoteHandoffRecord.handoff);
+    expect(daemon.intents.get("remote-intent")).toEqual(remoteIntentRecord.intent);
+    expect(result.uploaded).toBe(1);
   });
 
   it("recognizes a same-HEAD hard reset as a Git transition", async () => {
@@ -353,5 +441,36 @@ describe("local daemon coordination", () => {
 
     await expect(receiver.accept(operation.id)).rejects.toThrow("requires local human approval");
     expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe(base);
+  });
+
+  it("rejects publish when no validation for the profile has passed", async () => {
+    const root = await repo();
+    const daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
+    await daemon.validate("fast", ["exit 1"]);
+
+    await expect(daemon.publish({ branch: "main", profile: "fast" })).rejects.toThrow("No passing validation found for profile fast");
+  });
+
+  it("rejects publish when the working tree changed since the last passing validation", async () => {
+    const root = await repo();
+    const daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
+    await daemon.validate("fast", ["true"]);
+    await writeFile(join(root, "a.txt"), "changed after validation\n");
+
+    await expect(daemon.publish({ branch: "main", profile: "fast" })).rejects.toThrow("Working tree changed since the last validation; re-run validate before publishing");
+  });
+
+  it("returns a dry-run publish plan without moving the branch ref", async () => {
+    const root = await repo();
+    await writeFile(join(root, "a.txt"), "two\n");
+    const initialHead = (await exec("git", ["-C", root, "rev-parse", "refs/heads/main"])).stdout.trim();
+    const daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
+    const [validation] = await daemon.validate("fast", ["true"]);
+
+    const result = await daemon.publish({ branch: "main", profile: "fast", dryRun: true });
+
+    expect(result).toMatchObject({ branch: "main", tree: validation!.tree });
+    expect("changedPaths" in result && result.changedPaths).toEqual([{ path: "a.txt", kind: "modify" }]);
+    expect((await exec("git", ["-C", root, "rev-parse", "refs/heads/main"])).stdout.trim()).toBe(initialHead);
   });
 });

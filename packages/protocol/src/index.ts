@@ -255,6 +255,13 @@ export const validationRequestSchema = z.object({
   profile: z.string().trim().min(1).max(100)
 }).strict();
 
+export const publishRequestSchema = z.object({
+  branch: z.string().min(1),
+  profile: z.string().min(1),
+  message: z.string().trim().min(1).max(1_000).optional(),
+  dryRun: z.boolean().optional()
+}).strict();
+
 export const captureRequestSchema = z.object({
   intent: z.string().trim().min(1).max(5_000),
   kind: captureKindSchema.optional()
@@ -291,6 +298,92 @@ export const handoffDecisionSchema = z.enum(["accepted", "declined"]);
 
 export const handoffRespondRequestSchema = z.object({
   decision: handoffDecisionSchema
+}).strict();
+
+export const handoffRequestedEventSchema = eventEnvelopeSchema.extend({
+  type: z.literal("handoff.requested"),
+  payload: handoffSchema
+}).strict();
+export type HandoffRequestedEvent = z.infer<typeof handoffRequestedEventSchema>;
+
+export const handoffRespondedEventSchema = eventEnvelopeSchema.extend({
+  type: z.literal("handoff.responded"),
+  payload: handoffSchema
+}).strict();
+export type HandoffRespondedEvent = z.infer<typeof handoffRespondedEventSchema>;
+
+export const remoteHandoffSchema = z.object({
+  eventId: z.string().min(1),
+  workspaceId: z.string().min(1),
+  senderReplicaId: z.string().min(1),
+  handoff: handoffSchema,
+  updatedAt: z.string().datetime()
+}).strict();
+export type RemoteHandoff = z.infer<typeof remoteHandoffSchema>;
+
+export const handoffCursorResponseSchema = z.object({
+  handoffs: z.array(remoteHandoffSchema),
+  nextCursor: z.string().datetime()
+}).strict();
+export type HandoffCursorResponse = z.infer<typeof handoffCursorResponseSchema>;
+
+export const handoffIngestRequestSchema = z.object({
+  event: z.discriminatedUnion("type", [handoffRequestedEventSchema, handoffRespondedEventSchema])
+}).strict().superRefine((request, context) => assertPayloadIdMatches(request.event, context));
+export type HandoffIngestRequest = z.infer<typeof handoffIngestRequestSchema>;
+
+export const handoffIngestReceiptSchema = z.object({
+  eventId: z.string().min(1),
+  handoffId: z.string().min(1),
+  updatedAt: z.string().datetime()
+}).strict();
+export type HandoffIngestReceipt = z.infer<typeof handoffIngestReceiptSchema>;
+
+export const intentSchema = z.object({
+  id: z.string().min(1),
+  taskId: z.string().optional(),
+  actorId: z.string().min(1),
+  text: z.string().min(1),
+  createdAt: z.string().datetime()
+}).strict();
+export type Intent = z.infer<typeof intentSchema>;
+
+export const intentPublishedEventSchema = eventEnvelopeSchema.extend({
+  type: z.literal("intent.published"),
+  payload: intentSchema
+}).strict();
+export type IntentPublishedEvent = z.infer<typeof intentPublishedEventSchema>;
+
+export const remoteIntentSchema = z.object({
+  eventId: z.string().min(1),
+  workspaceId: z.string().min(1),
+  senderReplicaId: z.string().min(1),
+  intent: intentSchema,
+  updatedAt: z.string().datetime()
+}).strict();
+export type RemoteIntent = z.infer<typeof remoteIntentSchema>;
+
+export const intentCursorResponseSchema = z.object({
+  intents: z.array(remoteIntentSchema),
+  nextCursor: z.string().datetime()
+}).strict();
+export type IntentCursorResponse = z.infer<typeof intentCursorResponseSchema>;
+
+export const intentIngestRequestSchema = z.object({
+  event: intentPublishedEventSchema
+}).strict().superRefine((request, context) => assertPayloadIdMatches(request.event, context));
+export type IntentIngestRequest = z.infer<typeof intentIngestRequestSchema>;
+
+export const intentIngestReceiptSchema = z.object({
+  eventId: z.string().min(1),
+  intentId: z.string().min(1),
+  updatedAt: z.string().datetime()
+}).strict();
+export type IntentIngestReceipt = z.infer<typeof intentIngestReceiptSchema>;
+
+export const intentRequestSchema = z.object({
+  text: z.string().trim().min(1).max(5_000),
+  taskId: z.string().min(1).max(200).optional()
 }).strict();
 
 export const daemonConnectionSchema = z.object({
@@ -344,7 +437,9 @@ export const wsFanOutMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("operation"), operation: remoteOperationSchema }).strict(),
   z.object({ type: z.literal("presence"), presence: presenceUpdateSchema }).strict(),
   z.object({ type: z.literal("task"), task: remoteTaskSchema }).strict(),
-  z.object({ type: z.literal("claim"), claim: remoteClaimSchema }).strict()
+  z.object({ type: z.literal("claim"), claim: remoteClaimSchema }).strict(),
+  z.object({ type: z.literal("handoff"), handoff: remoteHandoffSchema }).strict(),
+  z.object({ type: z.literal("intent"), intent: remoteIntentSchema }).strict()
 ]);
 export type WsFanOutMessage = z.infer<typeof wsFanOutMessageSchema>;
 

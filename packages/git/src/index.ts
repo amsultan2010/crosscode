@@ -57,6 +57,15 @@ export async function createCheckpoint(root: string, replicaId: string, message:
   await git(root, ["update-ref", ref, commit]);
   return { ref, commit, tree };
 }
+export async function publishCommit(root: string, branch: string, message: string): Promise<{ branch: string; commit: string; tree: string; previous?: string }> {
+  const ref = `refs/heads/${branch}`;
+  const tip = await git(root, ["rev-parse", "-q", "--verify", ref]).catch(() => undefined);
+  if (!tip) throw new Error(`Branch does not exist: ${branch}`);
+  const tree = await snapshotWorktreeTree(root);
+  const commit = await git(root, ["commit-tree", tree, "-p", tip, "-m", message]);
+  await git(root, ["update-ref", ref, commit, tip]);
+  return { branch, commit, tree, previous: tip };
+}
 
 function safeRelativePath(path: string): string {
   if (!path || path.includes("\0") || path.startsWith("/") || path.split("/").some((part) => part === ".." || part.toLowerCase() === ".git")) throw new Error("Checkpoint path must be a safe repository-relative path");
@@ -103,6 +112,18 @@ export async function restoreCheckpointFile(root: string, ref: string, path: str
   const checkpointRef = safeCheckpointRef(ref); const relative = safeRelativePath(path); const content = await readRevisionFile(root, checkpointRef, relative); const destination = await safeRepositoryPath(root, relative);
   await mkdir(dirname(destination), { recursive: true }); const temporary = join(dirname(destination), `.${basename(destination)}.crosscode-restore`);
   await writeFile(temporary, content); await rename(temporary, destination);
+}
+
+export async function findSymbolReferences(root: string, symbols: string[], excludePath: string): Promise<string[]> {
+  const files = new Set<string>();
+  for (const symbol of symbols) {
+    if (!symbol) continue;
+    const output = await exec("git", ["-C", root, "grep", "-l", "-e", symbol, "--", `:!${excludePath}`])
+      .then(({ stdout }) => stdout)
+      .catch((error: { code?: number }) => { if (error.code === 1) return ""; throw error; });
+    for (const file of output.split("\n").filter(Boolean)) if (file !== excludePath) files.add(file);
+  }
+  return [...files].sort();
 }
 
 export async function threeWayMerge(base: string, current: string, proposed: string): Promise<{ clean: boolean; content: string }> {
