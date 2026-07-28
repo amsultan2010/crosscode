@@ -49,6 +49,7 @@ export class DaemonClient {
   createClaim(input: { taskId: string; kind: Claim["kind"]; target: string; mode: Claim["mode"]; expiresAt?: string }): Promise<Claim> { return this.request("POST", "/v1/claims", input); }
   operations(): Promise<StoredOperation[]> { return this.request("GET", "/v1/operations"); }
   analyze(id: string): Promise<{ operation: StoredOperation; analysis: string }> { return this.request("GET", `/v1/operations/${encodeURIComponent(id)}/analysis`); }
+  diff(id: string): Promise<Array<{ path: string; base?: string; local?: string; proposed?: string }>> { return this.request("GET", `/v1/operations/${encodeURIComponent(id)}/diff`); }
   accept(id: string): Promise<StoredOperation> { return this.request("POST", `/v1/operations/${encodeURIComponent(id)}/accept`, {}); }
   reject(id: string): Promise<StoredOperation> { return this.request("POST", `/v1/operations/${encodeURIComponent(id)}/reject`, {}); }
   checkpoints(): Promise<CheckpointRecord[]> { return this.request("GET", "/v1/checkpoints"); }
