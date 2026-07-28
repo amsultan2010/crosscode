@@ -1,6 +1,8 @@
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import {
+  claimIngestRequestSchema,
+  claimIngestReceiptSchema,
   cursorQuerySchema,
   enrollmentRequestSchema,
   enrollmentResponseSchema,
@@ -8,6 +10,10 @@ import {
   replicaTokenExchangeResponseSchema,
   serviceIngestReceiptSchema,
   serviceIngestRequestSchema,
+  taskIngestRequestSchema,
+  taskIngestReceiptSchema,
+  timeCursorQuerySchema,
+  EPOCH_CURSOR,
   type RemoteOperation
 } from "@crosscode/protocol";
 import { contentHash, redactPath } from "@crosscode/core";
@@ -129,6 +135,56 @@ async function handleRequest(
     return;
   }
 
+  if (method === "POST" && url.pathname === "/v1/tasks") {
+    if (identity.role === "viewer") throw new HttpError(403, "Viewer membership is read-only");
+    const body = taskIngestRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
+    if (
+      body.event.workspaceId !== identity.workspaceId ||
+      body.event.replicaId !== identity.replicaId ||
+      body.event.actorId !== identity.actorId
+    ) throw new HttpError(403, "Event principal does not match authenticated membership");
+    const task = await options.store.upsertTask(identity, body.event);
+    gateway.broadcastTask(identity.workspaceId, task, identity.replicaId);
+    send(response, 200, taskIngestReceiptSchema.parse({
+      eventId: task.eventId,
+      taskId: task.task.id,
+      updatedAt: task.updatedAt
+    }));
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v1/tasks") {
+    const query = timeCursorQuerySchema.parse({ after: url.searchParams.get("after") ?? EPOCH_CURSOR });
+    const page = await options.store.listTasks(identity.workspaceId, query.after, 200);
+    send(response, 200, { tasks: page.items, nextCursor: page.nextCursor });
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/v1/claims") {
+    if (identity.role === "viewer") throw new HttpError(403, "Viewer membership is read-only");
+    const body = claimIngestRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
+    if (
+      body.event.workspaceId !== identity.workspaceId ||
+      body.event.replicaId !== identity.replicaId ||
+      body.event.actorId !== identity.actorId
+    ) throw new HttpError(403, "Event principal does not match authenticated membership");
+    const claim = await options.store.upsertClaim(identity, body.event);
+    gateway.broadcastClaim(identity.workspaceId, claim, identity.replicaId);
+    send(response, 200, claimIngestReceiptSchema.parse({
+      eventId: claim.eventId,
+      claimId: claim.claim.id,
+      updatedAt: claim.updatedAt
+    }));
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v1/claims") {
+    const query = timeCursorQuerySchema.parse({ after: url.searchParams.get("after") ?? EPOCH_CURSOR });
+    const page = await options.store.listClaims(identity.workspaceId, query.after, 200);
+    send(response, 200, { claims: page.items, nextCursor: page.nextCursor });
+    return;
+  }
+
   throw new HttpError(404, "Route not found");
 }
 
@@ -246,7 +302,11 @@ function rateLimitRoute(method: string, pathname: string): string {
     "POST /v1/enroll",
     "POST /v1/token",
     "POST /v1/events",
-    "GET /v1/operations"
+    "GET /v1/operations",
+    "POST /v1/tasks",
+    "GET /v1/tasks",
+    "POST /v1/claims",
+    "GET /v1/claims"
   ]).has(route) ? route : "unknown";
 }
 

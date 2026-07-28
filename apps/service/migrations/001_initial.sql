@@ -50,18 +50,30 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS tasks (
   id text NOT NULL,
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  event_id text,
+  replica_id uuid,
   payload jsonb NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (workspace_id, id)
 );
 
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS event_id text;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS replica_id uuid;
+
 CREATE TABLE IF NOT EXISTS claims (
   id text NOT NULL,
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  event_id text,
+  replica_id uuid,
   payload jsonb NOT NULL,
+  released_at timestamptz,
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (workspace_id, id)
 );
+
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS event_id text;
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS replica_id uuid;
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS released_at timestamptz;
 
 CREATE TABLE IF NOT EXISTS operations (
   id text NOT NULL,
@@ -84,6 +96,12 @@ CREATE TABLE IF NOT EXISTS operations (
 
 CREATE INDEX IF NOT EXISTS operations_workspace_cursor_idx
   ON operations (workspace_id, server_sequence);
+
+CREATE INDEX IF NOT EXISTS tasks_workspace_cursor_idx
+  ON tasks (workspace_id, updated_at);
+
+CREATE INDEX IF NOT EXISTS claims_workspace_cursor_idx
+  ON claims (workspace_id, updated_at);
 
 CREATE TABLE IF NOT EXISTS operation_files (
   workspace_id uuid NOT NULL,

@@ -83,7 +83,7 @@ describe.skipIf(!databaseUrl)("PostgreSQL live WebSocket coordination", () => {
       // A uploads quickly (short poll) so its own outbound events reach the service fast;
       // B and C poll slowly so any fast delivery to them can only have arrived over the live WebSocket path.
       const FAST_POLL_MS = 100;
-      const SLOW_POLL_MS = 5_000;
+      const SLOW_POLL_MS = 10_000;
       const daemonA = await runDaemonProcess(rootA, { gitPollMs: 100, syncPollMs: FAST_POLL_MS, onPresence: (presence) => presenceLogA.push(presence) });
       daemons.add(daemonA);
       const daemonB = await runDaemonProcess(rootB, { gitPollMs: 100, syncPollMs: SLOW_POLL_MS, onPresence: (presence) => presenceLogB.push(presence) });
@@ -119,7 +119,25 @@ describe.skipIf(!databaseUrl)("PostgreSQL live WebSocket coordination", () => {
       expect(await readFile(join(rootB, "shared.txt"), "utf8")).toBe("from-a\n");
       expect(await readFile(join(rootC, "shared.txt"), "utf8")).toBe("from-a\n");
 
-      // (c) WebSocket torn down mid-session: replace daemon C with one that has no live socket at all
+      // (c) task/claim live fan-out: A creates a task and claim, both are pushed live to B and C.
+      const task = await daemonA.running.daemon.runExclusive(() => daemonA.running.daemon.createTask({ title: "Coordinate shared.txt" }));
+      const claim = await daemonA.running.daemon.runExclusive(() => daemonA.running.daemon.createClaim({ taskId: task.id, kind: "path", target: "shared.txt", mode: "exclusive-preferred" }));
+
+      const taskOnB = await waitFor(() => daemonB.running.daemon.tasks.get(task.id), (value) => value !== undefined, SLOW_POLL_MS - 1_000);
+      const taskOnC = await waitFor(() => daemonC.running.daemon.tasks.get(task.id), (value) => value !== undefined, SLOW_POLL_MS - 1_000);
+      expect(taskOnB?.title).toBe("Coordinate shared.txt");
+      expect(taskOnC?.title).toBe("Coordinate shared.txt");
+      const claimOnB = await waitFor(() => daemonB.running.daemon.claims.get(claim.id), (value) => value !== undefined, SLOW_POLL_MS - 1_000);
+      const claimOnC = await waitFor(() => daemonC.running.daemon.claims.get(claim.id), (value) => value !== undefined, SLOW_POLL_MS - 1_000);
+      expect(claimOnB?.target).toBe("shared.txt");
+      expect(claimOnC?.target).toBe("shared.txt");
+
+      // Releasing the claim live-removes it from B and C without waiting for their slow poll.
+      await daemonA.running.daemon.runExclusive(() => daemonA.running.daemon.releaseClaim(claim.id));
+      await waitFor(() => daemonB.running.daemon.claims.has(claim.id), (value) => value === false, SLOW_POLL_MS - 1_000);
+      await waitFor(() => daemonC.running.daemon.claims.has(claim.id), (value) => value === false, SLOW_POLL_MS - 1_000);
+
+      // (d) WebSocket torn down mid-session: replace daemon C with one that has no live socket at all
       // (a persistent WS outage) but a fast poll, and confirm it still catches up with no data loss.
       await stopDaemon(daemonC);
       daemonC = await runDaemonProcess(rootC, { gitPollMs: 100, syncPollMs: 150, liveSync: false });
@@ -133,6 +151,17 @@ describe.skipIf(!databaseUrl)("PostgreSQL live WebSocket coordination", () => {
 
       // The original shared.txt content from before the outage must still be intact: no overwrite, no loss.
       expect(await readFile(join(rootC, "shared.txt"), "utf8")).toBe("from-a\n");
+
+      // A replica with no live socket still catches up on tasks/claims through the poll fallback.
+      const postOutageTask = await daemonA.running.daemon.runExclusive(() => daemonA.running.daemon.createTask({ title: "Post-outage task" }));
+      const postOutageClaim = await daemonA.running.daemon.runExclusive(() => daemonA.running.daemon.createClaim({ taskId: postOutageTask.id, kind: "path", target: "post-outage.txt", mode: "shared" }));
+      const postOutageTaskOnC = await waitFor(() => daemonC.running.daemon.tasks.get(postOutageTask.id), (value) => value !== undefined, 5_000);
+      const postOutageClaimOnC = await waitFor(() => daemonC.running.daemon.claims.get(postOutageClaim.id), (value) => value !== undefined, 5_000);
+      expect(postOutageTaskOnC?.title).toBe("Post-outage task");
+      expect(postOutageClaimOnC?.target).toBe("post-outage.txt");
+
+      // The earlier claim release must still be reflected: no resurrection through the poll fallback.
+      expect(daemonC.running.daemon.claims.has(claim.id)).toBe(false);
     } finally {
       // Live daemons keep WebSocket connections open on the server; http.Server#close only
       // invokes its callback once every existing connection has ended, so they must be
@@ -143,5 +172,5 @@ describe.skipIf(!databaseUrl)("PostgreSQL live WebSocket coordination", () => {
       await store.pool.query("DELETE FROM workspaces WHERE id = $1", [owner.workspaceId]);
       await store.close();
     }
-  }, 30_000);
+  }, 45_000);
 });

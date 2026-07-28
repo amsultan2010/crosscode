@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import type { ChangeTransaction, EventEnvelope, RemoteOperation, TransactionCreatedEvent } from "@crosscode/protocol";
+import type {
+  ChangeTransaction, Claim, ClaimCreatedEvent, ClaimReleasedEvent, EventEnvelope, RemoteClaim, RemoteOperation,
+  RemoteTask, Task, TaskCreatedEvent, TaskUpdatedEvent, TransactionCreatedEvent
+} from "@crosscode/protocol";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
 import { hashCanonicalPayload, hashCredential, hashEnrollmentToken, randomCredential, verifyCredential } from "./crypto.js";
 import type { AccessClaims } from "./auth.js";
@@ -280,6 +283,60 @@ export class PgStore {
     return { items, nextCursor: items.at(-1)?.serverSequence ?? cursor, hasMore: result.rows.length > limit };
   }
 
+  async upsertTask(identity: AccessClaims, event: TaskCreatedEvent | TaskUpdatedEvent): Promise<RemoteTask> {
+    const task = event.payload;
+    const result = await this.pool.query<TaskRow>(
+      `INSERT INTO tasks (id, workspace_id, event_id, replica_id, payload, updated_at)
+       VALUES ($1, $2, $3, $4, $5::jsonb, now())
+       ON CONFLICT (workspace_id, id) DO UPDATE
+         SET event_id = excluded.event_id, replica_id = excluded.replica_id, payload = excluded.payload, updated_at = now()
+       RETURNING id, workspace_id, event_id, replica_id, payload, updated_at`,
+      [task.id, identity.workspaceId, event.id, identity.replicaId, JSON.stringify(task)]
+    );
+    return mapTask(result.rows[0]!);
+  }
+
+  async listTasks(workspaceId: string, after: string, limit: number): Promise<{ items: RemoteTask[]; nextCursor: string }> {
+    const result = await this.pool.query<TaskRow>(
+      `SELECT id, workspace_id, event_id, replica_id, payload, updated_at
+         FROM tasks
+        WHERE workspace_id = $1 AND updated_at > $2
+        ORDER BY updated_at ASC
+        LIMIT $3`,
+      [workspaceId, after, limit]
+    );
+    const items = result.rows.map(mapTask);
+    return { items, nextCursor: items.at(-1)?.updatedAt ?? after };
+  }
+
+  async upsertClaim(identity: AccessClaims, event: ClaimCreatedEvent | ClaimReleasedEvent): Promise<RemoteClaim> {
+    const claim = event.payload;
+    const released = event.type === "claim.released";
+    const result = await this.pool.query<ClaimRow>(
+      `INSERT INTO claims (id, workspace_id, event_id, replica_id, payload, released_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, now())
+       ON CONFLICT (workspace_id, id) DO UPDATE
+         SET event_id = excluded.event_id, replica_id = excluded.replica_id, payload = excluded.payload,
+             released_at = excluded.released_at, updated_at = now()
+       RETURNING id, workspace_id, event_id, replica_id, payload, released_at, updated_at`,
+      [claim.id, identity.workspaceId, event.id, identity.replicaId, JSON.stringify(claim), released ? new Date() : null]
+    );
+    return mapClaim(result.rows[0]!);
+  }
+
+  async listClaims(workspaceId: string, after: string, limit: number): Promise<{ items: RemoteClaim[]; nextCursor: string }> {
+    const result = await this.pool.query<ClaimRow>(
+      `SELECT id, workspace_id, event_id, replica_id, payload, released_at, updated_at
+         FROM claims
+        WHERE workspace_id = $1 AND updated_at > $2
+        ORDER BY updated_at ASC
+        LIMIT $3`,
+      [workspaceId, after, limit]
+    );
+    const items = result.rows.map(mapClaim);
+    return { items, nextCursor: items.at(-1)?.updatedAt ?? after };
+  }
+
   private async transaction<T>(body: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
     try {
@@ -351,6 +408,46 @@ function toClaims(row: IdentityRow): AccessClaims {
     replicaId: row.replica_id,
     role: row.role,
     tokenVersion: Number(row.token_version)
+  };
+}
+
+type TaskRow = {
+  id: string;
+  workspace_id: string;
+  event_id: string;
+  replica_id: string;
+  payload: Task;
+  updated_at: Date;
+};
+
+function mapTask(row: TaskRow): RemoteTask {
+  return {
+    eventId: row.event_id,
+    workspaceId: row.workspace_id,
+    senderReplicaId: row.replica_id,
+    task: row.payload,
+    updatedAt: new Date(row.updated_at).toISOString()
+  };
+}
+
+type ClaimRow = {
+  id: string;
+  workspace_id: string;
+  event_id: string;
+  replica_id: string;
+  payload: Claim;
+  released_at: Date | null;
+  updated_at: Date;
+};
+
+function mapClaim(row: ClaimRow): RemoteClaim {
+  return {
+    eventId: row.event_id,
+    workspaceId: row.workspace_id,
+    senderReplicaId: row.replica_id,
+    claim: row.payload,
+    released: row.released_at !== null,
+    updatedAt: new Date(row.updated_at).toISOString()
   };
 }
 

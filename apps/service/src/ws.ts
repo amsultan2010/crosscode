@@ -6,7 +6,9 @@ import {
   wsSubscribeAckSchema,
   wsSubscribeRequestSchema,
   type PresenceStatus,
+  type RemoteClaim,
   type RemoteOperation,
+  type RemoteTask,
   type WsFanOutMessage
 } from "@crosscode/protocol";
 import { verifyAccessToken } from "./auth.js";
@@ -19,6 +21,8 @@ export type WebSocketGatewayOptions = {
 
 export type WebSocketGateway = {
   broadcastOperation: (workspaceId: string, operation: RemoteOperation, excludeReplicaId: string) => void;
+  broadcastTask: (workspaceId: string, task: RemoteTask, excludeReplicaId: string) => void;
+  broadcastClaim: (workspaceId: string, claim: RemoteClaim, excludeReplicaId: string) => void;
 };
 
 const STREAM_PATH = "/v1/stream";
@@ -70,6 +74,12 @@ export function attachWebSocketGateway(server: Server, options: WebSocketGateway
   return {
     broadcastOperation(workspaceId, operation, excludeReplicaId) {
       broadcast(connectionsByWorkspace, workspaceId, { type: "operation", operation }, excludeReplicaId);
+    },
+    broadcastTask(workspaceId, task, excludeReplicaId) {
+      broadcast(connectionsByWorkspace, workspaceId, { type: "task", task }, excludeReplicaId);
+    },
+    broadcastClaim(workspaceId, claim, excludeReplicaId) {
+      broadcast(connectionsByWorkspace, workspaceId, { type: "claim", claim }, excludeReplicaId);
     }
   };
 }

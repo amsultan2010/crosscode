@@ -1,15 +1,21 @@
 import {
+  claimIngestReceiptSchema,
+  claimCursorResponseSchema,
   cursorResponseSchema,
   enrollmentResponseSchema,
   remoteOperationSchema,
   replicaTokenExchangeResponseSchema,
   serviceIngestReceiptSchema,
+  taskIngestReceiptSchema,
+  taskCursorResponseSchema,
   transactionCreatedEventSchema,
   type DaemonConfig,
-  type EnrollmentResponse
+  type EnrollmentResponse,
+  type RemoteClaim,
+  type RemoteTask
 } from "@crosscode/protocol";
 import type { RemoteOperation } from "../../service/src/index.js";
-import type { OutboundRecord } from "./state.js";
+import type { ClaimOutboundRecord, OutboundRecord, TaskOutboundRecord } from "./state.js";
 import type { RemoteSyncTransport } from "./index.js";
 
 type Envelope<T> = { ok: true; data: T } | { ok: false; error: string };
@@ -46,6 +52,41 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
         return { id: parsed.id, workspaceId: parsed.workspaceId, senderReplicaId: parsed.senderReplicaId, transaction: parsed.transaction, sequence: parsed.serverSequence, createdAt: parsed.createdAt };
       })
     };
+  }
+
+  async uploadTask(record: TaskOutboundRecord): Promise<RemoteTask> {
+    const data = await this.authorizedRequest("/v1/tasks", "POST", { event: record.event });
+    const receipt = taskIngestReceiptSchema.parse(data);
+    return {
+      eventId: receipt.eventId,
+      workspaceId: this.identity.workspaceId,
+      senderReplicaId: this.identity.replicaId,
+      task: record.event.payload,
+      updatedAt: receipt.updatedAt
+    };
+  }
+
+  async listTasks(after: string): Promise<{ tasks: RemoteTask[]; nextCursor: string }> {
+    const data = taskCursorResponseSchema.parse(await this.authorizedRequest(`/v1/tasks?after=${encodeURIComponent(after)}`, "GET"));
+    return { tasks: data.tasks, nextCursor: data.nextCursor };
+  }
+
+  async uploadClaim(record: ClaimOutboundRecord): Promise<RemoteClaim> {
+    const data = await this.authorizedRequest("/v1/claims", "POST", { event: record.event });
+    const receipt = claimIngestReceiptSchema.parse(data);
+    return {
+      eventId: receipt.eventId,
+      workspaceId: this.identity.workspaceId,
+      senderReplicaId: this.identity.replicaId,
+      claim: record.event.payload,
+      released: record.event.type === "claim.released",
+      updatedAt: receipt.updatedAt
+    };
+  }
+
+  async listClaims(after: string): Promise<{ claims: RemoteClaim[]; nextCursor: string }> {
+    const data = claimCursorResponseSchema.parse(await this.authorizedRequest(`/v1/claims?after=${encodeURIComponent(after)}`, "GET"));
+    return { claims: data.claims, nextCursor: data.nextCursor };
   }
 
   private async authorizedRequest(path: string, method: "GET" | "POST", body?: unknown): Promise<unknown> {
