@@ -15,17 +15,29 @@ import {
   checkpointRestoreRequestSchema,
   claimRequestSchema,
   claimSchema,
+  handoffRequestSchema,
+  handoffRespondRequestSchema,
+  handoffSchema,
   taskRequestSchema,
   taskSchema,
   validationRequestSchema,
+  EPOCH_CURSOR,
+  type CaptureKind,
   type ChangeTransaction,
   type Claim,
+  type ClaimCreatedEvent,
+  type ClaimReleasedEvent,
+  type Handoff,
+  type RemoteClaim,
+  type RemoteTask,
   type Task,
+  type TaskCreatedEvent,
+  type TaskUpdatedEvent,
   type Validation
 } from "@crosscode/protocol";
 import type { CoordinationService } from "../../service/src/index.js";
 import { configuredExcludedPaths, matchesConfiguredExclusion, validationCommands } from "./config.js";
-import { DaemonStateStore, type CheckpointRecord, type GitState, type OutboundRecord } from "./state.js";
+import { DaemonStateStore, type CheckpointRecord, type ClaimOutboundRecord, type GitState, type OutboundRecord, type TaskOutboundRecord } from "./state.js";
 import type { StoredOperation } from "./types.js";
 
 const exec = promisify(execFile);
@@ -52,12 +64,19 @@ export type DaemonOptions = { workspaceId: string; replicaId: string; actorId: s
 export type RemoteSyncTransport = {
   upload(record: OutboundRecord): Promise<import("../../service/src/index.js").RemoteOperation>;
   list(after: number): Promise<{ operations: import("../../service/src/index.js").RemoteOperation[]; nextCursor: number }>;
+  uploadTask(record: TaskOutboundRecord): Promise<RemoteTask>;
+  listTasks(after: string): Promise<{ tasks: RemoteTask[]; nextCursor: string }>;
+  uploadClaim(record: ClaimOutboundRecord): Promise<RemoteClaim>;
+  listClaims(after: string): Promise<{ claims: RemoteClaim[]; nextCursor: string }>;
 };
 
 export class LocalDaemon {
-  readonly tasks = new Map<string, Task>(); readonly claims = new Map<string, Claim>(); readonly operations = new Map<string, StoredOperation>(); readonly validations: Validation[] = []; readonly checkpoints: CheckpointRecord[] = [];
+  readonly tasks = new Map<string, Task>(); readonly claims = new Map<string, Claim>(); readonly operations = new Map<string, StoredOperation>(); readonly validations: Validation[] = []; readonly checkpoints: CheckpointRecord[] = []; readonly handoffs = new Map<string, Handoff>();
   readonly outbound = new Map<string, OutboundRecord>();
+  readonly taskOutbound = new Map<string, TaskOutboundRecord>(); readonly claimOutbound = new Map<string, ClaimOutboundRecord>();
   private remoteCursor = 0;
+  private remoteTaskCursor = EPOCH_CURSOR;
+  private remoteClaimCursor = EPOCH_CURSOR;
   private eventSequence = 0;
   private readonly capturedHashes = new Map<string, string | null>();
   private gitState: GitState;
@@ -75,13 +94,51 @@ export class LocalDaemon {
       const risk = transactionRisk(transaction);
       daemon.operations.set(operation.id, { ...operation, transaction: { ...transaction, safety: { risk, requiresApproval: risk === "critical" } } });
     }
-    daemon.validations.push(...saved.validations); daemon.checkpoints.push(...saved.checkpoints); for (const record of saved.outbound) daemon.outbound.set(record.event.id, record); daemon.remoteCursor = saved.remoteCursor; daemon.eventSequence = saved.eventSequence; daemon.materializationPaused = saved.materializationPaused; for (const [path, hash] of Object.entries(saved.capturedHashes)) daemon.capturedHashes.set(path, hash); await daemon.reconcileInterruptedMaterializations(); return daemon;
+    daemon.validations.push(...saved.validations); daemon.checkpoints.push(...saved.checkpoints); for (const handoff of saved.handoffs) daemon.handoffs.set(handoff.id, handoff); for (const record of saved.outbound) daemon.outbound.set(record.event.id, record); for (const record of saved.taskOutbound) daemon.taskOutbound.set(record.event.id, record); for (const record of saved.claimOutbound) daemon.claimOutbound.set(record.event.id, record); daemon.remoteCursor = saved.remoteCursor; daemon.remoteTaskCursor = saved.remoteTaskCursor; daemon.remoteClaimCursor = saved.remoteClaimCursor; daemon.eventSequence = saved.eventSequence; daemon.materializationPaused = saved.materializationPaused; for (const [path, hash] of Object.entries(saved.capturedHashes)) daemon.capturedHashes.set(path, hash); await daemon.reconcileInterruptedMaterializations(); return daemon;
   }
   async status() { const repository = await discoverRepository(this.root); return { ...repository, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, tasks: this.tasks.size, claims: this.claims.size, proposals: [...this.operations.values()].filter((operation) => operation.status === "proposed").length, materializationPaused: this.materializationPaused, eventSequence: this.eventSequence, remoteCursor: this.remoteCursor, pendingOutbound: [...this.outbound.values()].filter((record) => record.acknowledgedServerSequence === undefined).length, service: { ...this.serviceStatus } }; }
   configureRemoteSync(): void { this.serviceStatus = { ...this.serviceStatus, configured: true }; }
   recordRemoteSyncFailure(): void { this.serviceStatus = { ...this.serviceStatus, configured: true, online: false, lastSyncError: "Coordination service is unavailable" }; }
-  async createTask(input: Pick<Task, "title"> & Partial<Pick<Task, "intent" | "paths" | "status">>): Promise<Task> { const task = taskSchema.parse({ id: randomUUID(), title: input.title, ownerId: this.options.actorId, status: input.status ?? "active", intent: input.intent, paths: input.paths ?? [], createdAt: now(), updatedAt: now() }); const previous = this.tasks.get(task.id); this.tasks.set(task.id, task); try { await this.persist("task.created", task); } catch (error) { if (previous) this.tasks.set(task.id, previous); else this.tasks.delete(task.id); throw error; } return task; }
-  async createClaim(input: Omit<Claim, "id" | "ownerId" | "createdAt">): Promise<Claim> { const claim = claimSchema.parse({ ...input, id: randomUUID(), ownerId: this.options.actorId, createdAt: now() }); this.claims.set(claim.id, claim); try { await this.persist("claim.created", claim); } catch (error) { this.claims.delete(claim.id); throw error; } return claim; }
+  async createTask(input: Pick<Task, "title"> & Partial<Pick<Task, "intent" | "paths" | "status">>): Promise<Task> {
+    const task = taskSchema.parse({ id: randomUUID(), title: input.title, ownerId: this.options.actorId, status: input.status ?? "active", intent: input.intent, paths: input.paths ?? [], createdAt: now(), updatedAt: now() });
+    const event: TaskCreatedEvent = { id: task.id, schemaVersion: 1, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "task.created", clientSequence: this.eventSequence + 1, createdAt: now(), payload: task };
+    const previous = this.tasks.get(task.id);
+    this.tasks.set(task.id, task);
+    this.taskOutbound.set(event.id, { event });
+    try { await this.persist("task.created", task); }
+    catch (error) { if (previous) this.tasks.set(task.id, previous); else this.tasks.delete(task.id); this.taskOutbound.delete(event.id); throw error; }
+    return task;
+  }
+  async updateTask(id: string, input: Pick<Task, "title"> & Partial<Pick<Task, "intent" | "paths" | "status">>): Promise<Task> {
+    const previous = this.tasks.get(id);
+    if (!previous) throw new Error("Task was not found");
+    const task = taskSchema.parse({ ...previous, title: input.title, status: input.status ?? previous.status, intent: input.intent, paths: input.paths ?? previous.paths, updatedAt: now() });
+    const event: TaskUpdatedEvent = { id: task.id, schemaVersion: 1, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "task.updated", clientSequence: this.eventSequence + 1, createdAt: now(), payload: task };
+    this.tasks.set(task.id, task);
+    this.taskOutbound.set(event.id, { event });
+    try { await this.persist("task.updated", task); }
+    catch (error) { this.tasks.set(id, previous); this.taskOutbound.delete(event.id); throw error; }
+    return task;
+  }
+  async createClaim(input: Omit<Claim, "id" | "ownerId" | "createdAt">): Promise<Claim> {
+    const claim = claimSchema.parse({ ...input, id: randomUUID(), ownerId: this.options.actorId, createdAt: now() });
+    const event: ClaimCreatedEvent = { id: claim.id, schemaVersion: 1, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "claim.created", clientSequence: this.eventSequence + 1, createdAt: now(), payload: claim };
+    this.claims.set(claim.id, claim);
+    this.claimOutbound.set(event.id, { event });
+    try { await this.persist("claim.created", claim); }
+    catch (error) { this.claims.delete(claim.id); this.claimOutbound.delete(event.id); throw error; }
+    return claim;
+  }
+  async releaseClaim(id: string): Promise<Claim> {
+    const claim = this.claims.get(id);
+    if (!claim) throw new Error("Claim was not found");
+    const event: ClaimReleasedEvent = { id: claim.id, schemaVersion: 1, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "claim.released", clientSequence: this.eventSequence + 1, createdAt: now(), payload: claim };
+    this.claims.delete(id);
+    this.claimOutbound.set(event.id, { event });
+    try { await this.persist("claim.released", claim); }
+    catch (error) { this.claims.set(id, claim); this.claimOutbound.delete(event.id); throw error; }
+    return claim;
+  }
   async checkpoint(message = "Crosscode safety checkpoint") {
     const checkpoint = await createCheckpoint(this.root, this.options.replicaId, message);
     const record = { ...checkpoint, message, createdAt: now() };
@@ -90,6 +147,19 @@ export class LocalDaemon {
     return checkpoint;
   }
   async inspectCheckpoint(ref: string) { return inspectCheckpoint(this.root, ref); }
+  async requestHandoff(input: { operationId: string; note?: string }): Promise<Handoff> {
+    const handoff = handoffSchema.parse({ id: randomUUID(), operationId: input.operationId, requestedBy: this.options.actorId, note: input.note, status: "pending", createdAt: now() });
+    this.handoffs.set(handoff.id, handoff);
+    try { await this.persist("handoff.requested", handoff); } catch (error) { this.handoffs.delete(handoff.id); throw error; }
+    return handoff;
+  }
+  async respondHandoff(id: string, decision: "accepted" | "declined"): Promise<Handoff> {
+    const handoff = this.handoffs.get(id); if (!handoff || handoff.status !== "pending") throw new Error("Handoff was not found");
+    const responded = { ...handoff, status: decision, respondedAt: now() };
+    this.handoffs.set(id, responded);
+    try { await this.persist("handoff.responded", responded); } catch (error) { this.handoffs.set(id, handoff); throw error; }
+    return responded;
+  }
   async restoreCheckpointFile(ref: string, path: string): Promise<void> {
     await this.eligiblePath(path);
     await this.checkpoint(`Before restoring ${path}`); await this.restoreEligibleCheckpointFile(ref, path);
@@ -169,7 +239,7 @@ export class LocalDaemon {
     return watcher;
   }
 
-  async capture(intent: string, service?: CoordinationService): Promise<StoredOperation> {
+  async capture(intent: string, service?: CoordinationService, kind: CaptureKind = "intent"): Promise<StoredOperation> {
     let snapshot: { repository: Awaited<ReturnType<typeof discoverRepository>>; checkpoint: Awaited<ReturnType<LocalDaemon["checkpoint"]>>; changes: Array<{ path: string; kind: "add" | "modify" | "delete"; beforeHash?: string; afterHash?: string; afterContent?: string }> } | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const repository = await discoverRepository(this.root); const names = await this.changedPaths();
@@ -187,7 +257,7 @@ export class LocalDaemon {
     }
     if (!snapshot) throw new Error("Working tree changed while assembling a transaction; retry the capture");
     const { repository, changes } = snapshot;
-    const transaction = changeTransactionSchema.parse({ id: randomUUID(), intent, base: { headCommit: repository.head, files: changes.filter((change) => change.beforeHash).map((change) => ({ path: change.path, contentHash: change.beforeHash! })) }, changes, provenance: { source: "filesystem", confidence: "known" }, safety: { risk: transactionRisk({ changes }), requiresApproval: transactionRisk({ changes }) === "critical" } });
+    const transaction = changeTransactionSchema.parse({ id: randomUUID(), intent, kind, base: { headCommit: repository.head, files: changes.filter((change) => change.beforeHash).map((change) => ({ path: change.path, contentHash: change.beforeHash! })) }, changes, provenance: { source: "filesystem", confidence: "known" }, safety: { risk: transactionRisk({ changes }), requiresApproval: transactionRisk({ changes }) === "critical" } });
     const local = { id: transaction.id, workspaceId: this.options.workspaceId, senderReplicaId: this.options.replicaId, transaction, sequence: 0, createdAt: now(), status: "local" as const };
     const event = { id: transaction.id, schemaVersion: 1 as const, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "transaction.created", clientSequence: this.eventSequence + 1, createdAt: now(), payload: transaction };
     const outbound = { event, transaction };
@@ -213,6 +283,8 @@ export class LocalDaemon {
   }
 
   async syncRemote(transport: RemoteSyncTransport): Promise<{ uploaded: number; downloaded: number; cursor: number }> {
+    await this.syncTasks(transport);
+    await this.syncClaims(transport);
     let uploaded = 0;
     for (const record of [...this.outbound.values()].filter((item) => item.acknowledgedServerSequence === undefined).sort((left, right) => left.event.clientSequence - right.event.clientSequence)) {
       const remote = await transport.upload(record);
@@ -255,6 +327,51 @@ export class LocalDaemon {
     }
     this.serviceStatus = { configured: true, online: true, lastSyncAt: now() };
     return { uploaded, downloaded, cursor: this.remoteCursor };
+  }
+
+  private async syncTasks(transport: RemoteSyncTransport): Promise<void> {
+    for (const record of [...this.taskOutbound.values()].filter((item) => item.acknowledgedAt === undefined).sort((left, right) => left.event.clientSequence - right.event.clientSequence)) {
+      const remote = await transport.uploadTask(record);
+      if (remote.task.id !== record.event.payload.id || remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId !== this.options.replicaId) throw new Error("Service acknowledgement did not match the outbound task");
+      this.taskOutbound.set(record.event.id, { ...record, acknowledgedAt: remote.updatedAt });
+      try { await this.persist("task.published", { eventId: record.event.id, taskId: remote.task.id, updatedAt: remote.updatedAt }); }
+      catch (error) { this.taskOutbound.set(record.event.id, record); throw error; }
+    }
+    const page = await transport.listTasks(this.remoteTaskCursor);
+    const previousCursor = this.remoteTaskCursor;
+    const previousTasks = new Map(this.tasks);
+    for (const remote of page.tasks) {
+      if (remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId === this.options.replicaId) continue;
+      this.tasks.set(remote.task.id, remote.task);
+    }
+    if (page.nextCursor !== this.remoteTaskCursor) {
+      this.remoteTaskCursor = page.nextCursor;
+      try { await this.persist("task.synchronized", { cursor: this.remoteTaskCursor, downloaded: page.tasks.length }); }
+      catch (error) { this.remoteTaskCursor = previousCursor; previousTasks.forEach((task, id) => this.tasks.set(id, task)); throw error; }
+    }
+  }
+
+  private async syncClaims(transport: RemoteSyncTransport): Promise<void> {
+    for (const record of [...this.claimOutbound.values()].filter((item) => item.acknowledgedAt === undefined).sort((left, right) => left.event.clientSequence - right.event.clientSequence)) {
+      const remote = await transport.uploadClaim(record);
+      if (remote.claim.id !== record.event.payload.id || remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId !== this.options.replicaId) throw new Error("Service acknowledgement did not match the outbound claim");
+      this.claimOutbound.set(record.event.id, { ...record, acknowledgedAt: remote.updatedAt });
+      try { await this.persist("claim.published", { eventId: record.event.id, claimId: remote.claim.id, updatedAt: remote.updatedAt }); }
+      catch (error) { this.claimOutbound.set(record.event.id, record); throw error; }
+    }
+    const page = await transport.listClaims(this.remoteClaimCursor);
+    const previousCursor = this.remoteClaimCursor;
+    const previousClaims = new Map(this.claims);
+    for (const remote of page.claims) {
+      if (remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId === this.options.replicaId) continue;
+      if (remote.released) this.claims.delete(remote.claim.id);
+      else this.claims.set(remote.claim.id, remote.claim);
+    }
+    if (page.nextCursor !== this.remoteClaimCursor) {
+      this.remoteClaimCursor = page.nextCursor;
+      try { await this.persist("claim.synchronized", { cursor: this.remoteClaimCursor, downloaded: page.claims.length }); }
+      catch (error) { this.remoteClaimCursor = previousCursor; previousClaims.forEach((claim, id) => this.claims.set(id, claim)); throw error; }
+    }
   }
 
   async sync(service: CoordinationService): Promise<StoredOperation[]> {
@@ -479,7 +596,7 @@ export class LocalDaemon {
   }
   private ignoredPath(path: string): boolean { const relative = path.startsWith(this.root) ? path.slice(this.root.length + 1) : path; return /(^|\/)(\.git|node_modules|dist|build|coverage)(\/|$)/.test(relative) || /(^|\/)\.[^/]+\.[0-9a-f-]+\.crosscode$/.test(relative) || redactPath(relative); }
   private redactValidationOutput(output: string): string { return output.slice(0, 64 * 1024).replace(/((?:api[_-]?key|token|password|secret|authorization)\s*[:=]\s*)([^\s]+)/gi, "$1[REDACTED]"); }
-  private async persist(type: string, payload: unknown): Promise<void> { this.eventSequence = this.state.record({ tasks: [...this.tasks.values()], claims: [...this.claims.values()], operations: [...this.operations.values()], validations: [...this.validations], checkpoints: [...this.checkpoints], outbound: [...this.outbound.values()], remoteCursor: this.remoteCursor, capturedHashes: Object.fromEntries(this.capturedHashes), gitState: this.gitState, materializationPaused: this.materializationPaused }, { type, payload }); }
+  private async persist(type: string, payload: unknown): Promise<void> { this.eventSequence = this.state.record({ tasks: [...this.tasks.values()], claims: [...this.claims.values()], operations: [...this.operations.values()], validations: [...this.validations], checkpoints: [...this.checkpoints], handoffs: [...this.handoffs.values()], outbound: [...this.outbound.values()], taskOutbound: [...this.taskOutbound.values()], claimOutbound: [...this.claimOutbound.values()], remoteCursor: this.remoteCursor, remoteTaskCursor: this.remoteTaskCursor, remoteClaimCursor: this.remoteClaimCursor, capturedHashes: Object.fromEntries(this.capturedHashes), gitState: this.gitState, materializationPaused: this.materializationPaused }, { type, payload }); }
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -521,6 +638,24 @@ function operationId(pathname: string, action: "accept" | "reject" | "analysis" 
   try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid operation ID"); }
 }
 
+function handoffRespondId(pathname: string): string | undefined {
+  const match = pathname.match(/^\/v1\/handoffs\/([^/]+)\/respond$/);
+  if (!match) return undefined;
+  try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid handoff ID"); }
+}
+
+function taskId(pathname: string): string | undefined {
+  const match = pathname.match(/^\/v1\/tasks\/([^/]+)$/);
+  if (!match) return undefined;
+  try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid task ID"); }
+}
+
+function claimReleaseId(pathname: string): string | undefined {
+  const match = pathname.match(/^\/v1\/claims\/([^/]+)\/release$/);
+  if (!match) return undefined;
+  try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid claim ID"); }
+}
+
 export type RunningDaemon = { daemon: LocalDaemon; server: Server; port: number; secret: string; close: () => Promise<void> };
 
 export async function startDaemon(directory: string, options: DaemonOptions, port = 0): Promise<RunningDaemon> {
@@ -536,6 +671,9 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
       const rejectId = operationId(pathname, "reject");
       const analysisId = operationId(pathname, "analysis");
       const diffId = operationId(pathname, "diff");
+      const respondHandoffId = handoffRespondId(pathname);
+      const updateTaskId = taskId(pathname);
+      const releaseClaimId = claimReleaseId(pathname);
       const result = await daemon.runExclusive(async () => {
         let status = 200;
         let data: unknown;
@@ -543,9 +681,13 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
         else if (method === "GET" && pathname === "/v1/workspace") data = { root: daemon.root, ...daemon.options };
         else if (method === "GET" && pathname === "/v1/tasks") data = [...daemon.tasks.values()];
         else if (method === "POST" && pathname === "/v1/tasks") { data = await daemon.createTask(taskRequestSchema.parse(payload)); status = 201; }
+        else if (method === "POST" && updateTaskId) data = await daemon.updateTask(updateTaskId, taskRequestSchema.parse(payload));
+        else if (method === "GET" && pathname === "/v1/claims") data = [...daemon.claims.values()];
         else if (method === "POST" && pathname === "/v1/claims") { data = await daemon.createClaim(claimRequestSchema.parse(payload)); status = 201; }
+        else if (method === "POST" && releaseClaimId) data = await daemon.releaseClaim(releaseClaimId);
         else if (method === "GET" && pathname === "/v1/operations") data = [...daemon.operations.values()];
         else if (method === "GET" && pathname === "/v1/checkpoints") data = [...daemon.checkpoints];
+        else if (method === "GET" && pathname === "/v1/claims") data = [...daemon.claims.values()];
         else if (method === "GET" && analysisId) data = { operation: daemon.operations.get(analysisId), analysis: await daemon.analyzeProposal(analysisId) };
         else if (method === "GET" && diffId) data = await daemon.diffProposal(diffId);
         else if (method === "POST" && acceptId) data = await daemon.accept(acceptId);
@@ -553,8 +695,10 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
         else if (method === "POST" && pathname === "/v1/checkpoints") { data = await daemon.checkpoint(checkpointRequestSchema.parse(payload).message); status = 201; }
         else if (method === "POST" && pathname === "/v1/checkpoints/inspect") { const { ref } = checkpointInspectRequestSchema.parse(payload); data = await daemon.inspectCheckpoint(ref); }
         else if (method === "POST" && pathname === "/v1/checkpoints/restore") { const input = checkpointRestoreRequestSchema.parse(payload); await daemon.restoreCheckpointFile(input.ref, input.path); data = { restored: input.path }; }
-        else if (method === "POST" && pathname === "/v1/transactions") { data = await daemon.capture(captureRequestSchema.parse(payload).intent); status = 201; }
+        else if (method === "POST" && pathname === "/v1/transactions") { const parsed = captureRequestSchema.parse(payload); data = await daemon.capture(parsed.intent, undefined, parsed.kind ?? "intent"); status = 201; }
         else if (method === "POST" && pathname === "/v1/validate") { const { profile } = validationRequestSchema.parse(payload); data = await daemon.validateProfile(profile); }
+        else if (method === "POST" && pathname === "/v1/handoffs") { data = await daemon.requestHandoff(handoffRequestSchema.parse(payload)); status = 201; }
+        else if (method === "POST" && respondHandoffId) { data = await daemon.respondHandoff(respondHandoffId, handoffRespondRequestSchema.parse(payload).decision); }
         else throw new HttpError(404, "Not found");
         return { status, data };
       });

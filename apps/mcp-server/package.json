@@ -3,5 +3,12 @@
   "private": true,
   "type": "module",
   "bin": { "crosscode-mcp": "./src/main.ts" },
-  "dependencies": { "@crosscode/daemon": "workspace:*" }
+  "dependencies": {
+    "@crosscode/core": "workspace:*",
+    "@crosscode/daemon": "workspace:*",
+    "@crosscode/protocol": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.25.76",
+    "zod-to-json-schema": "^3.25.2"
+  }
 }

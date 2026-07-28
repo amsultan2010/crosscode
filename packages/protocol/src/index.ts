@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 export const riskSchema = z.enum(["low", "medium", "high", "critical"]);
+export const captureKindSchema = z.enum(["intent", "summary", "interface-change"]);
+export type CaptureKind = z.infer<typeof captureKindSchema>;
 export const taskStatusSchema = z.enum(["planned", "active", "blocked", "review", "complete", "cancelled"]);
 export const taskSchema = z.object({
   id: z.string().min(1), title: z.string().min(1), ownerId: z.string().min(1), status: taskStatusSchema,
@@ -20,7 +22,8 @@ export const changeTransactionSchema = z.object({
   base: z.object({ headCommit: z.string().optional(), files: z.array(z.object({ path: z.string(), blobHash: z.string().optional(), contentHash: z.string() })) }),
   changes: z.array(z.object({ path: z.string().min(1), kind: z.enum(["add", "modify", "delete", "rename"]), beforeHash: z.string().optional(), afterHash: z.string().optional(), unifiedPatch: z.string().optional(), afterContent: z.string().optional() })).min(1),
   provenance: z.object({ source: z.enum(["filesystem", "cli-wrapper", "mcp", "hook", "extension"]), confidence: z.enum(["known", "inferred", "unknown"]) }),
-  safety: z.object({ risk: riskSchema, requiresApproval: z.boolean() })
+  safety: z.object({ risk: riskSchema, requiresApproval: z.boolean() }),
+  kind: captureKindSchema.optional()
 }).strict().superRefine((transaction, context) => {
   transaction.changes.forEach((change, index) => {
     if (change.kind === "rename") {
@@ -53,6 +56,91 @@ export const transactionCreatedEventSchema = eventEnvelopeSchema.extend({
   }
 });
 export type TransactionCreatedEvent = z.infer<typeof transactionCreatedEventSchema>;
+
+function assertPayloadIdMatches<T extends { id: string; payload: { id: string } }>(event: T, context: z.RefinementCtx): void {
+  if (event.id !== event.payload.id) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["payload", "id"], message: "Payload ID must match the event ID" });
+  }
+}
+
+export const taskCreatedEventSchema = eventEnvelopeSchema.extend({
+  type: z.literal("task.created"),
+  payload: taskSchema
+}).strict();
+export type TaskCreatedEvent = z.infer<typeof taskCreatedEventSchema>;
+
+export const taskUpdatedEventSchema = eventEnvelopeSchema.extend({
+  type: z.literal("task.updated"),
+  payload: taskSchema
+}).strict();
+export type TaskUpdatedEvent = z.infer<typeof taskUpdatedEventSchema>;
+
+export const claimCreatedEventSchema = eventEnvelopeSchema.extend({
+  type: z.literal("claim.created"),
+  payload: claimSchema
+}).strict();
+export type ClaimCreatedEvent = z.infer<typeof claimCreatedEventSchema>;
+
+export const claimReleasedEventSchema = eventEnvelopeSchema.extend({
+  type: z.literal("claim.released"),
+  payload: claimSchema
+}).strict();
+export type ClaimReleasedEvent = z.infer<typeof claimReleasedEventSchema>;
+
+export const remoteTaskSchema = z.object({
+  eventId: z.string().min(1),
+  workspaceId: z.string().min(1),
+  senderReplicaId: z.string().min(1),
+  task: taskSchema,
+  updatedAt: z.string().datetime()
+}).strict();
+export type RemoteTask = z.infer<typeof remoteTaskSchema>;
+
+export const remoteClaimSchema = z.object({
+  eventId: z.string().min(1),
+  workspaceId: z.string().min(1),
+  senderReplicaId: z.string().min(1),
+  claim: claimSchema,
+  released: z.boolean(),
+  updatedAt: z.string().datetime()
+}).strict();
+export type RemoteClaim = z.infer<typeof remoteClaimSchema>;
+
+export const taskCursorResponseSchema = z.object({
+  tasks: z.array(remoteTaskSchema),
+  nextCursor: z.string().datetime()
+}).strict();
+export type TaskCursorResponse = z.infer<typeof taskCursorResponseSchema>;
+
+export const claimCursorResponseSchema = z.object({
+  claims: z.array(remoteClaimSchema),
+  nextCursor: z.string().datetime()
+}).strict();
+export type ClaimCursorResponse = z.infer<typeof claimCursorResponseSchema>;
+
+export const taskIngestRequestSchema = z.object({
+  event: z.discriminatedUnion("type", [taskCreatedEventSchema, taskUpdatedEventSchema])
+}).strict().superRefine((request, context) => assertPayloadIdMatches(request.event, context));
+export type TaskIngestRequest = z.infer<typeof taskIngestRequestSchema>;
+
+export const claimIngestRequestSchema = z.object({
+  event: z.discriminatedUnion("type", [claimCreatedEventSchema, claimReleasedEventSchema])
+}).strict().superRefine((request, context) => assertPayloadIdMatches(request.event, context));
+export type ClaimIngestRequest = z.infer<typeof claimIngestRequestSchema>;
+
+export const taskIngestReceiptSchema = z.object({
+  eventId: z.string().min(1),
+  taskId: z.string().min(1),
+  updatedAt: z.string().datetime()
+}).strict();
+export type TaskIngestReceipt = z.infer<typeof taskIngestReceiptSchema>;
+
+export const claimIngestReceiptSchema = z.object({
+  eventId: z.string().min(1),
+  claimId: z.string().min(1),
+  updatedAt: z.string().datetime()
+}).strict();
+export type ClaimIngestReceipt = z.infer<typeof claimIngestReceiptSchema>;
 
 export const workspaceRoleSchema = z.enum(["owner", "member", "viewer"]);
 export type WorkspaceRole = z.infer<typeof workspaceRoleSchema>;
@@ -119,6 +207,13 @@ export const cursorQuerySchema = z.object({
 }).strict();
 export type CursorQuery = z.infer<typeof cursorQuerySchema>;
 
+export const timeCursorQuerySchema = z.object({
+  after: z.string().datetime()
+}).strict();
+export type TimeCursorQuery = z.infer<typeof timeCursorQuerySchema>;
+
+export const EPOCH_CURSOR = "1970-01-01T00:00:00.000Z";
+
 export const cursorResponseSchema = z.object({
   operations: z.array(remoteOperationSchema),
   nextCursor: z.number().int().nonnegative()
@@ -161,7 +256,41 @@ export const validationRequestSchema = z.object({
 }).strict();
 
 export const captureRequestSchema = z.object({
-  intent: z.string().trim().min(1).max(5_000)
+  intent: z.string().trim().min(1).max(5_000),
+  kind: captureKindSchema.optional()
+}).strict();
+
+export const changeSummaryRequestSchema = z.object({
+  summary: z.string().trim().min(1).max(5_000)
+}).strict();
+
+export const changeScopeRequestSchema = z.object({
+  paths: z.array(z.string().min(1).max(1_024)).min(1).max(1_000)
+}).strict();
+
+export const handoffStatusSchema = z.enum(["pending", "accepted", "declined"]);
+export type HandoffStatus = z.infer<typeof handoffStatusSchema>;
+
+export const handoffSchema = z.object({
+  id: z.string().min(1),
+  operationId: z.string().min(1),
+  requestedBy: z.string().min(1),
+  note: z.string().optional(),
+  status: handoffStatusSchema,
+  createdAt: z.string().datetime(),
+  respondedAt: z.string().datetime().optional()
+}).strict();
+export type Handoff = z.infer<typeof handoffSchema>;
+
+export const handoffRequestSchema = z.object({
+  operationId: z.string().min(1).max(200),
+  note: z.string().trim().min(1).max(2_000).optional()
+}).strict();
+
+export const handoffDecisionSchema = z.enum(["accepted", "declined"]);
+
+export const handoffRespondRequestSchema = z.object({
+  decision: handoffDecisionSchema
 }).strict();
 
 export const daemonConnectionSchema = z.object({
@@ -213,7 +342,9 @@ export type PresenceUpdate = z.infer<typeof presenceUpdateSchema>;
 
 export const wsFanOutMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("operation"), operation: remoteOperationSchema }).strict(),
-  z.object({ type: z.literal("presence"), presence: presenceUpdateSchema }).strict()
+  z.object({ type: z.literal("presence"), presence: presenceUpdateSchema }).strict(),
+  z.object({ type: z.literal("task"), task: remoteTaskSchema }).strict(),
+  z.object({ type: z.literal("claim"), claim: remoteClaimSchema }).strict()
 ]);
 export type WsFanOutMessage = z.infer<typeof wsFanOutMessageSchema>;
 

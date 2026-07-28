@@ -113,12 +113,17 @@ export async function runDaemonProcess(
     if (config.service) {
       const serviceClient = new CoordinationServiceClient(config, config.service);
       running.daemon.configureRemoteSync();
+      let rerunRequested = false;
       const synchronize = async () => {
-        if (syncing || stopped) return;
+        if (stopped) return;
+        if (syncing) { rerunRequested = true; return; }
         syncing = true;
         try { await running.daemon.runExclusive(() => running.daemon.syncRemote(serviceClient)); }
         catch { running.daemon.recordRemoteSyncFailure(); }
-        finally { syncing = false; }
+        finally {
+          syncing = false;
+          if (rerunRequested && !stopped) { rerunRequested = false; void synchronize(); }
+        }
       };
       void synchronize();
       syncTimer = setInterval(synchronize, options.syncPollMs ?? 1_000);
@@ -131,6 +136,12 @@ export async function runDaemonProcess(
           onPresence: (presence) => {
             console.error(`Crosscode presence: ${presence.actorId} (${presence.replicaId}) is ${presence.status}`);
             options.onPresence?.(presence);
+          },
+          onTask: (task) => {
+            if (task.workspaceId === config.workspaceId) void synchronize();
+          },
+          onClaim: (claim) => {
+            if (claim.workspaceId === config.workspaceId) void synchronize();
           }
         });
         liveSync.start();
