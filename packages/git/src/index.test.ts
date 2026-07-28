@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { createCheckpoint, discoverRepository, inspectCheckpoint, restoreCheckpointFile, threeWayMerge } from "./index.js";
+import { createCheckpoint, discoverRepository, findSymbolReferences, inspectCheckpoint, restoreCheckpointFile, threeWayMerge } from "./index.js";
 
 const exec = promisify(execFile);
 const directories: string[] = [];
@@ -60,5 +60,17 @@ describe("git safety", () => {
 
   it("uses Git three-way merge analysis without writing files", async () => {
     await expect(threeWayMerge("one\ntwo\nthree\n", "one-local\ntwo\nthree\n", "one\ntwo\nthree-remote\n")).resolves.toMatchObject({ clean: true, content: "one-local\ntwo\nthree-remote\n" });
+  });
+
+  it("finds other tracked files that reference a changed exported symbol", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "crosscode-git-")); directories.push(directory);
+    await exec("git", ["init", "-q", directory]); await exec("git", ["-C", directory, "config", "user.email", "test@example.com"]); await exec("git", ["-C", directory, "config", "user.name", "Test"]);
+    await writeFile(join(directory, "lib.ts"), "export function greet(name: string): string { return name; }\n");
+    await writeFile(join(directory, "caller.ts"), "import { greet } from \"./lib\";\ngreet(\"world\");\n");
+    await writeFile(join(directory, "unrelated.ts"), "export const other = 1;\n");
+    await exec("git", ["-C", directory, "add", "."]); await exec("git", ["-C", directory, "commit", "-qm", "initial"]);
+
+    await expect(findSymbolReferences(directory, ["greet"], "lib.ts")).resolves.toEqual(["caller.ts"]);
+    await expect(findSymbolReferences(directory, ["nonexistentSymbol"], "lib.ts")).resolves.toEqual([]);
   });
 });

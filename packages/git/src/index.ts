@@ -105,6 +105,18 @@ export async function restoreCheckpointFile(root: string, ref: string, path: str
   await writeFile(temporary, content); await rename(temporary, destination);
 }
 
+export async function findSymbolReferences(root: string, symbols: string[], excludePath: string): Promise<string[]> {
+  const files = new Set<string>();
+  for (const symbol of symbols) {
+    if (!symbol) continue;
+    const output = await exec("git", ["-C", root, "grep", "-l", "-e", symbol, "--", `:!${excludePath}`])
+      .then(({ stdout }) => stdout)
+      .catch((error: { code?: number }) => { if (error.code === 1) return ""; throw error; });
+    for (const file of output.split("\n").filter(Boolean)) if (file !== excludePath) files.add(file);
+  }
+  return [...files].sort();
+}
+
 export async function threeWayMerge(base: string, current: string, proposed: string): Promise<{ clean: boolean; content: string }> {
   const directory = await mkdtemp(join(tmpdir(), "crosscode-merge-"));
   try {
