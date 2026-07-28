@@ -16,6 +16,7 @@ import {
   replicaTokenExchangeResponseSchema,
   serviceIngestReceiptSchema,
   serviceIngestRequestSchema,
+  publishRequestSchema,
   taskRequestSchema,
   taskSchema,
   transactionCreatedEventSchema,
@@ -65,6 +66,10 @@ describe("protocol schemas", () => {
     expect(checkpointRequestSchema.parse({ message: "before change" }).message).toBe("before change");
     expect(validationRequestSchema.parse({ profile: "fast" })).toEqual({ profile: "fast" });
     expect(() => validationRequestSchema.parse({ profile: "fast", commands: ["rm -rf somewhere"] })).toThrow();
+    expect(publishRequestSchema.parse({ branch: "main", profile: "fast" })).toEqual({ branch: "main", profile: "fast" });
+    expect(publishRequestSchema.parse({ branch: "main", profile: "fast", message: "release", dryRun: true })).toEqual({ branch: "main", profile: "fast", message: "release", dryRun: true });
+    expect(() => publishRequestSchema.parse({ branch: "main", profile: "fast", extra: true })).toThrow();
+    expect(() => publishRequestSchema.parse({ branch: "", profile: "fast" })).toThrow();
     expect(daemonConnectionSchema.parse({ pid: 123, port: 4567, secret: "secret", startedAt: "2026-01-01T00:00:00.000Z" }).port).toBe(4567);
   });
 

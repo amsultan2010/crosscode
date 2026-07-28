@@ -6,7 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import chokidar, { type FSWatcher } from "chokidar";
 import { analyzeOperation, changedExportedSymbols, contentHash, hunksOverlap, looksLikeInterfaceChange, pathOverlaps, redactPath, transactionRisk, type OperationAnalysis } from "@crosscode/core";
-import { createCheckpoint, discoverRepository, findSymbolReferences, inspectCheckpoint, readRevisionFile, restoreCheckpointFile, safeRepositoryPath, snapshotWorktreeTree, threeWayMerge } from "@crosscode/git";
+import { createCheckpoint, discoverRepository, findSymbolReferences, inspectCheckpoint, publishCommit, readRevisionFile, restoreCheckpointFile, safeRepositoryPath, snapshotWorktreeTree, threeWayMerge } from "@crosscode/git";
 import {
   captureRequestSchema,
   changeTransactionSchema,
@@ -20,6 +20,7 @@ import {
   handoffSchema,
   intentRequestSchema,
   intentSchema,
+  publishRequestSchema,
   taskRequestSchema,
   taskSchema,
   validationRequestSchema,
@@ -526,6 +527,29 @@ export class LocalDaemon {
     await this.persist("validation.completed", output);
     return output;
   }
+  async publish(input: { branch: string; profile: string; message?: string; dryRun?: boolean }): Promise<{ branch: string; tree: string; changedPaths: Array<{ path: string; kind: "add" | "modify" | "delete" }> } | { branch: string; commit: string; tree: string; previous?: string }> {
+    if (this.materializationPaused) throw new Error("Proposal application is paused while Git state is being re-analyzed");
+    await this.refuseChangedGitState();
+    const validation = [...this.validations].reverse().find((entry) => entry.profile === input.profile);
+    if (!validation || validation.exitCode !== 0) throw new Error(`No passing validation found for profile ${input.profile}`);
+    const tree = await snapshotWorktreeTree(this.root);
+    if (tree !== validation.tree) throw new Error("Working tree changed since the last validation; re-run validate before publishing");
+    if (input.dryRun) {
+      const tip = await git(this.root, ["rev-parse", "-q", "--verify", `refs/heads/${input.branch}`]).catch(() => undefined);
+      if (!tip) throw new Error(`Branch does not exist: ${input.branch}`);
+      const diff = await git(this.root, ["diff", tip, tree, "--name-status", "-z"]);
+      const parts = diff.split("\0").filter(Boolean);
+      const changedPaths = Array.from({ length: Math.floor(parts.length / 2) }, (_, index) => {
+        const status = parts[index * 2]!;
+        const path = parts[index * 2 + 1]!;
+        return { path, kind: status === "D" ? "delete" as const : status === "A" ? "add" as const : "modify" as const };
+      });
+      return { branch: input.branch, tree, changedPaths };
+    }
+    const result = await publishCommit(this.root, input.branch, input.message ?? "Crosscode publish");
+    await this.persist("publish.completed", { branch: result.branch, commit: result.commit, tree: result.tree });
+    return result;
+  }
   private async changedPaths(): Promise<Array<{ path: string; kind: "add" | "modify" | "delete" }>> {
     const [tracked, untracked, exclusions] = await Promise.all([git(this.root, ["diff", "--name-status", "-z", "--no-renames", "HEAD"]), git(this.root, ["ls-files", "-z", "--others", "--exclude-standard"]), configuredExcludedPaths(this.root)]);
     const trackedParts = tracked.split("\0").filter(Boolean);
@@ -792,6 +816,7 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
         else if (method === "POST" && pathname === "/v1/transactions") { const parsed = captureRequestSchema.parse(payload); data = await daemon.capture(parsed.intent, undefined, parsed.kind ?? "intent"); status = 201; }
         else if (method === "POST" && pathname === "/v1/intents") { data = await daemon.publishIntent(intentRequestSchema.parse(payload)); status = 201; }
         else if (method === "POST" && pathname === "/v1/validate") { const { profile } = validationRequestSchema.parse(payload); data = await daemon.validateProfile(profile); }
+        else if (method === "POST" && pathname === "/v1/publish") { data = await daemon.publish(publishRequestSchema.parse(payload)); }
         else if (method === "POST" && pathname === "/v1/handoffs") { data = await daemon.requestHandoff(handoffRequestSchema.parse(payload)); status = 201; }
         else if (method === "POST" && respondHandoffId) { data = await daemon.respondHandoff(respondHandoffId, handoffRespondRequestSchema.parse(payload).decision); }
         else throw new HttpError(404, "Not found");

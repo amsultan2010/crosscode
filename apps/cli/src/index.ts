@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { DaemonClient } from "../../daemon/src/client.js";
 import { readDaemonConfig, writeDaemonConfig } from "../../daemon/src/runtime.js";
@@ -64,6 +65,20 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
   if (command === "validate") {
     if (args.includes("--")) throw new Error("Validation commands must come from trusted .crosscode/config.yaml profiles");
     return { value: await client.validate(valueAfter(args, "--profile") ?? "fast") };
+  }
+  if (command === "publish") {
+    const branch = valueAfter(args, "--branch");
+    const profile = valueAfter(args, "--profile");
+    if (!branch || !profile) throw new Error("Usage: crosscode publish --branch <branch> --profile <name> [--message \"...\"] [--dry-run] [--yes]");
+    const input = { branch, profile, message: valueAfter(args, "--message"), dryRun: args.includes("--dry-run") };
+    if (!args.includes("--yes")) {
+      if (!process.stdout.isTTY) throw new Error("Publishing requires confirmation; pass --yes in noninteractive environments");
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await rl.question(`Publish to branch "${branch}"? [y/N] `);
+      rl.close();
+      if (!/^y(es)?$/i.test(answer.trim())) throw new Error("Publish cancelled");
+    }
+    return { value: await client.publish(input) };
   }
   throw new Error("Unknown command");
 }

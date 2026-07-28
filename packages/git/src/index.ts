@@ -57,6 +57,15 @@ export async function createCheckpoint(root: string, replicaId: string, message:
   await git(root, ["update-ref", ref, commit]);
   return { ref, commit, tree };
 }
+export async function publishCommit(root: string, branch: string, message: string): Promise<{ branch: string; commit: string; tree: string; previous?: string }> {
+  const ref = `refs/heads/${branch}`;
+  const tip = await git(root, ["rev-parse", "-q", "--verify", ref]).catch(() => undefined);
+  if (!tip) throw new Error(`Branch does not exist: ${branch}`);
+  const tree = await snapshotWorktreeTree(root);
+  const commit = await git(root, ["commit-tree", tree, "-p", tip, "-m", message]);
+  await git(root, ["update-ref", ref, commit, tip]);
+  return { branch, commit, tree, previous: tip };
+}
 
 function safeRelativePath(path: string): string {
   if (!path || path.includes("\0") || path.startsWith("/") || path.split("/").some((part) => part === ".." || part.toLowerCase() === ".git")) throw new Error("Checkpoint path must be a safe repository-relative path");

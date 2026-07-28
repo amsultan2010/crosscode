@@ -255,6 +255,13 @@ export const validationRequestSchema = z.object({
   profile: z.string().trim().min(1).max(100)
 }).strict();
 
+export const publishRequestSchema = z.object({
+  branch: z.string().min(1),
+  profile: z.string().min(1),
+  message: z.string().trim().min(1).max(1_000).optional(),
+  dryRun: z.boolean().optional()
+}).strict();
+
 export const captureRequestSchema = z.object({
   intent: z.string().trim().min(1).max(5_000),
   kind: captureKindSchema.optional()
