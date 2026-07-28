@@ -6,6 +6,10 @@ import {
   cursorQuerySchema,
   enrollmentRequestSchema,
   enrollmentResponseSchema,
+  handoffIngestRequestSchema,
+  handoffIngestReceiptSchema,
+  intentIngestRequestSchema,
+  intentIngestReceiptSchema,
   replicaTokenExchangeRequestSchema,
   replicaTokenExchangeResponseSchema,
   serviceIngestReceiptSchema,
@@ -185,6 +189,62 @@ async function handleRequest(
     return;
   }
 
+  if (method === "POST" && url.pathname === "/v1/handoffs") {
+    if (identity.role === "viewer") throw new HttpError(403, "Viewer membership is read-only");
+    const body = handoffIngestRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
+    if (
+      body.event.workspaceId !== identity.workspaceId ||
+      body.event.replicaId !== identity.replicaId ||
+      body.event.actorId !== identity.actorId
+    ) throw new HttpError(403, "Event principal does not match authenticated membership");
+    const handoff = await options.store.upsertHandoff(identity, body.event);
+    gateway.broadcastHandoff(identity.workspaceId, handoff, identity.replicaId);
+    send(response, 200, handoffIngestReceiptSchema.parse({
+      eventId: handoff.eventId,
+      handoffId: handoff.handoff.id,
+      updatedAt: handoff.updatedAt
+    }));
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v1/handoffs") {
+    const query = timeCursorQuerySchema.parse({ after: url.searchParams.get("after") ?? EPOCH_CURSOR });
+    const page = await options.store.listHandoffs(identity.workspaceId, query.after, 200);
+    send(response, 200, { handoffs: page.items, nextCursor: page.nextCursor });
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/v1/intents") {
+    if (identity.role === "viewer") throw new HttpError(403, "Viewer membership is read-only");
+    const body = intentIngestRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
+    if (
+      body.event.workspaceId !== identity.workspaceId ||
+      body.event.replicaId !== identity.replicaId ||
+      body.event.actorId !== identity.actorId
+    ) throw new HttpError(403, "Event principal does not match authenticated membership");
+    const intent = await options.store.upsertIntent(identity, body.event);
+    gateway.broadcastIntent(identity.workspaceId, intent, identity.replicaId);
+    send(response, 200, intentIngestReceiptSchema.parse({
+      eventId: intent.eventId,
+      intentId: intent.intent.id,
+      updatedAt: intent.updatedAt
+    }));
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v1/intents") {
+    const query = timeCursorQuerySchema.parse({ after: url.searchParams.get("after") ?? EPOCH_CURSOR });
+    const page = await options.store.listIntents(identity.workspaceId, query.after, 200);
+    send(response, 200, { intents: page.items, nextCursor: page.nextCursor });
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v1/presence") {
+    const sessions = await options.store.listActiveSessions(identity.workspaceId);
+    send(response, 200, { sessions });
+    return;
+  }
+
   throw new HttpError(404, "Route not found");
 }
 
@@ -306,7 +366,12 @@ function rateLimitRoute(method: string, pathname: string): string {
     "POST /v1/tasks",
     "GET /v1/tasks",
     "POST /v1/claims",
-    "GET /v1/claims"
+    "GET /v1/claims",
+    "POST /v1/handoffs",
+    "GET /v1/handoffs",
+    "POST /v1/intents",
+    "GET /v1/intents",
+    "GET /v1/presence"
   ]).has(route) ? route : "unknown";
 }
 

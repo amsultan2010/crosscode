@@ -53,6 +53,9 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
   if (command === "checkpoint") return { value: await client.checkpoint(valueAfter(args, "--message")) };
   if (command === "task" && args[1] === "create") return { value: await client.createTask({ title: args[2] ?? "", paths: valueAfter(args, "--path") ? [valueAfter(args, "--path")!] : [] }) };
   if (command === "claim" && args[1] === "path") return { value: await client.createClaim({ taskId: valueAfter(args, "--task") ?? "", kind: "path", target: args[2] ?? "", mode: "exclusive-preferred" }) };
+  if (command === "intent") return { value: await client.publishIntent({ text: args[1] ?? "", taskId: valueAfter(args, "--task") }) };
+  if (command === "handoff" && args[1] === "request") return { value: await client.requestHandoff({ operationId: args[2] ?? "", note: valueAfter(args, "--note") }) };
+  if (command === "handoff" && args[1] === "respond") return { value: await client.respondHandoff(args[2] ?? "", (valueAfter(args, "--decision") ?? "") as "accepted" | "declined") };
   if (command === "proposals" && args[1] === "list") return { value: (await client.operations()).filter((operation) => operation.status === "proposed") };
   if (command === "proposals" && args[1] === "inspect") return { value: await client.analyze(args[2] ?? "") };
   if (command === "proposals" && args[1] === "diff") return { value: await client.diff(args[2] ?? "") };
