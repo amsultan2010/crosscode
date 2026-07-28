@@ -3,7 +3,7 @@ import { chmod, lstat, mkdir, open, readFile, rename, rm, writeFile } from "node
 import { dirname, join } from "node:path";
 import type { FSWatcher } from "chokidar";
 import { discoverRepository, resolveGitPath } from "@crosscode/git";
-import { daemonConfigSchema, daemonConnectionSchema, type DaemonConfig, type DaemonConnection } from "@crosscode/protocol";
+import { daemonConfigSchema, daemonConnectionSchema, type DaemonConfig, type DaemonConnection, type PresenceUpdate } from "@crosscode/protocol";
 import { startDaemon, type RunningDaemon } from "./index.js";
 import { CoordinationServiceClient } from "./service-client.js";
 import { LiveSyncClient } from "./ws-client.js";
@@ -86,7 +86,10 @@ export type ManagedDaemon = {
   stop: () => Promise<void>;
 };
 
-export async function runDaemonProcess(directory: string, options: { gitPollMs?: number; syncPollMs?: number } = {}): Promise<ManagedDaemon> {
+export async function runDaemonProcess(
+  directory: string,
+  options: { gitPollMs?: number; syncPollMs?: number; liveSync?: boolean; onPresence?: (presence: PresenceUpdate) => void } = {}
+): Promise<ManagedDaemon> {
   const config = await readDaemonConfig(directory);
   const connectionPath = await daemonConnectionPath(directory);
   const lock = await acquireDaemonLock(connectionPath);
@@ -120,15 +123,18 @@ export async function runDaemonProcess(directory: string, options: { gitPollMs?:
       void synchronize();
       syncTimer = setInterval(synchronize, options.syncPollMs ?? 1_000);
       syncTimer.unref();
-      liveSync = new LiveSyncClient(config, config.service, {
-        onOperation: (operation) => {
-          if (operation.workspaceId === config.workspaceId) void synchronize();
-        },
-        onPresence: (presence) => {
-          console.error(`Crosscode presence: ${presence.actorId} (${presence.replicaId}) is ${presence.status}`);
-        }
-      });
-      liveSync.start();
+      if (options.liveSync ?? true) {
+        liveSync = new LiveSyncClient(config, config.service, {
+          onOperation: (operation) => {
+            if (operation.workspaceId === config.workspaceId) void synchronize();
+          },
+          onPresence: (presence) => {
+            console.error(`Crosscode presence: ${presence.actorId} (${presence.replicaId}) is ${presence.status}`);
+            options.onPresence?.(presence);
+          }
+        });
+        liveSync.start();
+      }
     }
     timer = setInterval(async () => {
       if (observing || stopped) return;

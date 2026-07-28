@@ -2,7 +2,7 @@
 
 ## 0. Current implementation status
 
-Last updated: 2026-07-26.
+Last updated: 2026-07-27.
 
 Crosscode currently has a tested local safety core, but it is not yet a deployable multi-machine collaboration product. The daemon is the sole local authority; the CLI and current MCP-shaped entry point communicate through its authenticated loopback API.
 
@@ -21,25 +21,26 @@ Crosscode currently has a tested local safety core, but it is not yet a deployab
 - An MCP-shaped stdio tool mapping backed by the daemon HTTP client.
 - A real child-process fixture covering daemon exclusivity, authenticated readiness, offline edits, pending proposals, branch transitions, `SIGKILL`, restart recovery, checkpoint persistence, and graceful shutdown.
 - Milestone B1: a standalone PostgreSQL service with one-time enrollment, short-lived authenticated replica access, current-membership authorization, idempotent ordered operation ingest, cursor reconnect, audit records, and daemon polling from a durable SQLite outbox.
+- Milestone B2: an authenticated WebSocket gateway (`/v1/stream`) that broadcasts presence on connect/disconnect and fans out accepted operations live to subscribed replicas, plus a daemon-side live sync client with reconnect backoff that falls back to the existing 1s poll whenever the socket is unavailable, covered by unit tests. A real three-daemon/PostgreSQL fixture (`apps/daemon/src/live-coordination.integration.test.ts`) is written to verify live presence visibility across replicas, live proposal fan-out well within one poll interval, and lossless recovery through the poll fallback after a WebSocket outage; see the B2 acceptance note under Milestone B for its actual run status.
 
 Current verification baseline:
 
 - TypeScript build passes.
-- 45 tests pass, including the real-PostgreSQL B1 reconnect fixture.
-- Statement coverage is 87.87%; function coverage is 86.88%.
+- 52 tests pass without a configured test database; 55 total once `CROSSCODE_TEST_DATABASE_URL` is set, adding the real-PostgreSQL B1 reconnect, service store, and B2 live-coordination fixtures.
+- Statement/function coverage were last measured with a real PostgreSQL database attached (87.87%/86.88%); this update was authored without one available and did not reverify those percentages.
 - Dependency audit reports no known vulnerabilities.
 - Final correctness, TypeScript, and security reviews found no remaining critical or high findings.
 
 ### Partially implemented
 
-- The network coordination service implements the B1 durable HTTP path. WebSocket fan-out, live presence, durable session summaries, and task/claim synchronization remain for B2.
+- The network coordination service implements the B1 durable HTTP path plus the B2 live WebSocket vertical: authenticated presence broadcast and live operation fan-out at `/v1/stream`, with graceful poll fallback. Durable session summaries for disconnected replicas and network synchronization of tasks/claims/handoffs remain outstanding.
 - Deterministic conflict analysis handles independent, stale-base, critical-path, and basic Git three-way analysis. Hunk overlap, delete-vs-modify records, interface impact, dependency graphs, and proposal diff artifacts are incomplete.
 - Validation runs committed profiles locally and binds results to an exact tree. Validation policy enforcement before publish and shared validation reporting are incomplete.
 - The MCP tool names exist, but the process is not yet a standards-compliant MCP server with initialization, tool discovery, JSON Schema declarations, and documented client configurations. Some coordination tools remain placeholders.
 
 ### Not implemented
 
-- WebSocket proposal fan-out, presence, and full three-daemon live coordination.
+- Durable session summaries for disconnected replicas, and network synchronization of tasks/claims/intent/handoffs over the live channel.
 - Publish planning and safe ordinary Git commit/push workflow.
 - VS Code/Cursor extension.
 - Provider-neutral AI semantic review.
@@ -53,7 +54,7 @@ Current verification baseline:
 
 ### Recommended next gate
 
-Implement Milestone B2 next: WebSocket proposal fan-out, presence, and the full three-daemon live acceptance fixture. B1's durable authenticated HTTP/reconnect vertical is complete.
+Implement Phase 3 next: network-synced tasks, claims, intents, and handoffs; complete deterministic conflict/risk classification (hunk overlap, delete-vs-modify, interface impact, dependency graphs); and shared validation status. B1's durable authenticated HTTP/reconnect vertical and B2's live WebSocket presence/fan-out vertical are both complete.
 
 ## 1. Product definition
 
@@ -804,7 +805,7 @@ Implement in order. Do not begin later phases until the preceding acceptance cri
 
 **Exit criteria:** ordinary edits create reproducible transactions and hidden checkpoint refs without modifying HEAD, index, staging, or visible branch history.
 
-### Phase 2 — service and basic sync — PARTIAL
+### Phase 2 — service and basic sync — COMPLETE
 
 - Implement authentication suitable for local development, workspace/member lifecycle, durable operation log, and WebSocket fan-out.
 - Implement daemon join/reconnect and remote transaction proposals.
@@ -904,21 +905,24 @@ Replace the temporary in-memory and JSON-backed daemon state with the specified 
 
 **Acceptance test: passed.** The real child-process fixture kills and restarts a daemon while a proposal is pending and the participant has offline work. The proposal, local transaction, event sequence, and checkpoints survive; no remote proposal is written automatically.
 
-### Milestone B — real shared coordination service and authenticated sync — PARTIAL (B1 COMPLETE)
+### Milestone B — real shared coordination service and authenticated sync — PARTIAL (B1, B2 COMPLETE)
 
 Turn the in-process service into a standalone HTTP/WebSocket service with PostgreSQL durable storage. Add authenticated workspace membership and per-workspace authorization before allowing operations to sync.
 
 - [x] Implement the tables named in section 7, beginning with workspaces, members, replicas, operations, and audit events.
 - [x] Authenticate users and replicas with one-time enrollment, short-lived credentials, and current PostgreSQL membership checks. OS-keychain storage remains a hardening task; the current headless fallback is mode `0600` under the Git directory.
 - [x] Assign idempotent server sequence numbers and expose cursor-based reconnect sync.
-- [ ] Fan out presence and proposals through WebSockets; retain durable summaries for disconnected replicas.
+- [x] Fan out presence and proposals through WebSockets.
+- [ ] Retain durable summaries for disconnected replicas (the `sessions` table exists but is not yet populated; presence is currently ephemeral, held in memory by the gateway).
 - [x] Validate every inbound payload with the protocol schemas and enforce owner/member/viewer permissions at the service boundary.
 - [x] Bind the local daemon to loopback only and require its generated local secret on every API request.
 - [x] Add a daemon-owned network sync client and durable outbound delivery state. The in-memory `CoordinationService` remains only as a compatibility test double.
 
 **Acceptance test:** run three daemons in separate worktrees against one service process. Restart the service and reconnect an offline daemon; each event appears once, in order, and no proposal is applied before explicit local acceptance.
 
-**B1 acceptance: passed.** Real PostgreSQL integration covers one-time enrollment, exact idempotent retry, conflicting client-sequence rejection, service restart, offline outbox recovery, ordered cursor download, duplicate-free proposals, and no automatic file write. The full three-daemon/WebSocket acceptance remains B2.
+**B1 acceptance: passed.** Real PostgreSQL integration covers one-time enrollment, exact idempotent retry, conflicting client-sequence rejection, service restart, offline outbox recovery, ordered cursor download, duplicate-free proposals, and no automatic file write.
+
+**B2 acceptance: written, not yet run against a live database.** A real three-daemon/PostgreSQL fixture (`apps/daemon/src/live-coordination.integration.test.ts`) is in place and asserts that connect/disconnect presence is visible live to the other replicas, that an accepted proposal from one daemon reaches the other two over `/v1/stream` well within a single poll interval (proving the live path, not just eventual poll consistency), and that a daemon with no live socket at all still catches up losslessly through the existing 1s poll fallback. It follows the same `describe.skipIf(!CROSSCODE_TEST_DATABASE_URL)` convention as the B1 fixture and compiles and skips cleanly without a database, but no environment with a reachable PostgreSQL instance was available while authoring it, so it has not yet actually been executed end-to-end; this remains to be confirmed against a real database before treating B2 as proven. Durable session summaries for disconnected replicas remain outstanding.
 
 ### Milestone C — safe multi-replica integration pipeline — PARTIAL
 
