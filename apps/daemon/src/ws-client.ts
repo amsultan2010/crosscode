@@ -5,13 +5,17 @@ import {
   wsSubscribeRequestSchema,
   type DaemonConfig,
   type PresenceUpdate,
-  type RemoteOperation
+  type RemoteClaim,
+  type RemoteOperation,
+  type RemoteTask
 } from "@crosscode/protocol";
 import { fetchAccessToken } from "./service-client.js";
 
 export type LiveSyncCallbacks = {
   onOperation: (operation: RemoteOperation) => void;
   onPresence?: (presence: PresenceUpdate) => void;
+  onTask?: (task: RemoteTask) => void;
+  onClaim?: (claim: RemoteClaim) => void;
 };
 
 export type LiveSyncOptions = {
@@ -85,7 +89,9 @@ export class LiveSyncClient {
       const message = wsFanOutMessageSchema.safeParse(parsed);
       if (!message.success) return;
       if (message.data.type === "operation") this.callbacks.onOperation(message.data.operation);
-      else this.callbacks.onPresence?.(message.data.presence);
+      else if (message.data.type === "presence") this.callbacks.onPresence?.(message.data.presence);
+      else if (message.data.type === "task") this.callbacks.onTask?.(message.data.task);
+      else this.callbacks.onClaim?.(message.data.claim);
     });
     socket.on("close", () => {
       if (this.socket === socket) this.socket = undefined;
