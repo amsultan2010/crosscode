@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { createCheckpoint, discoverRepository, findSymbolReferences, inspectCheckpoint, restoreCheckpointFile, threeWayMerge } from "./index.js";
+import { createCheckpoint, discoverRepository, findSymbolReferences, inspectCheckpoint, publishCommit, restoreCheckpointFile, threeWayMerge } from "./index.js";
 
 const exec = promisify(execFile);
 const directories: string[] = [];
@@ -72,5 +72,58 @@ describe("git safety", () => {
 
     await expect(findSymbolReferences(directory, ["greet"], "lib.ts")).resolves.toEqual(["caller.ts"]);
     await expect(findSymbolReferences(directory, ["nonexistentSymbol"], "lib.ts")).resolves.toEqual([]);
+  });
+
+  it("publishes a fast-forward commit built from the working tree onto a branch", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "crosscode-git-")); directories.push(directory);
+    await exec("git", ["init", "-q", "-b", "main", directory]); await exec("git", ["-C", directory, "config", "user.email", "test@example.com"]); await exec("git", ["-C", directory, "config", "user.name", "Test"]);
+    await writeFile(join(directory, "a.txt"), "one\n"); await exec("git", ["-C", directory, "add", "."]); await exec("git", ["-C", directory, "commit", "-qm", "initial"]);
+    const initial = (await exec("git", ["-C", directory, "rev-parse", "HEAD"])).stdout.trim();
+    await writeFile(join(directory, "a.txt"), "two\n");
+
+    const result = await publishCommit(directory, "main", "publish work");
+
+    expect(result.previous).toBe(initial);
+    expect((await exec("git", ["-C", directory, "rev-parse", "refs/heads/main"])).stdout.trim()).toBe(result.commit);
+    expect((await exec("git", ["-C", directory, "log", "-1", "--format=%P", result.commit])).stdout.trim()).toBe(initial);
+    expect((await exec("git", ["-C", directory, "show", `${result.commit}:a.txt`])).stdout).toBe("two\n");
+  });
+
+  it("rejects publishing when the branch tip moves concurrently between resolving the tip and updating the ref", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "crosscode-git-")); directories.push(directory);
+    await exec("git", ["init", "-q", "-b", "main", directory]); await exec("git", ["-C", directory, "config", "user.email", "test@example.com"]); await exec("git", ["-C", directory, "config", "user.name", "Test"]);
+    await writeFile(join(directory, "a.txt"), "one\n"); await exec("git", ["-C", directory, "add", "."]); await exec("git", ["-C", directory, "commit", "-qm", "initial"]);
+    const initial = (await exec("git", ["-C", directory, "rev-parse", "HEAD"])).stdout.trim();
+    await writeFile(join(directory, "a.txt"), "two\n");
+
+    // publishCommit resolves the tip first, then does several sequential plumbing calls to build
+    // the tree before its final compare-and-swap update-ref. Racing a single fast commit against
+    // it moves the branch tip out from under the tip publishCommit already resolved.
+    const publishing = publishCommit(directory, "main", "publish work");
+    await exec("git", ["-C", directory, "commit", "--allow-empty", "-qm", "concurrent"]);
+    const concurrentCommit = (await exec("git", ["-C", directory, "rev-parse", "refs/heads/main"])).stdout.trim();
+    expect(concurrentCommit).not.toBe(initial);
+
+    await expect(publishing).rejects.toThrow();
+    expect((await exec("git", ["-C", directory, "rev-parse", "refs/heads/main"])).stdout.trim()).toBe(concurrentCommit);
+  });
+
+  it("never touches HEAD, the index, or the checked-out branch when publishing a different branch", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "crosscode-git-")); directories.push(directory);
+    await exec("git", ["init", "-q", "-b", "main", directory]); await exec("git", ["-C", directory, "config", "user.email", "test@example.com"]); await exec("git", ["-C", directory, "config", "user.name", "Test"]);
+    await writeFile(join(directory, "a.txt"), "one\n"); await exec("git", ["-C", directory, "add", "."]); await exec("git", ["-C", directory, "commit", "-qm", "initial"]);
+    await exec("git", ["-C", directory, "branch", "release"]);
+    const headBefore = (await exec("git", ["-C", directory, "rev-parse", "HEAD"])).stdout.trim();
+    const branchBefore = (await exec("git", ["-C", directory, "branch", "--show-current"])).stdout.trim();
+    await writeFile(join(directory, "a.txt"), "two\n");
+
+    const result = await publishCommit(directory, "release", "publish work");
+
+    expect((await exec("git", ["-C", directory, "rev-parse", "HEAD"])).stdout.trim()).toBe(headBefore);
+    expect((await exec("git", ["-C", directory, "branch", "--show-current"])).stdout.trim()).toBe(branchBefore);
+    expect((await exec("git", ["-C", directory, "diff", "--cached"])).stdout).toBe("");
+    expect(await readFile(join(directory, "a.txt"), "utf8")).toBe("two\n");
+    expect((await exec("git", ["-C", directory, "rev-parse", "refs/heads/release"])).stdout.trim()).toBe(result.commit);
+    expect((await exec("git", ["-C", directory, "rev-parse", "refs/heads/main"])).stdout.trim()).toBe(headBefore);
   });
 });

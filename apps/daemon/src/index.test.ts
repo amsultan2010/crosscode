@@ -442,4 +442,35 @@ describe("local daemon coordination", () => {
     await expect(receiver.accept(operation.id)).rejects.toThrow("requires local human approval");
     expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe(base);
   });
+
+  it("rejects publish when no validation for the profile has passed", async () => {
+    const root = await repo();
+    const daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
+    await daemon.validate("fast", ["exit 1"]);
+
+    await expect(daemon.publish({ branch: "main", profile: "fast" })).rejects.toThrow("No passing validation found for profile fast");
+  });
+
+  it("rejects publish when the working tree changed since the last passing validation", async () => {
+    const root = await repo();
+    const daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
+    await daemon.validate("fast", ["true"]);
+    await writeFile(join(root, "a.txt"), "changed after validation\n");
+
+    await expect(daemon.publish({ branch: "main", profile: "fast" })).rejects.toThrow("Working tree changed since the last validation; re-run validate before publishing");
+  });
+
+  it("returns a dry-run publish plan without moving the branch ref", async () => {
+    const root = await repo();
+    await writeFile(join(root, "a.txt"), "two\n");
+    const initialHead = (await exec("git", ["-C", root, "rev-parse", "refs/heads/main"])).stdout.trim();
+    const daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
+    const [validation] = await daemon.validate("fast", ["true"]);
+
+    const result = await daemon.publish({ branch: "main", profile: "fast", dryRun: true });
+
+    expect(result).toMatchObject({ branch: "main", tree: validation!.tree });
+    expect("changedPaths" in result && result.changedPaths).toEqual([{ path: "a.txt", kind: "modify" }]);
+    expect((await exec("git", ["-C", root, "rev-parse", "refs/heads/main"])).stdout.trim()).toBe(initialHead);
+  });
 });
