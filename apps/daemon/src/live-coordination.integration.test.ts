@@ -55,8 +55,11 @@ afterEach(async () => {
 
 describe.skipIf(!databaseUrl)("PostgreSQL live WebSocket coordination", () => {
   it("fans out presence and proposals live to three daemons and still recovers via poll after a WebSocket outage", async () => {
+    const step = (label: string) => console.error(`[diag ${Date.now()}] ${label}`);
+    step("start");
     const store = new PgStore(databaseUrl!);
     await store.migrate();
+    step("migrated");
     const owner = await store.provisionAdmin({ workspaceName: "live-coordination-test", actorId: "alice" });
     const bob = await store.provisionEnrollment({ workspaceId: owner.workspaceId, actorId: "bob" });
     const carol = await store.provisionEnrollment({ workspaceId: owner.workspaceId, actorId: "carol" });
@@ -86,53 +89,77 @@ describe.skipIf(!databaseUrl)("PostgreSQL live WebSocket coordination", () => {
       const SLOW_POLL_MS = 5_000;
       const daemonA = await runDaemonProcess(rootA, { gitPollMs: 100, syncPollMs: FAST_POLL_MS, onPresence: (presence) => presenceLogA.push(presence) });
       daemons.add(daemonA);
+      step("daemonA started");
       const daemonB = await runDaemonProcess(rootB, { gitPollMs: 100, syncPollMs: SLOW_POLL_MS, onPresence: (presence) => presenceLogB.push(presence) });
       daemons.add(daemonB);
+      step("daemonB started");
       await waitFor(() => seenOnline(presenceLogA, enrollB.principal.replicaId), Boolean, 2_000);
+      step("A sees B online");
 
       let daemonC = await runDaemonProcess(rootC, { gitPollMs: 100, syncPollMs: SLOW_POLL_MS });
       daemons.add(daemonC);
+      step("daemonC started");
       await waitFor(() => seenOnline(presenceLogA, enrollC.principal.replicaId), Boolean, 2_000);
+      step("A sees C online");
       await waitFor(() => seenOnline(presenceLogB, enrollC.principal.replicaId), Boolean, 2_000);
+      step("B sees C online");
 
       // (a) presence: disconnecting C is visible to A and B live, and reconnecting is visible again.
       await stopDaemon(daemonC);
+      step("daemonC stopped");
       await waitFor(() => seenOffline(presenceLogA, enrollC.principal.replicaId), Boolean, 2_000);
+      step("A sees C offline");
       await waitFor(() => seenOffline(presenceLogB, enrollC.principal.replicaId), Boolean, 2_000);
+      step("B sees C offline");
 
       daemonC = await runDaemonProcess(rootC, { gitPollMs: 100, syncPollMs: SLOW_POLL_MS });
       daemons.add(daemonC);
+      step("daemonC restarted");
       await waitFor(() => seenOnline(presenceLogA, enrollC.principal.replicaId), Boolean, 2_000);
+      step("A sees C online again");
 
       // (b) live fan-out: A's filesystem edit is captured by its own watcher, uploaded quickly, and pushed live to B and C.
       await writeFile(join(rootA, "shared.txt"), "from-a\n");
+      step("shared.txt written");
       const captured = await waitFor(() => operationForPath(daemonA, "shared.txt"), (operation) => operation !== undefined, 3_000);
+      step("shared.txt captured by A");
       const sharedId = captured!.id;
 
       const proposedOnB = await waitFor(() => operationForPath(daemonB, "shared.txt"), (operation) => operation?.status === "proposed", SLOW_POLL_MS - 1_000);
+      step("shared.txt proposed on B");
       const proposedOnC = await waitFor(() => operationForPath(daemonC, "shared.txt"), (operation) => operation?.status === "proposed", SLOW_POLL_MS - 1_000);
+      step("shared.txt proposed on C");
       expect(proposedOnB?.id).toBe(sharedId);
       expect(proposedOnC?.id).toBe(sharedId);
 
       await daemonB.running.daemon.runExclusive(() => daemonB.running.daemon.accept(sharedId));
+      step("B accepted shared.txt");
       await daemonC.running.daemon.runExclusive(() => daemonC.running.daemon.accept(sharedId));
+      step("C accepted shared.txt");
       expect(await readFile(join(rootB, "shared.txt"), "utf8")).toBe("from-a\n");
       expect(await readFile(join(rootC, "shared.txt"), "utf8")).toBe("from-a\n");
+      step("shared.txt verified on B and C");
 
       // (c) WebSocket torn down mid-session: replace daemon C with one that has no live socket at all
       // (a persistent WS outage) but a fast poll, and confirm it still catches up with no data loss.
       await stopDaemon(daemonC);
+      step("daemonC stopped for outage simulation");
       daemonC = await runDaemonProcess(rootC, { gitPollMs: 100, syncPollMs: 150, liveSync: false });
       daemons.add(daemonC);
+      step("daemonC restarted without liveSync");
 
       await writeFile(join(rootA, "post-outage.txt"), "after-outage\n");
+      step("post-outage.txt written");
       const recoveredOnC = await waitFor(() => operationForPath(daemonC, "post-outage.txt"), (operation) => operation?.status === "proposed", 5_000);
+      step("post-outage.txt proposed on C");
       expect(recoveredOnC).toBeDefined();
       await daemonC.running.daemon.runExclusive(() => daemonC.running.daemon.accept(recoveredOnC!.id));
+      step("C accepted post-outage.txt");
       expect(await readFile(join(rootC, "post-outage.txt"), "utf8")).toBe("after-outage\n");
 
       // The original shared.txt content from before the outage must still be intact: no overwrite, no loss.
       expect(await readFile(join(rootC, "shared.txt"), "utf8")).toBe("from-a\n");
+      step("done");
     } finally {
       await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
       await store.pool.query("DELETE FROM audit_events WHERE workspace_id = $1", [owner.workspaceId]);
