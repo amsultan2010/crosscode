@@ -19,7 +19,12 @@ import {
   taskRequestSchema,
   taskSchema,
   transactionCreatedEventSchema,
-  validationRequestSchema
+  validationRequestSchema,
+  presenceUpdateSchema,
+  wsErrorMessageSchema,
+  wsFanOutMessageSchema,
+  wsSubscribeAckSchema,
+  wsSubscribeRequestSchema
 } from "./index.js";
 
 describe("protocol schemas", () => {
@@ -123,5 +128,33 @@ describe("protocol schemas", () => {
     expect(daemonConfigSchema.parse({ ...base, service: { url: "http://127.0.0.1:8080", replicaSecret: "secret" } }).service?.url).toBe("http://127.0.0.1:8080");
     expect(() => daemonConfigSchema.parse({ ...base, service: { url: "http://service.example.test", replicaSecret: "secret" } })).toThrow();
     expect(() => daemonConfigSchema.parse({ ...base, service: { url: "https://service.example.test", replicaSecret: "secret", token: "x" } })).toThrow();
+  });
+
+  it("validates WebSocket handshake, presence, fan-out, and ack/error messages", () => {
+    const subscribeRequest = { type: "subscribe" as const, workspaceId: "workspace-1", replicaId: "replica-1", accessToken: "access-token" };
+    expect(wsSubscribeRequestSchema.parse(subscribeRequest)).toEqual(subscribeRequest);
+    expect(() => wsSubscribeRequestSchema.parse({ ...subscribeRequest, unexpected: true })).toThrow();
+
+    const presence = { replicaId: "replica-1", actorId: "actor-1", status: "online" as const, lastSeenAt: "2026-01-01T00:00:00.000Z" };
+    expect(presenceUpdateSchema.parse(presence)).toEqual(presence);
+    expect(() => presenceUpdateSchema.parse({ ...presence, status: "away" })).toThrow();
+
+    const operation = {
+      id: transaction.id,
+      eventId: transactionEvent.id,
+      workspaceId: transactionEvent.workspaceId,
+      senderReplicaId: transactionEvent.replicaId,
+      transaction,
+      serverSequence: 1,
+      createdAt: transactionEvent.createdAt
+    };
+    expect(wsFanOutMessageSchema.parse({ type: "operation", operation }).type).toBe("operation");
+    expect(wsFanOutMessageSchema.parse({ type: "presence", presence }).type).toBe("presence");
+    expect(() => wsFanOutMessageSchema.parse({ type: "presence", operation })).toThrow();
+
+    expect(wsSubscribeAckSchema.parse({ type: "subscribed", cursor: 0 })).toEqual({ type: "subscribed", cursor: 0 });
+    expect(() => wsSubscribeAckSchema.parse({ type: "subscribed", cursor: -1 })).toThrow();
+    expect(wsErrorMessageSchema.parse({ type: "error", message: "not authorized" }).message).toBe("not authorized");
+    expect(() => wsErrorMessageSchema.parse({ type: "error", message: "" })).toThrow();
   });
 });
