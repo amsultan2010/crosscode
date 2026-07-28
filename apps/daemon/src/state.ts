@@ -12,6 +12,7 @@ export type GitState = { head?: string; headReflog?: string; branch?: string; wo
 export type CheckpointRecord = { ref: string; commit: string; tree: string; message: string; createdAt: string };
 export type LocalEvent = { type: string; payload: unknown };
 export type OutboundRecord = { event: EventEnvelope; transaction: ChangeTransaction; acknowledgedServerSequence?: number };
+export type ConflictArtifactRecord = { id: string; operationId: string; path: string; classification: string; baseContent?: string; localContent?: string; proposedContent?: string; createdAt: string };
 export type TaskOutboundRecord = { event: TaskCreatedEvent | TaskUpdatedEvent; acknowledgedAt?: string };
 export type ClaimOutboundRecord = { event: ClaimCreatedEvent | ClaimReleasedEvent; acknowledgedAt?: string };
 
@@ -122,6 +123,16 @@ export class DaemonStateStore {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS conflict_artifact (
+        id TEXT PRIMARY KEY,
+        operation_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        classification TEXT NOT NULL,
+        base_content TEXT,
+        local_content TEXT,
+        proposed_content TEXT,
+        created_at TEXT NOT NULL
+      ) STRICT;
     `);
     const store = new DaemonStateStore(database);
     store.migrateLegacySnapshot();
@@ -179,6 +190,11 @@ export class DaemonStateStore {
       this.database.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  recordConflictArtifact(record: ConflictArtifactRecord): void {
+    this.database.prepare("INSERT INTO conflict_artifact (id, operation_id, path, classification, base_content, local_content, proposed_content, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(record.id, record.operationId, record.path, record.classification, record.baseContent ?? null, record.localContent ?? null, record.proposedContent ?? null, record.createdAt);
   }
 
   close(): void {

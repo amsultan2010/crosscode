@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import chokidar, { type FSWatcher } from "chokidar";
-import { analyzeOperation, contentHash, redactPath, transactionRisk } from "@crosscode/core";
+import { analyzeOperation, contentHash, hunksOverlap, looksLikeInterfaceChange, pathOverlaps, redactPath, transactionRisk } from "@crosscode/core";
 import { createCheckpoint, discoverRepository, inspectCheckpoint, readRevisionFile, restoreCheckpointFile, safeRepositoryPath, snapshotWorktreeTree, threeWayMerge } from "@crosscode/git";
 import {
   captureRequestSchema,
@@ -55,6 +55,10 @@ function assertChangeIntegrity(change: ChangeTransaction["changes"][number]): vo
   if (change.kind !== "delete") {
     if (change.afterContent === undefined || change.afterHash !== contentHash(change.afterContent)) throw new Error(`Transaction content hash is invalid: ${change.path}`);
   }
+}
+function changesOverlap(left: ChangeTransaction["changes"][number], right: ChangeTransaction["changes"][number]): boolean {
+  if (left.kind === "delete" || right.kind === "delete") return true;
+  return hunksOverlap(left.unifiedPatch, right.unifiedPatch);
 }
 export type DaemonOptions = { workspaceId: string; replicaId: string; actorId: string };
 export type RemoteSyncTransport = {
@@ -469,9 +473,38 @@ export class LocalDaemon {
     assertChangeIntegrity(change);
     if (change.afterContent !== undefined) assertText(change.afterContent, change.path);
     const current = await this.readWorkingText(change.path); const baseMatches = (current === undefined ? undefined : contentHash(current)) === change.beforeHash;
-    const analysis = analyzeOperation({ path: change.path, baseMatches: change.kind === "add" ? current === undefined : baseMatches, overlaps: false, kind: change.kind });
+    const conflicting = this.findConflictingChange(operation.id, change.path);
+    const overlaps = conflicting !== undefined && pathOverlaps(change.path, conflicting.path) && changesOverlap(change, conflicting);
+    const beforeBytes = await readRevisionFile(this.root, "HEAD", change.path).catch(() => undefined);
+    const beforeText = beforeBytes === undefined ? undefined : decodeText(beforeBytes, change.path);
+    const semanticOverlap = looksLikeInterfaceChange(beforeText, change.afterContent, change.path);
+    const analysis = analyzeOperation({ path: change.path, baseMatches: change.kind === "add" ? current === undefined : baseMatches, overlaps, kind: change.kind, semanticOverlap });
+    if (analysis.classification === "stale-base" || analysis.classification === "high-risk" || analysis.classification === "semantic-overlap") {
+      await this.persistConflictArtifact(operation.id, change.path, analysis.classification, beforeText, current, change.afterContent);
+    }
     if (analysis.classification === "stale-base") { const conflicted = { ...operation, status: "conflicted" as const }; this.operations.set(operation.id, conflicted); await this.persist("transaction.conflicted", conflicted); throw new Error("Proposal has a stale base; local work was not changed"); }
     if (analysis.requiresApproval) throw new Error("High-risk proposal requires local human approval policy");
+  }
+  private findConflictingChange(operationId: string, path: string): ChangeTransaction["changes"][number] | undefined {
+    for (const candidate of this.operations.values()) {
+      if (candidate.id === operationId) continue;
+      if (candidate.status !== "local" && candidate.status !== "proposed") continue;
+      const change = candidate.transaction.changes.find((item) => item.path === path);
+      if (change) return change;
+    }
+    return undefined;
+  }
+  private async persistConflictArtifact(operationId: string, path: string, classification: string, base: string | undefined, local: string | undefined, proposed: string | undefined): Promise<void> {
+    this.state.recordConflictArtifact({ id: randomUUID(), operationId, path, classification, baseContent: base, localContent: local, proposedContent: proposed, createdAt: now() });
+  }
+  async diffProposal(id: string): Promise<Array<{ path: string; base?: string; local?: string; proposed?: string }>> {
+    const operation = this.operations.get(id); if (!operation) throw new Error("Proposal was not found");
+    return Promise.all(operation.transaction.changes.map(async (change) => {
+      const baseBytes = await readRevisionFile(this.root, "HEAD", change.path).catch(() => undefined);
+      const base = baseBytes === undefined ? undefined : decodeText(baseBytes, change.path);
+      const local = await this.readWorkingText(change.path);
+      return { path: change.path, base, local, proposed: change.afterContent };
+    }));
   }
   private async refuseChangedGitState(): Promise<void> {
     const transition = await this.observeGitTransition();
@@ -599,7 +632,7 @@ async function readJsonBody(request: import("node:http").IncomingMessage): Promi
   });
 }
 
-function operationId(pathname: string, action: "accept" | "reject" | "analysis"): string | undefined {
+function operationId(pathname: string, action: "accept" | "reject" | "analysis" | "diff"): string | undefined {
   const match = pathname.match(new RegExp(`^/v1/operations/([^/]+)/${action}$`));
   if (!match) return undefined;
   try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid operation ID"); }
@@ -637,6 +670,7 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
       const acceptId = operationId(pathname, "accept");
       const rejectId = operationId(pathname, "reject");
       const analysisId = operationId(pathname, "analysis");
+      const diffId = operationId(pathname, "diff");
       const respondHandoffId = handoffRespondId(pathname);
       const updateTaskId = taskId(pathname);
       const releaseClaimId = claimReleaseId(pathname);
@@ -655,6 +689,7 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
         else if (method === "GET" && pathname === "/v1/checkpoints") data = [...daemon.checkpoints];
         else if (method === "GET" && pathname === "/v1/claims") data = [...daemon.claims.values()];
         else if (method === "GET" && analysisId) data = { operation: daemon.operations.get(analysisId), analysis: await daemon.analyzeProposal(analysisId) };
+        else if (method === "GET" && diffId) data = await daemon.diffProposal(diffId);
         else if (method === "POST" && acceptId) data = await daemon.accept(acceptId);
         else if (method === "POST" && rejectId) data = await daemon.reject(rejectId);
         else if (method === "POST" && pathname === "/v1/checkpoints") { data = await daemon.checkpoint(checkpointRequestSchema.parse(payload).message); status = 201; }

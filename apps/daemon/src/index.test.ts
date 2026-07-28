@@ -28,6 +28,12 @@ describe("local daemon coordination", () => {
     await writeFile(join(senderRoot, "a.txt"), "sender\n"); const operation = await sender.capture("change", service);
     await writeFile(join(receiverRoot, "a.txt"), "receiver\n"); await receiver.sync(service);
     await expect(receiver.accept(operation.id)).rejects.toThrow("stale"); expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe("receiver\n");
+
+    const statePath = join(receiverRoot, ".git", "crosscode", "state.sqlite");
+    const database = new DatabaseSync(statePath, { readOnly: true });
+    const rows = database.prepare("SELECT operation_id, path, classification, base_content, local_content, proposed_content FROM conflict_artifact").all() as Array<{ operation_id: string; path: string; classification: string; base_content: string; local_content: string; proposed_content: string }>;
+    database.close();
+    expect(rows).toEqual([{ operation_id: operation.id, path: "a.txt", classification: "stale-base", base_content: "one\n", local_content: "receiver\n", proposed_content: "sender\n" }]);
   });
 
   it("restores local state from its SQLite event store after restart", async () => {
@@ -306,5 +312,46 @@ describe("local daemon coordination", () => {
     await expect(daemon.observeGitTransition()).resolves.toMatchObject({ kind: "git-operation", paused: true });
     await daemon.reanalyzePendingOperations();
     await expect(daemon.status()).resolves.toMatchObject({ materializationPaused: false });
+  });
+
+  it("computes real hunk overlap for a conflicting pending change instead of a hardcoded false", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const base = "line1\nline2\nline3\nline4\nline5\nline6\n";
+    await writeFile(join(senderRoot, "a.txt"), base); await exec("git", ["-C", senderRoot, "commit", "-aqm", "seed"]);
+    await writeFile(join(receiverRoot, "a.txt"), base); await exec("git", ["-C", receiverRoot, "commit", "-aqm", "seed"]);
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+    await writeFile(join(senderRoot, "a.txt"), "line1\nline2\nline3\nline4\nLINE5\nLINE6\n");
+    const operation = await sender.capture("edit bottom lines", service);
+    operation.transaction.changes[0]!.unifiedPatch = "@@ -5,2 +5,2 @@\n-line5\n-line6\n+LINE5\n+LINE6\n";
+    await receiver.sync(service);
+    receiver.operations.get(operation.id)!.transaction.changes[0]!.unifiedPatch = operation.transaction.changes[0]!.unifiedPatch;
+
+    const nonOverlapping = { path: "a.txt", kind: "modify" as const, beforeHash: contentHash(base), afterHash: contentHash("LINE1\nLINE2\nline3\nline4\nline5\nline6\n"), afterContent: "LINE1\nLINE2\nline3\nline4\nline5\nline6\n", unifiedPatch: "@@ -1,2 +1,2 @@\n-line1\n-line2\n+LINE1\n+LINE2\n" };
+    const pendingLocal = { id: "fake-local-op", workspaceId: "w", senderReplicaId: "receiver", transaction: { id: "fake-local-op", base: { files: [] }, changes: [nonOverlapping], provenance: { source: "filesystem" as const, confidence: "known" as const }, safety: { risk: "low" as const, requiresApproval: false } }, sequence: 1, createdAt: new Date().toISOString(), status: "local" as const };
+    receiver.operations.set(pendingLocal.id, pendingLocal);
+
+    await receiver.accept(operation.id);
+    expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe("line1\nline2\nline3\nline4\nLINE5\nLINE6\n");
+  });
+
+  it("requires approval when a conflicting pending change overlaps the same hunk range", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const base = "line1\nline2\nline3\nline4\nline5\nline6\n";
+    await writeFile(join(senderRoot, "a.txt"), base); await exec("git", ["-C", senderRoot, "commit", "-aqm", "seed"]);
+    await writeFile(join(receiverRoot, "a.txt"), base); await exec("git", ["-C", receiverRoot, "commit", "-aqm", "seed"]);
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+    await writeFile(join(senderRoot, "a.txt"), "line1\nline2\nline3\nline4\nLINE5\nLINE6\n");
+    const operation = await sender.capture("edit bottom lines", service);
+    await receiver.sync(service);
+    receiver.operations.get(operation.id)!.transaction.changes[0]!.unifiedPatch = "@@ -5,2 +5,2 @@\n-line5\n-line6\n+LINE5\n+LINE6\n";
+
+    const overlapping = { path: "a.txt", kind: "modify" as const, beforeHash: contentHash(base), afterHash: contentHash("line1\nline2\nline3\nline4\nLINE5\nline6\n"), afterContent: "line1\nline2\nline3\nline4\nLINE5\nline6\n", unifiedPatch: "@@ -5,1 +5,1 @@\n-line5\n+LINE5\n" };
+    const pendingLocal = { id: "fake-local-op", workspaceId: "w", senderReplicaId: "receiver", transaction: { id: "fake-local-op", base: { files: [] }, changes: [overlapping], provenance: { source: "filesystem" as const, confidence: "known" as const }, safety: { risk: "low" as const, requiresApproval: false } }, sequence: 1, createdAt: new Date().toISOString(), status: "local" as const };
+    receiver.operations.set(pendingLocal.id, pendingLocal);
+
+    await expect(receiver.accept(operation.id)).rejects.toThrow("requires local human approval");
+    expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe(base);
   });
 });
