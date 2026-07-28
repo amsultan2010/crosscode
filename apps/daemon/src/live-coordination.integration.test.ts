@@ -134,6 +134,10 @@ describe.skipIf(!databaseUrl)("PostgreSQL live WebSocket coordination", () => {
       // The original shared.txt content from before the outage must still be intact: no overwrite, no loss.
       expect(await readFile(join(rootC, "shared.txt"), "utf8")).toBe("from-a\n");
     } finally {
+      // Live daemons keep WebSocket connections open on the server; http.Server#close only
+      // invokes its callback once every existing connection has ended, so they must be
+      // stopped first or server.close() never resolves.
+      await Promise.all([...daemons].map((daemon) => stopDaemon(daemon)));
       await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
       await store.pool.query("DELETE FROM audit_events WHERE workspace_id = $1", [owner.workspaceId]);
       await store.pool.query("DELETE FROM workspaces WHERE id = $1", [owner.workspaceId]);
