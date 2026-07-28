@@ -83,7 +83,7 @@ describe.skipIf(!databaseUrl)("PostgreSQL live WebSocket coordination", () => {
       // A uploads quickly (short poll) so its own outbound events reach the service fast;
       // B and C poll slowly so any fast delivery to them can only have arrived over the live WebSocket path.
       const FAST_POLL_MS = 100;
-      const SLOW_POLL_MS = 5_000;
+      const SLOW_POLL_MS = 10_000;
       const daemonA = await runDaemonProcess(rootA, { gitPollMs: 100, syncPollMs: FAST_POLL_MS, onPresence: (presence) => presenceLogA.push(presence) });
       daemons.add(daemonA);
       const daemonB = await runDaemonProcess(rootB, { gitPollMs: 100, syncPollMs: SLOW_POLL_MS, onPresence: (presence) => presenceLogB.push(presence) });
@@ -172,5 +172,5 @@ describe.skipIf(!databaseUrl)("PostgreSQL live WebSocket coordination", () => {
       await store.pool.query("DELETE FROM workspaces WHERE id = $1", [owner.workspaceId]);
       await store.close();
     }
-  }, 30_000);
+  }, 45_000);
 });
