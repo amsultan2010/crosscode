@@ -7,3 +7,5 @@ onlyBuiltDependencies:
   - esbuild
 allowBuilds:
   esbuild: true
+minimumReleaseAgeExclude:
+  - '@modelcontextprotocol/sdk@1.30.0'

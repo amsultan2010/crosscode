@@ -15,11 +15,16 @@ import {
   checkpointRestoreRequestSchema,
   claimRequestSchema,
   claimSchema,
+  handoffRequestSchema,
+  handoffRespondRequestSchema,
+  handoffSchema,
   taskRequestSchema,
   taskSchema,
   validationRequestSchema,
+  type CaptureKind,
   type ChangeTransaction,
   type Claim,
+  type Handoff,
   type Task,
   type Validation
 } from "@crosscode/protocol";
@@ -51,7 +56,7 @@ export type RemoteSyncTransport = {
 };
 
 export class LocalDaemon {
-  readonly tasks = new Map<string, Task>(); readonly claims = new Map<string, Claim>(); readonly operations = new Map<string, StoredOperation>(); readonly validations: Validation[] = []; readonly checkpoints: CheckpointRecord[] = [];
+  readonly tasks = new Map<string, Task>(); readonly claims = new Map<string, Claim>(); readonly operations = new Map<string, StoredOperation>(); readonly validations: Validation[] = []; readonly checkpoints: CheckpointRecord[] = []; readonly handoffs = new Map<string, Handoff>();
   readonly outbound = new Map<string, OutboundRecord>();
   private remoteCursor = 0;
   private eventSequence = 0;
@@ -71,7 +76,7 @@ export class LocalDaemon {
       const risk = transactionRisk(transaction);
       daemon.operations.set(operation.id, { ...operation, transaction: { ...transaction, safety: { risk, requiresApproval: risk === "critical" } } });
     }
-    daemon.validations.push(...saved.validations); daemon.checkpoints.push(...saved.checkpoints); for (const record of saved.outbound) daemon.outbound.set(record.event.id, record); daemon.remoteCursor = saved.remoteCursor; daemon.eventSequence = saved.eventSequence; daemon.materializationPaused = saved.materializationPaused; for (const [path, hash] of Object.entries(saved.capturedHashes)) daemon.capturedHashes.set(path, hash); await daemon.reconcileInterruptedMaterializations(); return daemon;
+    daemon.validations.push(...saved.validations); daemon.checkpoints.push(...saved.checkpoints); for (const handoff of saved.handoffs) daemon.handoffs.set(handoff.id, handoff); for (const record of saved.outbound) daemon.outbound.set(record.event.id, record); daemon.remoteCursor = saved.remoteCursor; daemon.eventSequence = saved.eventSequence; daemon.materializationPaused = saved.materializationPaused; for (const [path, hash] of Object.entries(saved.capturedHashes)) daemon.capturedHashes.set(path, hash); await daemon.reconcileInterruptedMaterializations(); return daemon;
   }
   async status() { const repository = await discoverRepository(this.root); return { ...repository, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, tasks: this.tasks.size, claims: this.claims.size, proposals: [...this.operations.values()].filter((operation) => operation.status === "proposed").length, materializationPaused: this.materializationPaused, eventSequence: this.eventSequence, remoteCursor: this.remoteCursor, pendingOutbound: [...this.outbound.values()].filter((record) => record.acknowledgedServerSequence === undefined).length, service: { ...this.serviceStatus } }; }
   configureRemoteSync(): void { this.serviceStatus = { ...this.serviceStatus, configured: true }; }
@@ -86,6 +91,19 @@ export class LocalDaemon {
     return checkpoint;
   }
   async inspectCheckpoint(ref: string) { return inspectCheckpoint(this.root, ref); }
+  async requestHandoff(input: { operationId: string; note?: string }): Promise<Handoff> {
+    const handoff = handoffSchema.parse({ id: randomUUID(), operationId: input.operationId, requestedBy: this.options.actorId, note: input.note, status: "pending", createdAt: now() });
+    this.handoffs.set(handoff.id, handoff);
+    try { await this.persist("handoff.requested", handoff); } catch (error) { this.handoffs.delete(handoff.id); throw error; }
+    return handoff;
+  }
+  async respondHandoff(id: string, decision: "accepted" | "declined"): Promise<Handoff> {
+    const handoff = this.handoffs.get(id); if (!handoff || handoff.status !== "pending") throw new Error("Handoff was not found");
+    const responded = { ...handoff, status: decision, respondedAt: now() };
+    this.handoffs.set(id, responded);
+    try { await this.persist("handoff.responded", responded); } catch (error) { this.handoffs.set(id, handoff); throw error; }
+    return responded;
+  }
   async restoreCheckpointFile(ref: string, path: string): Promise<void> {
     await this.eligiblePath(path);
     await this.checkpoint(`Before restoring ${path}`); await this.restoreEligibleCheckpointFile(ref, path);
@@ -165,7 +183,7 @@ export class LocalDaemon {
     return watcher;
   }
 
-  async capture(intent: string, service?: CoordinationService): Promise<StoredOperation> {
+  async capture(intent: string, service?: CoordinationService, kind: CaptureKind = "intent"): Promise<StoredOperation> {
     let snapshot: { repository: Awaited<ReturnType<typeof discoverRepository>>; checkpoint: Awaited<ReturnType<LocalDaemon["checkpoint"]>>; changes: Array<{ path: string; kind: "add" | "modify" | "delete"; beforeHash?: string; afterHash?: string; afterContent?: string }> } | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const repository = await discoverRepository(this.root); const names = await this.changedPaths();
@@ -183,7 +201,7 @@ export class LocalDaemon {
     }
     if (!snapshot) throw new Error("Working tree changed while assembling a transaction; retry the capture");
     const { repository, changes } = snapshot;
-    const transaction = changeTransactionSchema.parse({ id: randomUUID(), intent, base: { headCommit: repository.head, files: changes.filter((change) => change.beforeHash).map((change) => ({ path: change.path, contentHash: change.beforeHash! })) }, changes, provenance: { source: "filesystem", confidence: "known" }, safety: { risk: transactionRisk({ changes }), requiresApproval: transactionRisk({ changes }) === "critical" } });
+    const transaction = changeTransactionSchema.parse({ id: randomUUID(), intent, kind, base: { headCommit: repository.head, files: changes.filter((change) => change.beforeHash).map((change) => ({ path: change.path, contentHash: change.beforeHash! })) }, changes, provenance: { source: "filesystem", confidence: "known" }, safety: { risk: transactionRisk({ changes }), requiresApproval: transactionRisk({ changes }) === "critical" } });
     const local = { id: transaction.id, workspaceId: this.options.workspaceId, senderReplicaId: this.options.replicaId, transaction, sequence: 0, createdAt: now(), status: "local" as const };
     const event = { id: transaction.id, schemaVersion: 1 as const, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "transaction.created", clientSequence: this.eventSequence + 1, createdAt: now(), payload: transaction };
     const outbound = { event, transaction };
@@ -446,7 +464,7 @@ export class LocalDaemon {
   }
   private ignoredPath(path: string): boolean { const relative = path.startsWith(this.root) ? path.slice(this.root.length + 1) : path; return /(^|\/)(\.git|node_modules|dist|build|coverage)(\/|$)/.test(relative) || /(^|\/)\.[^/]+\.[0-9a-f-]+\.crosscode$/.test(relative) || redactPath(relative); }
   private redactValidationOutput(output: string): string { return output.slice(0, 64 * 1024).replace(/((?:api[_-]?key|token|password|secret|authorization)\s*[:=]\s*)([^\s]+)/gi, "$1[REDACTED]"); }
-  private async persist(type: string, payload: unknown): Promise<void> { this.eventSequence = this.state.record({ tasks: [...this.tasks.values()], claims: [...this.claims.values()], operations: [...this.operations.values()], validations: [...this.validations], checkpoints: [...this.checkpoints], outbound: [...this.outbound.values()], remoteCursor: this.remoteCursor, capturedHashes: Object.fromEntries(this.capturedHashes), gitState: this.gitState, materializationPaused: this.materializationPaused }, { type, payload }); }
+  private async persist(type: string, payload: unknown): Promise<void> { this.eventSequence = this.state.record({ tasks: [...this.tasks.values()], claims: [...this.claims.values()], operations: [...this.operations.values()], validations: [...this.validations], checkpoints: [...this.checkpoints], handoffs: [...this.handoffs.values()], outbound: [...this.outbound.values()], remoteCursor: this.remoteCursor, capturedHashes: Object.fromEntries(this.capturedHashes), gitState: this.gitState, materializationPaused: this.materializationPaused }, { type, payload }); }
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -488,6 +506,12 @@ function operationId(pathname: string, action: "accept" | "reject" | "analysis")
   try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid operation ID"); }
 }
 
+function handoffRespondId(pathname: string): string | undefined {
+  const match = pathname.match(/^\/v1\/handoffs\/([^/]+)\/respond$/);
+  if (!match) return undefined;
+  try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid handoff ID"); }
+}
+
 export type RunningDaemon = { daemon: LocalDaemon; server: Server; port: number; secret: string; close: () => Promise<void> };
 
 export async function startDaemon(directory: string, options: DaemonOptions, port = 0): Promise<RunningDaemon> {
@@ -502,6 +526,7 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
       const acceptId = operationId(pathname, "accept");
       const rejectId = operationId(pathname, "reject");
       const analysisId = operationId(pathname, "analysis");
+      const respondHandoffId = handoffRespondId(pathname);
       const result = await daemon.runExclusive(async () => {
         let status = 200;
         let data: unknown;
@@ -512,14 +537,17 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
         else if (method === "POST" && pathname === "/v1/claims") { data = await daemon.createClaim(claimRequestSchema.parse(payload)); status = 201; }
         else if (method === "GET" && pathname === "/v1/operations") data = [...daemon.operations.values()];
         else if (method === "GET" && pathname === "/v1/checkpoints") data = [...daemon.checkpoints];
+        else if (method === "GET" && pathname === "/v1/claims") data = [...daemon.claims.values()];
         else if (method === "GET" && analysisId) data = { operation: daemon.operations.get(analysisId), analysis: await daemon.analyzeProposal(analysisId) };
         else if (method === "POST" && acceptId) data = await daemon.accept(acceptId);
         else if (method === "POST" && rejectId) data = await daemon.reject(rejectId);
         else if (method === "POST" && pathname === "/v1/checkpoints") { data = await daemon.checkpoint(checkpointRequestSchema.parse(payload).message); status = 201; }
         else if (method === "POST" && pathname === "/v1/checkpoints/inspect") { const { ref } = checkpointInspectRequestSchema.parse(payload); data = await daemon.inspectCheckpoint(ref); }
         else if (method === "POST" && pathname === "/v1/checkpoints/restore") { const input = checkpointRestoreRequestSchema.parse(payload); await daemon.restoreCheckpointFile(input.ref, input.path); data = { restored: input.path }; }
-        else if (method === "POST" && pathname === "/v1/transactions") { data = await daemon.capture(captureRequestSchema.parse(payload).intent); status = 201; }
+        else if (method === "POST" && pathname === "/v1/transactions") { const parsed = captureRequestSchema.parse(payload); data = await daemon.capture(parsed.intent, undefined, parsed.kind ?? "intent"); status = 201; }
         else if (method === "POST" && pathname === "/v1/validate") { const { profile } = validationRequestSchema.parse(payload); data = await daemon.validateProfile(profile); }
+        else if (method === "POST" && pathname === "/v1/handoffs") { data = await daemon.requestHandoff(handoffRequestSchema.parse(payload)); status = 201; }
+        else if (method === "POST" && respondHandoffId) { data = await daemon.respondHandoff(respondHandoffId, handoffRespondRequestSchema.parse(payload).decision); }
         else throw new HttpError(404, "Not found");
         return { status, data };
       });

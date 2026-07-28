@@ -1,7 +1,7 @@
 import { chmod, lstat, mkdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { dirname } from "node:path";
-import type { ChangeTransaction, Claim, EventEnvelope, Task, Validation } from "@crosscode/protocol";
+import type { ChangeTransaction, Claim, EventEnvelope, Handoff, Task, Validation } from "@crosscode/protocol";
 import type { StoredOperation } from "./types.js";
 
 export type GitState = { head?: string; headReflog?: string; branch?: string; worktree: string; indexTree?: string; operation?: "merge" | "rebase" | "cherry-pick" | "revert" };
@@ -15,6 +15,7 @@ export type DaemonSnapshot = {
   operations: StoredOperation[];
   validations: Validation[];
   checkpoints: CheckpointRecord[];
+  handoffs: Handoff[];
   outbound: OutboundRecord[];
   remoteCursor: number;
   capturedHashes: Record<string, string | null>;
@@ -29,6 +30,7 @@ const initialSnapshot = (): DaemonSnapshot => ({
   operations: [],
   validations: [],
   checkpoints: [],
+  handoffs: [],
   outbound: [],
   remoteCursor: 0,
   capturedHashes: {},
@@ -86,6 +88,10 @@ export class DaemonStateStore {
         ref TEXT PRIMARY KEY,
         payload TEXT NOT NULL
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS handoff_projection (
+        id TEXT PRIMARY KEY,
+        payload TEXT NOT NULL
+      ) STRICT;
       CREATE TABLE IF NOT EXISTS outbox_projection (
         event_id TEXT PRIMARY KEY,
         payload TEXT NOT NULL
@@ -111,6 +117,7 @@ export class DaemonStateStore {
       operations: parseRows<StoredOperation>(this.database.prepare("SELECT payload FROM operation_projection ORDER BY id").all() as Array<{ payload: string }>),
       validations: parseRows<Validation>(this.database.prepare("SELECT payload FROM validation_projection ORDER BY id").all() as Array<{ payload: string }>),
       checkpoints: parseRows<CheckpointRecord>(this.database.prepare("SELECT payload FROM checkpoint_projection ORDER BY ref").all() as Array<{ payload: string }>),
+      handoffs: parseRows<Handoff>(this.database.prepare("SELECT payload FROM handoff_projection ORDER BY id").all() as Array<{ payload: string }>),
       outbound: parseRows<OutboundRecord>(this.database.prepare("SELECT payload FROM outbox_projection ORDER BY event_id").all() as Array<{ payload: string }>),
       remoteCursor: (meta.get("remoteCursor") as number | undefined) ?? 0,
       capturedHashes: (meta.get("capturedHashes") as Record<string, string | null> | undefined) ?? {},
@@ -129,6 +136,7 @@ export class DaemonStateStore {
       this.replaceProjection("operation_projection", "id", snapshot.operations.map((operation) => [operation.id, operation]));
       this.replaceProjection("validation_projection", "id", snapshot.validations.map((validation) => [validation.id, validation]));
       this.replaceProjection("checkpoint_projection", "ref", snapshot.checkpoints.map((checkpoint) => [checkpoint.ref, checkpoint]));
+      this.replaceProjection("handoff_projection", "id", snapshot.handoffs.map((handoff) => [handoff.id, handoff]));
       this.replaceProjection("outbox_projection", "event_id", snapshot.outbound.map((record) => [record.event.id, record]));
       this.replaceMeta("remoteCursor", snapshot.remoteCursor);
       this.replaceMeta("capturedHashes", snapshot.capturedHashes);
@@ -169,6 +177,7 @@ export class DaemonStateStore {
       this.replaceProjection("operation_projection", "id", snapshot.operations.map((operation) => [operation.id, operation]));
       this.replaceProjection("validation_projection", "id", snapshot.validations.map((validation) => [validation.id, validation]));
       this.replaceProjection("checkpoint_projection", "ref", snapshot.checkpoints.map((checkpoint) => [checkpoint.ref, checkpoint]));
+      this.replaceProjection("handoff_projection", "id", snapshot.handoffs.map((handoff) => [handoff.id, handoff]));
       this.replaceProjection("outbox_projection", "event_id", snapshot.outbound.map((record) => [record.event.id, record]));
       this.replaceMeta("remoteCursor", snapshot.remoteCursor);
       this.replaceMeta("capturedHashes", snapshot.capturedHashes);

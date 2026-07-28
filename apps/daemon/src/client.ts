@@ -1,5 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
-import type { Claim, Task, Validation } from "@crosscode/protocol";
+import type { CaptureKind, Claim, Handoff, Task, Validation } from "@crosscode/protocol";
 import { daemonConnectionSchema, type DaemonConnection } from "@crosscode/protocol";
 import type { CheckpointRecord } from "./state.js";
 import type { StoredOperation } from "./types.js";
@@ -47,6 +47,7 @@ export class DaemonClient {
   tasks(): Promise<Task[]> { return this.request("GET", "/v1/tasks"); }
   createTask(input: { title: string; intent?: string; paths?: string[]; status?: Task["status"] }): Promise<Task> { return this.request("POST", "/v1/tasks", input); }
   createClaim(input: { taskId: string; kind: Claim["kind"]; target: string; mode: Claim["mode"]; expiresAt?: string }): Promise<Claim> { return this.request("POST", "/v1/claims", input); }
+  claims(): Promise<Claim[]> { return this.request("GET", "/v1/claims"); }
   operations(): Promise<StoredOperation[]> { return this.request("GET", "/v1/operations"); }
   analyze(id: string): Promise<{ operation: StoredOperation; analysis: string }> { return this.request("GET", `/v1/operations/${encodeURIComponent(id)}/analysis`); }
   accept(id: string): Promise<StoredOperation> { return this.request("POST", `/v1/operations/${encodeURIComponent(id)}/accept`, {}); }
@@ -55,8 +56,10 @@ export class DaemonClient {
   checkpoint(message?: string): Promise<{ ref: string; commit: string; tree: string }> { return this.request("POST", "/v1/checkpoints", message ? { message } : {}); }
   inspectCheckpoint(ref: string): Promise<{ ref: string; commit: string; tree: string; files: string[] }> { return this.request("POST", "/v1/checkpoints/inspect", { ref }); }
   restoreCheckpoint(ref: string, path: string): Promise<{ restored: string }> { return this.request("POST", "/v1/checkpoints/restore", { ref, path }); }
-  capture(intent: string): Promise<StoredOperation> { return this.request("POST", "/v1/transactions", { intent }); }
+  capture(intent: string, kind?: CaptureKind): Promise<StoredOperation> { return this.request("POST", "/v1/transactions", kind ? { intent, kind } : { intent }); }
   validate(profile: string): Promise<Validation[]> { return this.request("POST", "/v1/validate", { profile }); }
+  requestHandoff(input: { operationId: string; note?: string }): Promise<Handoff> { return this.request("POST", "/v1/handoffs", input); }
+  respondHandoff(id: string, decision: "accepted" | "declined"): Promise<Handoff> { return this.request("POST", `/v1/handoffs/${encodeURIComponent(id)}/respond`, { decision }); }
 
   private async request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
     let response: Response;
