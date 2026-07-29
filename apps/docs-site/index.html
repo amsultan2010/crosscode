@@ -19,11 +19,34 @@
   </header>
 
   <main>
-    <h1>Coordinate a Git repo across people and agents, without leaving Git.</h1>
-    <p class="subtitle">
-      Crosscode is a local-first coordination layer for developers and coding agents
-      working in separate checkouts of the same Git repository.
-    </p>
+    <div class="hero">
+      <span class="eyebrow">Local-first &middot; pre-1.0</span>
+      <h1>Coordinate a Git repo across people and agents, without leaving Git.</h1>
+      <p class="subtitle">
+        Crosscode is a local-first coordination layer for developers and coding agents
+        working in separate checkouts of the same Git repository.
+      </p>
+
+      <div class="cta-row">
+        <a class="cta" href="/docs/install.html">Read the install &amp; quickstart guide</a>
+        <a class="cta secondary" href="/docs/index.html">Browse the docs</a>
+      </div>
+
+      <div class="terminal">
+        <div class="terminal-bar"><span></span><span></span><span></span></div>
+        <pre><code><span class="muted">$</span> crosscode daemon start
+<span class="accent">✓</span> watching checkout <span class="muted">~/code/tuskfish</span>
+<span class="accent">✓</span> 3 settled edits captured as transactions
+<span class="accent">✓</span> synced to coordination service
+<span class="muted">2 remote proposals waiting for review →</span> crosscode proposals</code></pre>
+      </div>
+
+      <div class="stat-row">
+        <div class="stat"><b>1</b><span>durable daemon per checkout</span></div>
+        <div class="stat"><b>0</b><span>proposals auto-applied to your tree</span></div>
+        <div class="stat"><b>100%</b><span>Git remains the source of truth</span></div>
+      </div>
+    </div>
 
     <blockquote>
       Git remains the durable history and publishing layer. Crosscode prevents late
@@ -39,9 +62,6 @@
       until you explicitly accept it. Crosscode does not replace your editor, agent,
       Git host, branches, worktrees, staging area, or normal commits.
     </p>
-
-    <a class="cta" href="/docs/install.html">Read the install &amp; quickstart guide</a>
-    <a class="cta secondary" href="/docs/index.html">Browse the docs</a>
 
     <h2>How it fits together</h2>
     <p>
