@@ -34,7 +34,7 @@ Current verification baseline:
 ### Partially implemented
 
 - The network coordination service implements the B1 durable HTTP path plus the B2 live WebSocket vertical: authenticated presence broadcast and live operation fan-out at `/v1/stream`, with graceful poll fallback. Durable session summaries for disconnected replicas and network synchronization of tasks/claims/handoffs remain outstanding.
-- Deterministic conflict analysis handles independent, stale-base, critical-path, and basic Git three-way analysis. Hunk overlap, delete-vs-modify records, interface impact, dependency graphs, and proposal diff artifacts are incomplete.
+- Deterministic conflict analysis handles independent, likely-compatible, stale-base, critical-path, delete-vs-modify, semantic-overlap, and interface-impact classification, plus basic Git three-way analysis. Hunk overlap is computed end-to-end from a real `git diff --no-index` patch generated at capture time (`packages/git`'s `unifiedDiff`, wired into `LocalDaemon.capture()`), not a hardcoded flag. Dependency impact is a textual, grep-based approximation (direct dependents via `findSymbolReferences`, extended one shallow hop to transitive dependents), not an accurate import/AST dependency graph, and the service's `operation_dependencies` table remains unused. `conflict_artifact` persists inputs/candidates for every approval-requiring classification and `crosscode proposals diff <operation-id>` exposes it live, but there is still no CLI/HTTP route that reads the persisted `conflict_artifact` rows back directly.
 - Validation runs committed profiles locally and binds results to an exact tree. Validation policy enforcement before publish and shared validation reporting are incomplete.
 
 ### Not implemented
@@ -53,7 +53,7 @@ Current verification baseline:
 
 ### Recommended next gate
 
-Implement Phase 3 next: network-synced tasks, claims, intents, and handoffs; complete deterministic conflict/risk classification (hunk overlap, delete-vs-modify, interface impact, dependency graphs); and shared validation status. B1's durable authenticated HTTP/reconnect vertical and B2's live WebSocket presence/fan-out vertical are both complete.
+Deterministic conflict/risk classification (hunk overlap, delete-vs-modify, interface impact, shallow dependency-impact) is now complete and fixture-tested; see Milestone C in section 24. Implement next: network-synced tasks, claims, intents, and handoffs; and shared validation status. B1's durable authenticated HTTP/reconnect vertical and B2's live WebSocket presence/fan-out vertical are both complete.
 
 ## 1. Product definition
 
@@ -929,13 +929,15 @@ Complete the deterministic analysis and materialization path before adding any a
 
 - [x] Compare per-file base content hashes before application and immediately before atomic rename.
 - [x] Use Git three-way merge for stale-base analysis; never build a custom text merge engine.
-- [ ] Complete classification for non-overlapping hunks, delete-vs-modify, interface, and dependency-impact changes. Independent, stale-base, and critical-path cases are implemented.
-- [ ] Preserve both inputs and candidate patches as explicit conflict-recovery/audit artifacts.
-- [ ] Add a proposal diff command. Checkpoint inspect/restore commands are implemented.
+- [x] Complete classification for non-overlapping hunks, delete-vs-modify, interface, and dependency-impact changes. Independent, stale-base, critical-path, delete-vs-modify, and semantic-overlap were already implemented. Hunk overlap is now computed end-to-end from a real `git diff --no-index` patch generated at capture time (`unifiedDiff` in `packages/git`, wired into `LocalDaemon.capture()`) instead of degrading to "always overlapping" whenever no patch was supplied. A distinct `interface-impact` classification now fires for an exported/public signature change with known dependents: direct dependents are found via textual symbol search (`findSymbolReferences`), extended one shallow hop to transitive dependents of those dependents. This remains a textual, grep-based approximation (case-sensitive substring search over tracked files), not an accurate import/AST dependency graph, and the service's `operation_dependencies` table is still unused.
+- [x] Preserve both inputs and candidate patches as explicit conflict-recovery/audit artifacts. The `conflict_artifact` SQLite table (base/local/proposed content, dependents, merged candidate) is persisted for every classification that requires approval: delete-vs-modify, semantic-overlap, interface-impact, stale-base, and stale-base-resolved. There is still no CLI/HTTP route that reads persisted `conflict_artifact` rows back directly; inspection goes through the live-recomputed `proposals diff` command below, not the stored historical record.
+- [x] Add a proposal diff command. `crosscode proposals diff <operation-id>` (CLI) → `client.diff` → `LocalDaemon.diffProposal` returns per-file base/local/proposed content plus classification, risk, requiresApproval, and dependents. Checkpoint inspect/restore commands are implemented.
 - [x] Require explicit acceptance before materialization and block locally classified high/critical work.
 - [x] Journal in-progress materialization and recover safely after crashes without overwriting newer developer edits.
 
 **Acceptance test:** a deterministic three-worktree fixture preserves all independent changes; same-file/same-symbol and delete-vs-modify cases leave files untouched and provide a recovery/proposal record.
+
+**Milestone C acceptance note:** every checklist item above is implemented and covered by fixture tests — `packages/core/src/index.test.ts` unit-tests the classification decision table including `interface-impact`; `packages/git/src/index.test.ts` covers `unifiedDiff`; `apps/daemon/src/index.test.ts` covers real capture-generated hunk overlap (both non-overlapping and overlapping cases, without any test manually setting the patch field), delete-vs-modify, stale-base, stale-base-resolved, and interface-impact with a direct-plus-transitive dependency chain, in each case also asserting the persisted `conflict_artifact` row. What has **not** been written is the single combined three-worktree acceptance fixture described above; existing coverage is per-behavior, two-daemon (sender/receiver) fixtures rather than one scenario exercising three participants together, so this milestone remains marked PARTIAL until that fixture exists.
 
 ### Milestone D — validation and publish workflow — DONE
 
