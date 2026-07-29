@@ -2,9 +2,9 @@
 
 ## 0. Current implementation status
 
-Last updated: 2026-07-29 (VS Code extension: added a real, automated extension-host verification suite).
+Last updated: 2026-07-29 (Milestones A-E all complete: durable local daemon, authenticated multi-replica sync with live task/claim/handoff fan-out and durable presence, deterministic conflict classification with an AST-based dependency graph, validation-gated publish, and standards-compliant MCP plus an automatically-verified VS Code extension).
 
-Crosscode currently has a tested local safety core, but it is not yet a deployable multi-machine collaboration product. The daemon is the sole local authority; the CLI and current MCP-shaped entry point communicate through its authenticated loopback API.
+Crosscode now has a tested local safety core and a working multi-replica coordination path: real daemons exchange live proposals, tasks, claims, and handoffs through an authenticated PostgreSQL-backed service, deterministically classify conflicts, gate publish on validation, and are reachable from MCP clients and a VS Code extension. The daemon remains the sole local authority; the CLI, MCP entry point, and extension all communicate through its authenticated loopback API. What is not yet done: a real (non-mock) AI review provider, several foundation-debt items (see below), and a small number of specific untested paths (`git rebase`/named `git worktree`/`git pull`, and an interactive human walkthrough of the VS Code extension).
 
 ### Completed
 
@@ -29,21 +29,23 @@ Crosscode currently has a tested local safety core, but it is not yet a deployab
 Current verification baseline:
 
 - TypeScript build passes.
-- 122 tests pass without a configured test database; 126 total once `CROSSCODE_TEST_DATABASE_URL` is set, adding the real-PostgreSQL B1 reconnect, service store, B2 live-coordination, and live handoff/intent fixtures. All 126 were run against a real local PostgreSQL instance for this update and pass; the two multi-daemon live-coordination fixtures assert on a fixed ~3s capture window and can flake under the CPU contention of full default-concurrency `pnpm test`, but pass reliably in isolation or with reduced test-runner concurrency (see the note under Milestone B).
+- 137 tests pass without a configured test database; 141 total once `CROSSCODE_TEST_DATABASE_URL` is set, adding the real-PostgreSQL B1 reconnect, service store, B2 live-coordination, and live handoff/intent fixtures (all confirmed passing against a real local PostgreSQL instance; see the note under Milestone B). A separate, non-vitest suite (`pnpm --filter crosscode-vscode-extension test:vscode`) launches a real headless VS Code instance and is not included in the counts above; it passes independently (see the Phase 5 note in section 20).
 - Statement/function coverage with a real PostgreSQL database attached: 91.73%/90.00% overall (measured for this update; `store.ts` alone is 97.01%/97.14% now that session/presence durability is exercised end-to-end).
 - `pnpm audit --audit-level high` reports no known vulnerabilities.
 - Final correctness, TypeScript, and security reviews found no remaining critical or high findings.
 
 ### Partially implemented
 
-- Deterministic conflict analysis handles independent, likely-compatible, stale-base, critical-path, delete-vs-modify, semantic-overlap, and interface-impact classification, plus basic Git three-way analysis. Hunk overlap is computed end-to-end from a real `git diff --no-index` patch generated at capture time (`packages/git`'s `unifiedDiff`, wired into `LocalDaemon.capture()`), not a hardcoded flag. Dependency impact is a textual, grep-based approximation (direct dependents via `findSymbolReferences`, extended one shallow hop to transitive dependents), not an accurate import/AST dependency graph, and the service's `operation_dependencies` table remains unused. `conflict_artifact` persists inputs/candidates for every approval-requiring classification and `crosscode proposals diff <operation-id>` exposes it live, but there is still no CLI/HTTP route that reads the persisted `conflict_artifact` rows back directly.
-- Validation runs committed profiles locally and binds results to an exact tree. Validation policy enforcement before publish and shared validation reporting are incomplete.
+- Deterministic conflict analysis handles independent, likely-compatible, stale-base, critical-path, delete-vs-modify, semantic-overlap, and interface-impact classification, plus basic Git three-way analysis. Hunk overlap is computed end-to-end from a real `git diff --no-index` patch generated at capture time (`packages/git`'s `unifiedDiff`, wired into `LocalDaemon.capture()`), not a hardcoded flag. Dependency-impact resolution for `.ts`/`.tsx` files now uses a real TypeScript AST import graph (`packages/git/src/typescript-graph.ts`), with the original textual/grep-based `findSymbolReferences` search preserved as a fallback for non-TypeScript files; see Milestone C for the AST approach's precise scope and limitations. The service's `operation_dependencies` table remains unused. `conflict_artifact` persists inputs/candidates for every approval-requiring classification, `crosscode proposals diff <operation-id>` exposes it live, and `crosscode proposals artifacts <operation-id>` now reads the persisted historical rows back directly.
+- Validation runs committed profiles locally, binds results to an exact tree, and now gates publish (Milestone D is DONE). Still incomplete: the `.crosscode/config.yaml` `policy.autoApplyRisk` field (section 18) is parsed but not read or enforced anywhere in the daemon, and there is no shared/service-side validation status reporting across replicas (each replica only knows its own local validation results).
 
 ### Not implemented
 
 - A manual, human click-through of the VS Code/Cursor extension inside an interactive VS Code window (it is built, packaged, unit-tested, and now automatically verified end-to-end inside a real, headless VS Code extension host per the Phase 5 note below, but no human has clicked through it interactively in this environment).
 - A real external AI provider behind the semantic-review interface (only a mock reviewer test double exists; see Phase 6).
-- Full three-participant end-to-end acceptance fixture.
+- A single combined fixture driving an unwrapped editor, an MCP client, and the VS Code extension together in one workspace (each integration is proven individually; see Milestone E).
+- A fixture exercising an actual `git rebase` or `git worktree add`/`git pull` by name against a running daemon (branch switches, hard resets, and in-progress merges are covered, and `discoverRepository` already detects a rebase-in-progress via `rebase-merge`/`rebase-apply`, but that specific path is unexercised; see section 22).
+- Enforcement of the `.crosscode/config.yaml` `policy.autoApplyRisk` field, and shared/service-side validation status reporting across replicas.
 
 ### Known foundation debt
 
@@ -53,7 +55,7 @@ Current verification baseline:
 
 ### Recommended next gate
 
-Deterministic conflict/risk classification (hunk overlap, delete-vs-modify, interface impact, AST-based TypeScript dependency-impact with a textual fallback) is now complete and fixture-tested; see Milestone C in section 24. Milestone B is now complete: B1's durable authenticated HTTP/reconnect vertical, B2's live WebSocket presence/proposal fan-out, live task/claim/handoff/intent sync, and durable session summaries for disconnected replicas are all implemented and confirmed against a real PostgreSQL database. Implement next: shared validation status and validation policy enforcement before publish (see Milestone C's validation gap above).
+Milestones A through E are all now COMPLETE, each confirmed by real fixtures rather than description: durable local daemon (A), authenticated HTTP/WebSocket sync including live task/claim/handoff/intent fan-out and durable session summaries confirmed against a real PostgreSQL database (B), deterministic conflict/risk classification including an AST-based TypeScript dependency graph and a direct conflict-artifact read route (C), validation-gated publish (D), and standards-compliant MCP plus an automatically-verified VS Code extension (E). What remains for a fuller product, in priority order: (1) enforce the `.crosscode/config.yaml` `policy.autoApplyRisk` field and add shared/service-side validation status reporting across replicas (see the validation gap above); (2) a real external AI-provider `SemanticReviewer` implementation behind the existing provider-neutral interface, once a provider and credentials are chosen (Phase 6); (3) the foundation-debt items below (discriminated `LocalEvent` union, `packages/test-fixtures`, `docs/protocol.md`/`docs/security.md`, a threat model, and revising `docs/architecture.md`); (4) an actual human interactive walkthrough of the VS Code extension, and a `git rebase`/`git worktree`/`git pull`-by-name fixture, to close the two remaining section 22 checkboxes.
 
 ## 1. Product definition
 
@@ -960,7 +962,7 @@ Implement team configuration parsing and publishing only after the integration p
 
 **Acceptance test:** accepted work in a fixture is validated and published as a normal commit on a test remote; unstaged unrelated files and the active branch remain unchanged.
 
-### Milestone E — production agent and editor entry points — PARTIAL (MCP server and CLI wrapper COMPLETE)
+### Milestone E — production agent and editor entry points — COMPLETE
 
 Keep the daemon as the correctness authority; integrations only add context.
 
