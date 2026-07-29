@@ -48,6 +48,8 @@ export class DaemonClient {
   createTask(input: { title: string; intent?: string; paths?: string[]; status?: Task["status"] }): Promise<Task> { return this.request("POST", "/v1/tasks", input); }
   createClaim(input: { taskId: string; kind: Claim["kind"]; target: string; mode: Claim["mode"]; expiresAt?: string }): Promise<Claim> { return this.request("POST", "/v1/claims", input); }
   claims(): Promise<Claim[]> { return this.request("GET", "/v1/claims"); }
+  releaseClaim(id: string): Promise<Claim> { return this.request("POST", `/v1/claims/${encodeURIComponent(id)}/release`, {}); }
+  updateTask(id: string, input: { title: string; intent?: string; paths?: string[]; status?: Task["status"] }): Promise<Task> { return this.request("POST", `/v1/tasks/${encodeURIComponent(id)}`, input); }
   operations(): Promise<StoredOperation[]> { return this.request("GET", "/v1/operations"); }
   analyze(id: string): Promise<{ operation: StoredOperation; analysis: string }> { return this.request("GET", `/v1/operations/${encodeURIComponent(id)}/analysis`); }
   diff(id: string): Promise<Array<{ path: string; base?: string; local?: string; proposed?: string; classification: string; risk: string; requiresApproval: boolean; dependents?: string[]; mergedCandidate?: string }>> { return this.request("GET", `/v1/operations/${encodeURIComponent(id)}/diff`); }

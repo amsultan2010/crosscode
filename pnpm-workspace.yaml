@@ -5,7 +5,11 @@ overrides:
   glob>minimatch: ^10.2.5
 onlyBuiltDependencies:
   - esbuild
+  - '@vscode/vsce-sign'
+  - keytar
 allowBuilds:
+  '@vscode/vsce-sign': true
   esbuild: true
+  keytar: true
 minimumReleaseAgeExclude:
   - '@modelcontextprotocol/sdk@1.30.0'
