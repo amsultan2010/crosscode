@@ -126,6 +126,17 @@ export async function findSymbolReferences(root: string, symbols: string[], excl
   return [...files].sort();
 }
 
+export async function unifiedDiff(before: string | undefined, after: string | undefined): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "crosscode-diff-"));
+  try {
+    const beforePath = join(directory, "before"); const afterPath = join(directory, "after");
+    await Promise.all([writeFile(beforePath, before ?? ""), writeFile(afterPath, after ?? "")]);
+    return await exec("git", ["diff", "--no-index", "--unified=0", "--no-color", "--", beforePath, afterPath])
+      .then(({ stdout }) => stdout)
+      .catch((error: { code?: number; stdout?: string }) => { if (error.code === 1) return error.stdout ?? ""; throw error; });
+  } finally { await rm(directory, { recursive: true, force: true }); }
+}
+
 export async function threeWayMerge(base: string, current: string, proposed: string): Promise<{ clean: boolean; content: string }> {
   const directory = await mkdtemp(join(tmpdir(), "crosscode-merge-"));
   try {

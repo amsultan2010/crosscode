@@ -5,9 +5,14 @@ import { basename, dirname, join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import chokidar, { type FSWatcher } from "chokidar";
-import { analyzeOperation, changedExportedSymbols, contentHash, hunksOverlap, looksLikeInterfaceChange, pathOverlaps, redactPath, transactionRisk, type OperationAnalysis } from "@crosscode/core";
-import { createCheckpoint, discoverRepository, findSymbolReferences, inspectCheckpoint, publishCommit, readRevisionFile, restoreCheckpointFile, safeRepositoryPath, snapshotWorktreeTree, threeWayMerge } from "@crosscode/git";
 import {
+  analyzeOperation, applyRiskSafetyGate, authorizeSemanticReview, buildSemanticReviewBundle, changedExportedSymbols, contentHash, exportedSymbolNames, hunksOverlap,
+  isReviewEligible, looksLikeInterfaceChange, pathOverlaps, redactPath, transactionRisk, validateSemanticReview,
+  type OperationAnalysis, type SemanticReviewer
+} from "@crosscode/core";
+import { createCheckpoint, discoverRepository, findSymbolReferences, inspectCheckpoint, publishCommit, readRevisionFile, restoreCheckpointFile, safeRepositoryPath, snapshotWorktreeTree, threeWayMerge, unifiedDiff } from "@crosscode/git";
+import {
+  acceptOperationRequestSchema,
   captureRequestSchema,
   changeTransactionSchema,
   checkpointInspectRequestSchema,
@@ -21,6 +26,7 @@ import {
   intentRequestSchema,
   intentSchema,
   publishRequestSchema,
+  semanticReviewRequestBodySchema,
   taskRequestSchema,
   taskSchema,
   validationRequestSchema,
@@ -45,9 +51,9 @@ import {
   type Validation
 } from "@crosscode/protocol";
 import type { CoordinationService } from "../../service/src/index.js";
-import { configuredExcludedPaths, matchesConfiguredExclusion, validationCommands } from "./config.js";
+import { configuredAiReviewPolicy, configuredExcludedPaths, matchesConfiguredExclusion, validationCommands } from "./config.js";
 import { DaemonStateStore, type CheckpointRecord, type ClaimOutboundRecord, type GitState, type HandoffOutboundRecord, type IntentOutboundRecord, type OutboundRecord, type TaskOutboundRecord } from "./state.js";
-import type { StoredOperation } from "./types.js";
+import type { SemanticReviewRecord, StoredOperation } from "./types.js";
 
 const exec = promisify(execFile);
 const now = () => new Date().toISOString();
@@ -69,7 +75,7 @@ function changesOverlap(left: ChangeTransaction["changes"][number], right: Chang
   if (left.kind === "delete" || right.kind === "delete") return true;
   return hunksOverlap(left.unifiedPatch, right.unifiedPatch);
 }
-export type DaemonOptions = { workspaceId: string; replicaId: string; actorId: string };
+export type DaemonOptions = { workspaceId: string; replicaId: string; actorId: string; reviewer?: SemanticReviewer };
 export type RemoteSyncTransport = {
   upload(record: OutboundRecord): Promise<import("../../service/src/index.js").RemoteOperation>;
   list(after: number): Promise<{ operations: import("../../service/src/index.js").RemoteOperation[]; nextCursor: number }>;
@@ -84,7 +90,7 @@ export type RemoteSyncTransport = {
 };
 
 export class LocalDaemon {
-  readonly tasks = new Map<string, Task>(); readonly claims = new Map<string, Claim>(); readonly operations = new Map<string, StoredOperation>(); readonly validations: Validation[] = []; readonly checkpoints: CheckpointRecord[] = []; readonly handoffs = new Map<string, Handoff>(); readonly intents = new Map<string, Intent>();
+  readonly tasks = new Map<string, Task>(); readonly claims = new Map<string, Claim>(); readonly operations = new Map<string, StoredOperation>(); readonly validations: Validation[] = []; readonly checkpoints: CheckpointRecord[] = []; readonly handoffs = new Map<string, Handoff>(); readonly intents = new Map<string, Intent>(); readonly semanticReviews = new Map<string, SemanticReviewRecord>();
   readonly outbound = new Map<string, OutboundRecord>();
   readonly taskOutbound = new Map<string, TaskOutboundRecord>(); readonly claimOutbound = new Map<string, ClaimOutboundRecord>();
   readonly handoffOutbound = new Map<string, HandoffOutboundRecord>(); readonly intentOutbound = new Map<string, IntentOutboundRecord>();
@@ -110,7 +116,7 @@ export class LocalDaemon {
       const risk = transactionRisk(transaction);
       daemon.operations.set(operation.id, { ...operation, transaction: { ...transaction, safety: { risk, requiresApproval: risk === "critical" } } });
     }
-    daemon.validations.push(...saved.validations); daemon.checkpoints.push(...saved.checkpoints); for (const handoff of saved.handoffs) daemon.handoffs.set(handoff.id, handoff); for (const intent of saved.intents) daemon.intents.set(intent.id, intent); for (const record of saved.outbound) daemon.outbound.set(record.event.id, record); for (const record of saved.taskOutbound) daemon.taskOutbound.set(record.event.id, record); for (const record of saved.claimOutbound) daemon.claimOutbound.set(record.event.id, record); for (const record of saved.handoffOutbound) daemon.handoffOutbound.set(record.event.id, record); for (const record of saved.intentOutbound) daemon.intentOutbound.set(record.event.id, record); daemon.remoteCursor = saved.remoteCursor; daemon.remoteTaskCursor = saved.remoteTaskCursor; daemon.remoteClaimCursor = saved.remoteClaimCursor; daemon.remoteHandoffCursor = saved.remoteHandoffCursor; daemon.remoteIntentCursor = saved.remoteIntentCursor; daemon.eventSequence = saved.eventSequence; daemon.materializationPaused = saved.materializationPaused; for (const [path, hash] of Object.entries(saved.capturedHashes)) daemon.capturedHashes.set(path, hash); await daemon.reconcileInterruptedMaterializations(); return daemon;
+    daemon.validations.push(...saved.validations); daemon.checkpoints.push(...saved.checkpoints); for (const handoff of saved.handoffs) daemon.handoffs.set(handoff.id, handoff); for (const intent of saved.intents) daemon.intents.set(intent.id, intent); for (const record of state.listSemanticReviews()) daemon.semanticReviews.set(record.id, record); for (const record of saved.outbound) daemon.outbound.set(record.event.id, record); for (const record of saved.taskOutbound) daemon.taskOutbound.set(record.event.id, record); for (const record of saved.claimOutbound) daemon.claimOutbound.set(record.event.id, record); for (const record of saved.handoffOutbound) daemon.handoffOutbound.set(record.event.id, record); for (const record of saved.intentOutbound) daemon.intentOutbound.set(record.event.id, record); daemon.remoteCursor = saved.remoteCursor; daemon.remoteTaskCursor = saved.remoteTaskCursor; daemon.remoteClaimCursor = saved.remoteClaimCursor; daemon.remoteHandoffCursor = saved.remoteHandoffCursor; daemon.remoteIntentCursor = saved.remoteIntentCursor; daemon.eventSequence = saved.eventSequence; daemon.materializationPaused = saved.materializationPaused; for (const [path, hash] of Object.entries(saved.capturedHashes)) daemon.capturedHashes.set(path, hash); await daemon.reconcileInterruptedMaterializations(); return daemon;
   }
   async status() { const repository = await discoverRepository(this.root); return { ...repository, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, tasks: this.tasks.size, claims: this.claims.size, proposals: [...this.operations.values()].filter((operation) => operation.status === "proposed").length, materializationPaused: this.materializationPaused, eventSequence: this.eventSequence, remoteCursor: this.remoteCursor, pendingOutbound: [...this.outbound.values()].filter((record) => record.acknowledgedServerSequence === undefined).length, service: { ...this.serviceStatus } }; }
   configureRemoteSync(): void { this.serviceStatus = { ...this.serviceStatus, configured: true }; }
@@ -271,7 +277,7 @@ export class LocalDaemon {
   }
 
   async capture(intent: string, service?: CoordinationService, kind: CaptureKind = "intent"): Promise<StoredOperation> {
-    let snapshot: { repository: Awaited<ReturnType<typeof discoverRepository>>; checkpoint: Awaited<ReturnType<LocalDaemon["checkpoint"]>>; changes: Array<{ path: string; kind: "add" | "modify" | "delete"; beforeHash?: string; afterHash?: string; afterContent?: string }> } | undefined;
+    let snapshot: { repository: Awaited<ReturnType<typeof discoverRepository>>; checkpoint: Awaited<ReturnType<LocalDaemon["checkpoint"]>>; changes: Array<{ path: string; kind: "add" | "modify" | "delete"; beforeHash?: string; afterHash?: string; afterContent?: string; unifiedPatch?: string }> } | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const repository = await discoverRepository(this.root); const names = await this.changedPaths();
       if (!names.length) throw new Error("No eligible working-tree changes to capture");
@@ -280,7 +286,8 @@ export class LocalDaemon {
         const beforeBytes = kind === "add" ? undefined : await readRevisionFile(this.root, "HEAD", path).catch(() => undefined);
         const before = beforeBytes === undefined ? undefined : decodeText(beforeBytes, path);
         const after = kind === "delete" ? undefined : await this.readWorkingText(path);
-        return { path, kind, beforeHash: before === undefined ? undefined : contentHash(before), afterHash: after === undefined ? undefined : contentHash(after), afterContent: after };
+        const unifiedPatch = await unifiedDiff(before, after);
+        return { path, kind, beforeHash: before === undefined ? undefined : contentHash(before), afterHash: after === undefined ? undefined : contentHash(after), afterContent: after, unifiedPatch };
       }));
       if (!(await this.snapshotIsStable(repository, changes))) continue;
       const checkpoint = await this.checkpoint(`Crosscode: ${intent}`);
@@ -462,14 +469,15 @@ export class LocalDaemon {
     });
     await this.persist("transaction.proposed", { proposals, remoteCursor: this.remoteCursor }); return proposals;
   }
-  async accept(id: string): Promise<StoredOperation> {
+  async accept(id: string, options: { reviewApprovals?: Record<string, string> } = {}): Promise<StoredOperation> {
+    const reviewApprovals = options.reviewApprovals ?? {};
     if (this.materializationPaused) throw new Error("Proposal application is paused while Git state is being re-analyzed");
     await this.refuseChangedGitState();
     const operation = this.operations.get(id); if (!operation || operation.status !== "proposed") throw new Error("Proposal was not found");
-    await this.assertApplicable(operation);
+    await this.assertApplicable(operation, reviewApprovals);
     const checkpoint = await this.checkpoint(`Before applying proposal ${id}`);
     await this.refuseChangedGitState();
-    await this.assertApplicable(operation);
+    await this.assertApplicable(operation, reviewApprovals);
     const prepared: Array<{ change: ChangeTransaction["changes"][number]; absolute: string; temporary?: string }> = [];
     try {
       for (const change of operation.transaction.changes) {
@@ -487,7 +495,7 @@ export class LocalDaemon {
       throw error;
     }
     await this.refuseChangedGitState();
-    await this.assertApplicable(operation);
+    await this.assertApplicable(operation, reviewApprovals);
     const applying = { ...operation, status: "applying" as const, materializationCheckpoint: checkpoint.ref };
     this.operations.set(id, applying);
     await this.persist("transaction.applying", applying);
@@ -495,7 +503,7 @@ export class LocalDaemon {
     try {
       for (const item of prepared) {
         await this.refuseChangedGitState();
-        await this.assertChangeApplicable(operation, item.change);
+        await this.assertChangeApplicable(operation, item.change, reviewApprovals);
         if (item.change.kind === "delete") await rm(item.absolute, { force: true });
         else await rename(item.temporary!, item.absolute);
         applied.push(item);
@@ -521,7 +529,7 @@ export class LocalDaemon {
       const result = await exec(command, { cwd: this.root, shell: true, timeout: 300_000, maxBuffer: 1024 * 1024 }).then(({ stdout, stderr }) => ({ exitCode: 0, output: `${stdout}${stderr}` })).catch((error: { code?: number | string; stdout?: string; stderr?: string; killed?: boolean }) => ({ exitCode: typeof error.code === "number" ? error.code : 1, output: `${error.stdout ?? ""}${error.stderr ?? ""}${error.killed ? "\nValidation timed out" : ""}` }));
       const afterTree = await snapshotWorktreeTree(this.root);
       const changedDuringValidation = afterTree !== checkpoint.tree;
-      const validation = { id: randomUUID(), profile, command, exitCode: changedDuringValidation && result.exitCode === 0 ? 1 : result.exitCode, output: this.redactValidationOutput(`${changedDuringValidation ? "Validation invalidated because the working tree changed during the command\n" : ""}${result.output}`), durationMs: Date.now() - started, tree: checkpoint.tree, createdAt: now() };
+      const validation = { id: randomUUID(), profile, command, exitCode: changedDuringValidation && result.exitCode === 0 ? 1 : result.exitCode, output: this.redactValidationOutput(`${changedDuringValidation ? "Validation invalidated because the working tree changed during the command\n" : ""}${result.output}`), durationMs: Date.now() - started, tree: checkpoint.tree, runnerId: this.options.actorId, createdAt: now() };
       this.validations.push(validation); output.push(validation);
     }
     await this.persist("validation.completed", output);
@@ -565,8 +573,26 @@ export class LocalDaemon {
       return this.capturedHashes.get(change.path) === currentHash ? undefined : change;
     }))).filter((change): change is { path: string; kind: "add" | "modify" | "delete" } => Boolean(change));
   }
-  private async assertApplicable(operation: StoredOperation): Promise<void> {
-    for (const change of operation.transaction.changes) await this.assertChangeApplicable(operation, change);
+  private async assertApplicable(operation: StoredOperation, reviewApprovals: Record<string, string> = {}): Promise<void> {
+    for (const change of operation.transaction.changes) await this.assertChangeApplicable(operation, change, reviewApprovals);
+  }
+
+  /**
+   * An accepted semantic review only lifts the approval gate for the exact base/local/proposed
+   * bytes it reviewed. Any drift since the review recomputes to a hash mismatch here, which
+   * falls back to the ordinary (still-blocked) approval path -- the review can never be reused
+   * against different content and can never materialize anything by itself.
+   */
+  private reviewSatisfiesApproval(operation: StoredOperation, change: ChangeTransaction["changes"][number], classification: string, beforeText: string | undefined, current: string | undefined, reviewApprovals: Record<string, string>): boolean {
+    const reviewId = reviewApprovals[change.path];
+    if (!reviewId) return false;
+    const record = this.semanticReviews.get(reviewId);
+    if (!record || record.operationId !== operation.id || record.path !== change.path || record.decision !== "accepted") return false;
+    if (record.deterministicClassification !== classification) return false;
+    const baseHash = beforeText === undefined ? undefined : contentHash(beforeText);
+    const localHash = current === undefined ? undefined : contentHash(current);
+    const proposedHash = change.afterContent === undefined ? undefined : contentHash(change.afterContent);
+    return record.baseHash === baseHash && record.localHash === localHash && record.proposedHash === proposedHash;
   }
   private async analyzeChange(operationId: string, change: ChangeTransaction["changes"][number]): Promise<{ analysis: OperationAnalysis; beforeText?: string; current?: string; mergedCandidate?: string }> {
     const current = await this.readWorkingText(change.path); const baseMatches = (current === undefined ? undefined : contentHash(current)) === change.beforeHash;
@@ -578,7 +604,9 @@ export class LocalDaemon {
     let dependents: string[] | undefined;
     if (semanticOverlap) {
       const changedSymbols = changedExportedSymbols(beforeText, change.afterContent);
-      dependents = changedSymbols.length ? await findSymbolReferences(this.root, changedSymbols, change.path) : [];
+      const direct = changedSymbols.length ? await findSymbolReferences(this.root, changedSymbols, change.path) : [];
+      const transitive = direct.length ? await this.findTransitiveDependents(direct, change.path) : [];
+      dependents = [...new Set([...direct, ...transitive])].sort();
     }
     let analysis = analyzeOperation({ path: change.path, baseMatches: change.kind === "add" ? current === undefined : baseMatches, overlaps, kind: change.kind, conflictingKind: conflicting?.kind, semanticOverlap, dependents });
     let mergedCandidate: string | undefined;
@@ -588,7 +616,7 @@ export class LocalDaemon {
     }
     return { analysis, beforeText, current, mergedCandidate };
   }
-  private async assertChangeApplicable(operation: StoredOperation, change: ChangeTransaction["changes"][number]): Promise<void> {
+  private async assertChangeApplicable(operation: StoredOperation, change: ChangeTransaction["changes"][number], reviewApprovals: Record<string, string> = {}): Promise<void> {
     await this.eligiblePath(change.path);
     assertChangeIntegrity(change);
     if (change.afterContent !== undefined) assertText(change.afterContent, change.path);
@@ -598,12 +626,26 @@ export class LocalDaemon {
       this.operations.set(operation.id, stamped);
       await this.persist("transaction.safety_updated", stamped);
     }
-    if (analysis.classification === "delete-vs-modify" || analysis.classification === "semantic-overlap" || analysis.classification === "stale-base" || analysis.classification === "stale-base-resolved") {
+    if (analysis.classification === "delete-vs-modify" || analysis.classification === "semantic-overlap" || analysis.classification === "interface-impact" || analysis.classification === "stale-base" || analysis.classification === "stale-base-resolved") {
       await this.persistConflictArtifact(operation.id, change.path, analysis.classification, beforeText, current, change.afterContent, analysis.dependents, mergedCandidate);
     }
     if (analysis.classification === "stale-base") { const conflicted = { ...this.operations.get(operation.id)!, status: "conflicted" as const }; this.operations.set(operation.id, conflicted); await this.persist("transaction.conflicted", conflicted); throw new Error("Proposal has a stale base; local work was not changed"); }
     if (analysis.classification === "stale-base-resolved") throw new Error("Proposal has a stale base; a three-way merge candidate was prepared and requires human approval");
+    if (analysis.requiresApproval && this.reviewSatisfiesApproval(operation, change, analysis.classification, beforeText, current, reviewApprovals)) return;
     if (analysis.requiresApproval) throw new Error("High-risk proposal requires local human approval policy");
+  }
+  private async findTransitiveDependents(direct: string[], excludePath: string): Promise<string[]> {
+    const visited = new Set([excludePath, ...direct]);
+    const transitive = new Set<string>();
+    for (const dependentPath of direct) {
+      const content = await this.readWorkingText(dependentPath).catch(() => undefined);
+      if (content === undefined) continue;
+      const symbols = exportedSymbolNames(content);
+      if (!symbols.length) continue;
+      const nextHop = await findSymbolReferences(this.root, symbols, dependentPath);
+      for (const found of nextHop) if (!visited.has(found)) { transitive.add(found); visited.add(found); }
+    }
+    return [...transitive];
   }
   private findConflictingChange(operationId: string, path: string): ChangeTransaction["changes"][number] | undefined {
     for (const candidate of this.operations.values()) {
@@ -624,6 +666,67 @@ export class LocalDaemon {
       return { path: change.path, base: beforeText, local: current, proposed: change.afterContent, classification: analysis.classification, risk: analysis.risk, requiresApproval: analysis.requiresApproval, dependents: analysis.dependents, mergedCandidate };
     }));
   }
+  /**
+   * Non-authoritative AI semantic review (BUILD_INSTRUCTIONS.md section 25). Only callable
+   * for the two classifications deterministic analysis already marks ambiguous
+   * ("likely-compatible" / "semantic-overlap"); everything else -- independent changes,
+   * stale bases, delete-vs-modify, and critical-path work -- is resolved deterministically
+   * or refused outright and never reaches a provider. This only ever writes an audit
+   * record; it can never materialize a file, Git ref, or publish by itself.
+   */
+  async requestSemanticReview(operationId: string, path: string, providerId: string): Promise<SemanticReviewRecord> {
+    if (!this.options.reviewer) throw new Error("No semantic reviewer is configured for this daemon");
+    const operation = this.operations.get(operationId);
+    if (!operation || operation.status !== "proposed") throw new Error("Proposal was not found");
+    const change = operation.transaction.changes.find((candidate) => candidate.path === path);
+    if (!change) throw new Error(`Proposal does not contain a change for ${path}`);
+    const { analysis, beforeText, current } = await this.analyzeChange(operationId, change);
+    if (!isReviewEligible(analysis.classification)) throw new Error(`Classification "${analysis.classification}" is not eligible for AI review`);
+    const risk = analysis.risk as "medium" | "high" | "critical";
+    const policy = await configuredAiReviewPolicy(this.root);
+    const authorization = authorizeSemanticReview(policy, providerId, analysis.classification);
+    if (!authorization.allowed) throw new Error(authorization.reason);
+    const excludedPaths = await configuredExcludedPaths(this.root);
+    const { request, redactions } = buildSemanticReviewBundle({
+      workspaceId: this.options.workspaceId,
+      operationId,
+      risk,
+      intents: operation.transaction.intent ? [operation.transaction.intent] : [],
+      validations: this.validations.slice(-5).map((validation) => ({ command: validation.command, exitCode: validation.exitCode, tree: validation.tree })),
+      files: [{ path, base: beforeText, local: current, proposed: change.afterContent }],
+      excludedPaths
+    });
+    const raw = await this.options.reviewer.review(request);
+    const response = applyRiskSafetyGate(validateSemanticReview(raw), risk);
+    const record: SemanticReviewRecord = {
+      id: randomUUID(), operationId, path, providerId, classification: response.classification, requestedRisk: risk,
+      deterministicClassification: analysis.classification, redactions,
+      baseHash: beforeText === undefined ? undefined : contentHash(beforeText),
+      localHash: current === undefined ? undefined : contentHash(current),
+      proposedHash: change.afterContent === undefined ? undefined : contentHash(change.afterContent),
+      response, decision: "pending", createdAt: now()
+    };
+    this.semanticReviews.set(record.id, record);
+    this.state.upsertSemanticReview(record);
+    await this.persist("semantic_review.requested", { id: record.id, operationId, path, providerId, classification: record.classification, requiresHumanApproval: response.requiresHumanApproval, redactions: record.redactions });
+    return record;
+  }
+
+  /** Recording a decision is audit-only: it never touches the filesystem or Git state. */
+  async resolveSemanticReview(reviewId: string, decision: "accepted" | "rejected"): Promise<SemanticReviewRecord> {
+    const record = this.semanticReviews.get(reviewId);
+    if (!record || record.decision !== "pending") throw new Error("Semantic review was not found");
+    const resolved: SemanticReviewRecord = { ...record, decision, decidedAt: now() };
+    this.semanticReviews.set(reviewId, resolved);
+    this.state.upsertSemanticReview(resolved);
+    await this.persist("semantic_review.resolved", { id: reviewId, decision });
+    return resolved;
+  }
+
+  listSemanticReviewsFor(operationId: string): SemanticReviewRecord[] {
+    return [...this.semanticReviews.values()].filter((record) => record.operationId === operationId);
+  }
+
   private async refuseChangedGitState(): Promise<void> {
     const transition = await this.observeGitTransition();
     if (transition.kind === "unchanged") return;
@@ -756,6 +859,18 @@ function operationId(pathname: string, action: "accept" | "reject" | "analysis" 
   try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid operation ID"); }
 }
 
+function reviewsCollectionId(pathname: string): string | undefined {
+  const match = pathname.match(/^\/v1\/operations\/([^/]+)\/reviews$/);
+  if (!match) return undefined;
+  try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid operation ID"); }
+}
+
+function reviewDecisionId(pathname: string, action: "accept" | "reject"): string | undefined {
+  const match = pathname.match(new RegExp(`^/v1/reviews/([^/]+)/${action}$`));
+  if (!match) return undefined;
+  try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid review ID"); }
+}
+
 function handoffRespondId(pathname: string): string | undefined {
   const match = pathname.match(/^\/v1\/handoffs\/([^/]+)\/respond$/);
   if (!match) return undefined;
@@ -792,6 +907,9 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
       const respondHandoffId = handoffRespondId(pathname);
       const updateTaskId = taskId(pathname);
       const releaseClaimId = claimReleaseId(pathname);
+      const reviewsOperationId = reviewsCollectionId(pathname);
+      const acceptReviewId = reviewDecisionId(pathname, "accept");
+      const rejectReviewId = reviewDecisionId(pathname, "reject");
       const result = await daemon.runExclusive(async () => {
         let status = 200;
         let data: unknown;
@@ -808,8 +926,12 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
         else if (method === "GET" && pathname === "/v1/claims") data = [...daemon.claims.values()];
         else if (method === "GET" && analysisId) data = { operation: daemon.operations.get(analysisId), analysis: await daemon.analyzeProposal(analysisId) };
         else if (method === "GET" && diffId) data = await daemon.diffProposal(diffId);
-        else if (method === "POST" && acceptId) data = await daemon.accept(acceptId);
+        else if (method === "POST" && acceptId) { const body = acceptOperationRequestSchema.parse(payload); data = await daemon.accept(acceptId, { reviewApprovals: body?.reviewApprovals }); }
         else if (method === "POST" && rejectId) data = await daemon.reject(rejectId);
+        else if (method === "GET" && reviewsOperationId) data = daemon.listSemanticReviewsFor(reviewsOperationId);
+        else if (method === "POST" && reviewsOperationId) { const body = semanticReviewRequestBodySchema.parse(payload); data = await daemon.requestSemanticReview(reviewsOperationId, body.path, body.providerId); status = 201; }
+        else if (method === "POST" && acceptReviewId) data = await daemon.resolveSemanticReview(acceptReviewId, "accepted");
+        else if (method === "POST" && rejectReviewId) data = await daemon.resolveSemanticReview(rejectReviewId, "rejected");
         else if (method === "POST" && pathname === "/v1/checkpoints") { data = await daemon.checkpoint(checkpointRequestSchema.parse(payload).message); status = 201; }
         else if (method === "POST" && pathname === "/v1/checkpoints/inspect") { const { ref } = checkpointInspectRequestSchema.parse(payload); data = await daemon.inspectCheckpoint(ref); }
         else if (method === "POST" && pathname === "/v1/checkpoints/restore") { const input = checkpointRestoreRequestSchema.parse(payload); await daemon.restoreCheckpointFile(input.ref, input.path); data = { restored: input.path }; }

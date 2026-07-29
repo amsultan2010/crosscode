@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Crosscode</title>
+  <meta name="description" content="Crosscode is a local-first coordination layer for developers and coding agents working in separate checkouts of the same Git repository." />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <nav>
+      <a class="brand" href="/">Crosscode</a>
+      <a href="/docs/index.html">Docs</a>
+      <a href="/docs/install.html">Install &amp; quickstart</a>
+      <a href="/docs/cli.html">CLI reference</a>
+      <a href="/docs/limitations.html">Limitations</a>
+    </nav>
+  </header>
+
+  <main>
+    <h1>Coordinate a Git repo across people and agents, without leaving Git.</h1>
+    <p class="subtitle">
+      Crosscode is a local-first coordination layer for developers and coding agents
+      working in separate checkouts of the same Git repository.
+    </p>
+
+    <blockquote>
+      Git remains the durable history and publishing layer. Crosscode prevents late
+      integration by coordinating intentions, claims, changes, tests, and conflicts
+      while people and agents work.
+    </blockquote>
+
+    <p>
+      Crosscode watches ordinary filesystem and Git activity in your checkout,
+      records stable edits as durable transactions, exchanges those transactions
+      through an authenticated coordination service, and presents remote work as
+      <strong>proposals</strong>. A remote proposal is never written into your checkout
+      until you explicitly accept it. Crosscode does not replace your editor, agent,
+      Git host, branches, worktrees, staging area, or normal commits.
+    </p>
+
+    <a class="cta" href="/docs/install.html">Read the install &amp; quickstart guide</a>
+    <a class="cta secondary" href="/docs/index.html">Browse the docs</a>
+
+    <h2>How it fits together</h2>
+    <p>
+      One durable daemon runs per Git checkout/worktree. Each daemon captures
+      settled local edits, keeps them in an append-only local SQLite log, and
+      syncs them through a shared PostgreSQL-backed coordination service so other
+      replicas can see them as reviewable proposals. See the
+      <a href="/docs/architecture.html">architecture page</a> for the full picture.
+    </p>
+
+    <h2>The safety model in one paragraph</h2>
+    <p>
+      The local filesystem is always authoritative for your own work. Remote
+      operations arrive as proposals and are never automatically applied. Every
+      materialization re-checks the local base and creates a checkpoint first.
+      Excluded paths, common secret files, symlink traversal, malformed payloads,
+      and unsupported binary transactions are rejected. If Crosscode is stopped or
+      removed, the repository remains an ordinary Git repository. Full detail on the
+      <a href="/docs/safety.html">safety model page</a>.
+    </p>
+
+    <h2>Where this stands today</h2>
+    <p>
+      This is a functionality-first, pre-1.0 project. There is no hosted or managed
+      version of the coordination service &mdash; you run it yourself with the included
+      Docker Compose configuration and a PostgreSQL 17 database. See
+      <a href="/docs/limitations.html">current limitations</a> for what is not built
+      yet, including WebSocket presence and the VS Code extension.
+    </p>
+  </main>
+
+  <footer class="site-footer">
+    Crosscode &mdash; local-first Git coordination. Documentation built from this repository's
+    README.md and BUILD_INSTRUCTIONS.md.
+  </footer>
+</body>
+</html>

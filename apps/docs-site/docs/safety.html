@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Safety model — Crosscode</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <nav>
+      <a class="brand" href="/">Crosscode</a>
+      <a href="/docs/index.html">Docs</a>
+      <a href="/docs/install.html">Install &amp; quickstart</a>
+      <a href="/docs/cli.html">CLI reference</a>
+      <a href="/docs/limitations.html">Limitations</a>
+    </nav>
+  </header>
+
+  <main>
+    <h1>Safety model</h1>
+
+    <h2>Four rules</h2>
+    <p>Crosscode follows four rules:</p>
+    <ol>
+      <li>The local filesystem remains authoritative for local work.</li>
+      <li>Remote operations arrive as proposals and are never automatically applied.</li>
+      <li>Every materialization checks the local base again and creates a checkpoint first.</li>
+      <li>Excluded paths, common secret files, symlink traversal, malformed payloads, and unsupported binary transactions are rejected.</li>
+    </ol>
+    <p>
+      If Crosscode is stopped or removed, the repository remains an ordinary
+      Git repository. Checkpoints live under
+      <code>refs/crosscode/checkpoints/...</code> and do not pollute normal
+      branch history.
+    </p>
+
+    <h2>Fundamental rules</h2>
+    <ol>
+      <li>The normal filesystem is always authoritative for a developer's local work.</li>
+      <li>Git objects and ordinary Git commits remain portable, inspectable, and sufficient to recover the project without Crosscode.</li>
+      <li>Crosscode must never silently overwrite local uncommitted work.</li>
+      <li>Claims are advisory, never hard locks.</li>
+      <li>Integrations add context and earlier warnings; lack of an integration must not break correctness.</li>
+      <li>Deterministic checks decide clear cases. AI only reviews ambiguity and never becomes the source of truth.</li>
+      <li>High-risk changes require explicit human approval by default.</li>
+    </ol>
+
+    <h2>Roles</h2>
+    <ul>
+      <li><strong>owner:</strong> workspace configuration, membership, publish policy, AI policy.</li>
+      <li><strong>member:</strong> tasks, claims, operations, checkpointing, proposal acceptance within policy.</li>
+      <li><strong>viewer:</strong> read-only presence/history/status.</li>
+    </ul>
+
+    <h2>Sensitive actions requiring explicit local approval</h2>
+    <ul>
+      <li>Applying a high/critical-risk operation.</li>
+      <li>Sending code to an external AI reviewer when not pre-approved by workspace policy.</li>
+      <li>Publishing Git commits or pushes.</li>
+      <li>Changing remotes, branch policy, or workspace membership.</li>
+    </ul>
+
+    <h2>Security baseline</h2>
+    <ul>
+      <li>Authenticate all service connections; use TLS for non-local traffic.</li>
+      <li>Use short-lived credentials and store local credentials in the OS keychain where possible.</li>
+      <li>Sign or bind operations to authenticated actor/replica identity.</li>
+      <li>Validate every API and WebSocket payload at runtime.</li>
+      <li>Rate-limit service endpoints and validate workspace authorization for every operation.</li>
+      <li>Redact configured secret files and ignored sensitive paths from logs, telemetry, diffs, AI review, and outbound events.</li>
+      <li>Record auditable security-relevant actions.</li>
+      <li>Never execute received shell commands. Validation commands come only from trusted local/team configuration and still run in controlled environments.</li>
+    </ul>
+
+    <p>
+      See <a href="/docs/limitations.html">current limitations</a> for where the
+      implementation has not yet caught up to this model &mdash; for example,
+      replica secrets currently use protected local Git-directory configuration
+      rather than OS-keychain integration.
+    </p>
+  </main>
+
+  <footer class="site-footer">
+    Crosscode &mdash; local-first Git coordination.
+  </footer>
+</body>
+</html>

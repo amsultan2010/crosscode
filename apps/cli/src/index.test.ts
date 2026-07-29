@@ -1,0 +1,33 @@
+import { describe, expect, it } from "vitest";
+import { runCli } from "./index.js";
+
+describe("crosscode run -- <tool>", () => {
+  it("returns the child's exit code on success", async () => {
+    const result = await runCli(["run", "--", "node", "-e", "process.exit(0)"]);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("passes through a nonzero exit code unchanged", async () => {
+    const result = await runCli(["run", "--", "node", "-e", "process.exit(7)"]);
+    expect(result.exitCode).toBe(7);
+  });
+
+  it("forwards argv exactly as given, including flags that look like CLI options", async () => {
+    const result = await runCli([
+      "run",
+      "--",
+      "node",
+      "-e",
+      "process.exit(process.argv[1] === '--json' && process.argv[2] === '--profile' ? 0 : 1)",
+      "--",
+      "--json",
+      "--profile"
+    ]);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("rejects when -- is missing or no command follows it", async () => {
+    await expect(runCli(["run"])).rejects.toThrow("Usage: crosscode run -- <command> [args]");
+    await expect(runCli(["run", "--"])).rejects.toThrow("Usage: crosscode run -- <command> [args]");
+  });
+});

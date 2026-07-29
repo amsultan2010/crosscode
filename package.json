@@ -11,7 +11,10 @@
     "daemon": "tsx apps/daemon/src/main.ts",
     "service": "tsx apps/service/src/main.ts",
     "service:migrate": "tsx apps/service/src/migrate.ts",
-    "service:provision": "tsx apps/service/src/provision-admin.ts"
+    "service:provision": "tsx apps/service/src/provision-admin.ts",
+    "docs:dev": "pnpm --filter @crosscode/docs-site dev",
+    "docs:build": "pnpm --filter @crosscode/docs-site build",
+    "docs:preview": "pnpm --filter @crosscode/docs-site preview"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

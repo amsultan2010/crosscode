@@ -2,7 +2,7 @@
 
 ## 0. Current implementation status
 
-Last updated: 2026-07-27.
+Last updated: 2026-07-28.
 
 Crosscode currently has a tested local safety core, but it is not yet a deployable multi-machine collaboration product. The daemon is the sole local authority; the CLI and current MCP-shaped entry point communicate through its authenticated loopback API.
 
@@ -18,33 +18,32 @@ Crosscode currently has a tested local safety core, but it is not yet a deployab
 - Built-in and committed path exclusions, symlink traversal protection, checkpoint-ref validation, critical-path risk recomputation, text-only transaction enforcement, and byte-preserving checkpoint restoration.
 - Same-HEAD reset detection through the HEAD reflog plus branch, HEAD, index, merge, rebase, cherry-pick, revert, and worktree observation.
 - HTTP-backed CLI commands for initialization, join metadata, status, tasks, path claims, checkpoints, proposals, accept/reject, configured validation, and command wrapping.
-- An MCP-shaped stdio tool mapping backed by the daemon HTTP client.
+- A standards-compliant MCP stdio server (`@modelcontextprotocol/sdk`) exposing all twelve section 13 coordination tools with JSON-Schema tool discovery, backed end-to-end by the daemon HTTP client, with documented Claude Code/Codex CLI/OpenCode configurations (`docs/mcp-clients.md`) and automated coverage for `crosscode run -- <tool>` exit-code/argument pass-through.
 - A real child-process fixture covering daemon exclusivity, authenticated readiness, offline edits, pending proposals, branch transitions, `SIGKILL`, restart recovery, checkpoint persistence, and graceful shutdown.
 - Milestone B1: a standalone PostgreSQL service with one-time enrollment, short-lived authenticated replica access, current-membership authorization, idempotent ordered operation ingest, cursor reconnect, audit records, and daemon polling from a durable SQLite outbox.
 - Milestone B2: an authenticated WebSocket gateway (`/v1/stream`) that broadcasts presence on connect/disconnect and fans out accepted operations live to subscribed replicas, plus a daemon-side live sync client with reconnect backoff that falls back to the existing 1s poll whenever the socket is unavailable, covered by unit tests. A real three-daemon/PostgreSQL fixture (`apps/daemon/src/live-coordination.integration.test.ts`) is written to verify live presence visibility across replicas, live proposal fan-out well within one poll interval, and lossless recovery through the poll fallback after a WebSocket outage; see the B2 acceptance note under Milestone B for its actual run status.
 - A VS Code/Cursor extension (`apps/vscode-extension`) implementing the Phase 5 MVP feature list as a thin daemon-HTTP client with no sync authority of its own: a status tree view, a tasks/claims tree view with create-task/claim-path/release-claim commands, a proposals tree view with normal `vscode.diff` review and confirm-gated accept/reject (extra confirmation copy for high/critical risk), a `FileDecorationProvider` badging claimed/proposed paths in the Explorer, and a validation view that runs a named committed profile on demand. It compiles (`tsc --noEmit`), bundles with esbuild, and packages with `vsce package` locally. See the Phase 5 status note below for what is not yet verified.
+- Phase 6 (partial): provider-neutral AI semantic review in `packages/core` (types, strict output schema, redaction/bundle construction, prompt-injection-resistant request construction, policy gates) wired into the daemon's proposal accept flow as a non-authoritative, dependency-injected reviewer with a `MockSemanticReviewer` test double; see the Phase 6 entry under section 20 for the exact scope and what's still outstanding.
 
 Current verification baseline:
 
 - TypeScript build passes.
-- 52 tests pass without a configured test database; 55 total once `CROSSCODE_TEST_DATABASE_URL` is set, adding the real-PostgreSQL B1 reconnect, service store, and B2 live-coordination fixtures.
+- Tests pass without a configured test database (see the actual current count from `pnpm test`); additional real-PostgreSQL B1 reconnect, service store, and B2 live-coordination fixtures run once `CROSSCODE_TEST_DATABASE_URL` is set.
 - Statement/function coverage were last measured with a real PostgreSQL database attached (87.87%/86.88%); this update was authored without one available and did not reverify those percentages.
-- Dependency audit reports no known vulnerabilities.
+- `pnpm audit --audit-level high` reports no known vulnerabilities.
 - Final correctness, TypeScript, and security reviews found no remaining critical or high findings.
 
 ### Partially implemented
 
 - The network coordination service implements the B1 durable HTTP path plus the B2 live WebSocket vertical: authenticated presence broadcast and live operation fan-out at `/v1/stream`, with graceful poll fallback. Durable session summaries for disconnected replicas and network synchronization of tasks/claims/handoffs remain outstanding.
-- Deterministic conflict analysis handles independent, stale-base, critical-path, and basic Git three-way analysis. Hunk overlap, delete-vs-modify records, interface impact, dependency graphs, and proposal diff artifacts are incomplete.
+- Deterministic conflict analysis handles independent, likely-compatible, stale-base, critical-path, delete-vs-modify, semantic-overlap, and interface-impact classification, plus basic Git three-way analysis. Hunk overlap is computed end-to-end from a real `git diff --no-index` patch generated at capture time (`packages/git`'s `unifiedDiff`, wired into `LocalDaemon.capture()`), not a hardcoded flag. Dependency impact is a textual, grep-based approximation (direct dependents via `findSymbolReferences`, extended one shallow hop to transitive dependents), not an accurate import/AST dependency graph, and the service's `operation_dependencies` table remains unused. `conflict_artifact` persists inputs/candidates for every approval-requiring classification and `crosscode proposals diff <operation-id>` exposes it live, but there is still no CLI/HTTP route that reads the persisted `conflict_artifact` rows back directly.
 - Validation runs committed profiles locally and binds results to an exact tree. Validation policy enforcement before publish and shared validation reporting are incomplete.
-- The MCP tool names exist, but the process is not yet a standards-compliant MCP server with initialization, tool discovery, JSON Schema declarations, and documented client configurations. Some coordination tools remain placeholders.
 
 ### Not implemented
 
 - Durable session summaries for disconnected replicas, and network synchronization of tasks/claims/intent/handoffs over the live channel.
-- Publish planning and safe ordinary Git commit/push workflow.
 - Manual verification of the VS Code/Cursor extension inside a real VS Code window (it is built, packaged, and unit-tested per the note above, but has not been run interactively in the VS Code UI in this environment).
-- Provider-neutral AI semantic review.
+- A real external AI provider behind the semantic-review interface (only a mock reviewer test double exists; see Phase 6).
 - Full three-participant end-to-end acceptance fixture.
 
 ### Known foundation debt
@@ -55,7 +54,7 @@ Current verification baseline:
 
 ### Recommended next gate
 
-Implement Phase 3 next: network-synced tasks, claims, intents, and handoffs; complete deterministic conflict/risk classification (hunk overlap, delete-vs-modify, interface impact, dependency graphs); and shared validation status. B1's durable authenticated HTTP/reconnect vertical and B2's live WebSocket presence/fan-out vertical are both complete.
+Deterministic conflict/risk classification (hunk overlap, delete-vs-modify, interface impact, shallow dependency-impact) is now complete and fixture-tested; see Milestone C in section 24. Implement next: network-synced tasks, claims, intents, and handoffs; and shared validation status. B1's durable authenticated HTTP/reconnect vertical and B2's live WebSocket presence/fan-out vertical are both complete.
 
 ## 1. Product definition
 
@@ -822,13 +821,13 @@ Implement in order. Do not begin later phases until the preceding acceptance cri
 
 **Exit criteria:** three fixture participants can see claims, receive overlap warnings, accept safe work, and attribute a validation result to the exact tree tested.
 
-### Phase 4 — MCP and tool adapters — PARTIAL
+### Phase 4 — MCP and tool adapters — COMPLETE
 
-- Implement MCP server and generic CLI wrapper.
-- Add Codex, Claude Code, and OpenCode configuration/documentation adapters built on the same MCP contract.
-- Normalize optional lifecycle events without making them necessary for sync.
+- [x] Implement MCP server and generic CLI wrapper.
+- [x] Add Codex, Claude Code, and OpenCode configuration/documentation adapters built on the same MCP contract.
+- [x] Normalize optional lifecycle events without making them necessary for sync (the CLI wrapper records session boundaries, process metadata, and exit codes without those events being required for daemon-level correctness).
 
-**Exit criteria:** an MCP-capable client can claim a task, declare intent, query overlap, and create a checkpoint; the same workspace still works with an unwrapped generic editor.
+**Exit criteria: met.** An MCP-capable client can claim a task, declare intent, query overlap, and create a checkpoint; the same workspace still works with an unwrapped generic editor.
 
 ### Phase 5 — VS Code/Cursor extension — MVP BUILT, NOT MANUALLY VERIFIED IN VS CODE
 
@@ -839,12 +838,13 @@ Implement in order. Do not begin later phases until the preceding acceptance cri
 
 **Exit criteria:** a VS Code/Cursor user can complete all common review/accept/reject actions without the terminal (built, not yet manually confirmed); disabling the extension does not disrupt daemon sync (true by construction — the extension is a client of the daemon's existing HTTP API and does not participate in sync itself, but this has not been exercised with the extension actually toggled on/off in a running VS Code instance).
 
-### Phase 6 — AI review and publishing — NOT STARTED
+### Phase 6 — AI review and publishing — PARTIAL
 
-- Add provider-agnostic semantic-review interface, strict structured output, redaction, audit, policy controls, and test gates.
-- Implement conservative publish workflow for accepted validated state.
+- Done: provider-neutral `SemanticReviewRequest`/`SemanticReview`/`SemanticReviewer` types and a strict runtime-validated response schema live in `packages/core` (`packages/core/src/semantic-review.ts`), with zero provider SDK in protocol/transaction code. A redaction-and-bundle-construction function rejects configured exclusions, `.env`/private-key/credential paths, and secret-pattern content, logging only hashes and reasons. Workspace policy (`externalAiReview: disabled|approved`, allowed-provider list, per-review local confirmation) is read from committed `.crosscode/config.yaml`. The daemon (`apps/daemon/src/index.ts`) only offers review for the two classifications deterministic analysis already marks ambiguous (`likely-compatible`, `semantic-overlap`); high/critical risk always forces `requiresHumanApproval`. A review only ever writes an immutable audit record (`semantic_review` table) — accepting it is itself audit-only, and materialization still runs through the existing checkpointed `accept()` path, which re-verifies base/local/proposed hashes against the approved review and refuses on any drift. Rejecting a review (or not approving one) leaves the working tree and Git state untouched. The reviewer is dependency-injected (`DaemonOptions.reviewer`); a `MockSemanticReviewer` test double in `packages/core` is the only implementation wired up. Unit/integration coverage: redaction, strict schema handling of malformed output, policy gates, prompt-injection-resistant request construction, human-rejection safety, and secrets never appearing in provider requests or audit logs (`packages/core/src/semantic-review.test.ts`, `apps/daemon/src/semantic-review.integration.test.ts`).
+- Done (Milestone D, prior work): conservative publish workflow for accepted validated state (`apps/daemon/src/index.ts` `publish()`, `apps/daemon/src/publish.integration.test.ts`).
+- Outstanding: no real external AI provider is integrated and no live network calls to one are made — no API keys are configured and none were authorized for this work; a concrete `SemanticReviewer` for a real vendor is a follow-up once a provider is chosen and credentials are available. The daemon does not yet auto-trigger a review at the moment deterministic analysis first classifies a transaction ambiguous; a review is requested on demand (CLI/editor UI wiring for that trigger is future work).
 
-**Exit criteria:** ambiguous changes receive a non-authoritative AI proposal, high-risk changes require approval, and publishing creates/pushes normal Git commits without force operations.
+**Exit criteria:** ambiguous changes receive a non-authoritative AI proposal, high-risk changes require approval, and publishing creates/pushes normal Git commits without force operations. Met for the mock-backed reviewer; a real provider integration remains to close out this phase fully.
 
 ### Phase 7 — later enhancements — NOT STARTED
 
@@ -881,8 +881,8 @@ Before calling the functional MVP complete, demonstrate all of the following wit
 - [ ] A user can keep using ordinary `git commit`, `git pull`, branches, worktrees, and rebase; Crosscode detects and safely reconciles state changes.
 - [x] Automatic checkpoints are recoverable and do not pollute normal branch history.
 - [ ] Offline edits persist and reconnect without duplicate events or blind overwrites.
-- [ ] High-risk paths and all AI-generated resolutions require explicit approval by default.
-- [ ] Repository secrets and excluded files never leave the machine through Crosscode events or AI review.
+- [x] High-risk paths and all AI-generated resolutions require explicit approval by default (mock-backed reviewer; no real provider is wired in yet).
+- [x] Repository secrets and excluded files never leave the machine through Crosscode events or AI review.
 - [ ] Accepted work can be published as standard Git commits to a normal remote.
 - [ ] Removing/turning off Crosscode leaves an ordinary functioning repository with all code still present.
 
@@ -933,37 +933,39 @@ Complete the deterministic analysis and materialization path before adding any a
 
 - [x] Compare per-file base content hashes before application and immediately before atomic rename.
 - [x] Use Git three-way merge for stale-base analysis; never build a custom text merge engine.
-- [ ] Complete classification for non-overlapping hunks, delete-vs-modify, interface, and dependency-impact changes. Independent, stale-base, and critical-path cases are implemented.
-- [ ] Preserve both inputs and candidate patches as explicit conflict-recovery/audit artifacts.
-- [ ] Add a proposal diff command. Checkpoint inspect/restore commands are implemented.
+- [x] Complete classification for non-overlapping hunks, delete-vs-modify, interface, and dependency-impact changes. Independent, stale-base, critical-path, delete-vs-modify, and semantic-overlap were already implemented. Hunk overlap is now computed end-to-end from a real `git diff --no-index` patch generated at capture time (`unifiedDiff` in `packages/git`, wired into `LocalDaemon.capture()`) instead of degrading to "always overlapping" whenever no patch was supplied. A distinct `interface-impact` classification now fires for an exported/public signature change with known dependents: direct dependents are found via textual symbol search (`findSymbolReferences`), extended one shallow hop to transitive dependents of those dependents. This remains a textual, grep-based approximation (case-sensitive substring search over tracked files), not an accurate import/AST dependency graph, and the service's `operation_dependencies` table is still unused.
+- [x] Preserve both inputs and candidate patches as explicit conflict-recovery/audit artifacts. The `conflict_artifact` SQLite table (base/local/proposed content, dependents, merged candidate) is persisted for every classification that requires approval: delete-vs-modify, semantic-overlap, interface-impact, stale-base, and stale-base-resolved. There is still no CLI/HTTP route that reads persisted `conflict_artifact` rows back directly; inspection goes through the live-recomputed `proposals diff` command below, not the stored historical record.
+- [x] Add a proposal diff command. `crosscode proposals diff <operation-id>` (CLI) → `client.diff` → `LocalDaemon.diffProposal` returns per-file base/local/proposed content plus classification, risk, requiresApproval, and dependents. Checkpoint inspect/restore commands are implemented.
 - [x] Require explicit acceptance before materialization and block locally classified high/critical work.
 - [x] Journal in-progress materialization and recover safely after crashes without overwriting newer developer edits.
 
 **Acceptance test:** a deterministic three-worktree fixture preserves all independent changes; same-file/same-symbol and delete-vs-modify cases leave files untouched and provide a recovery/proposal record.
 
-### Milestone D — validation and publish workflow — PARTIAL
+**Milestone C acceptance note:** every checklist item above is implemented and covered by fixture tests — `packages/core/src/index.test.ts` unit-tests the classification decision table including `interface-impact`; `packages/git/src/index.test.ts` covers `unifiedDiff`; `apps/daemon/src/index.test.ts` covers real capture-generated hunk overlap (both non-overlapping and overlapping cases, without any test manually setting the patch field), delete-vs-modify, stale-base, stale-base-resolved, and interface-impact with a direct-plus-transitive dependency chain, in each case also asserting the persisted `conflict_artifact` row. What has **not** been written is the single combined three-worktree acceptance fixture described above; existing coverage is per-behavior, two-daemon (sender/receiver) fixtures rather than one scenario exercising three participants together, so this milestone remains marked PARTIAL until that fixture exists.
+
+### Milestone D — validation and publish workflow — DONE
 
 Implement team configuration parsing and publishing only after the integration pipeline is reliable.
 
 - [x] Parse committed `.crosscode/config.yaml` and run only trusted configured commands.
-- [x] Record command, exit code, duration, bounded/redacted output, and exact tested tree. Runner identity is still missing.
-- [ ] Require passing applicable validation for the exact accepted tree before publish.
-- [ ] Implement `publish --branch <branch>` with explicit confirmation or explicit noninteractive `--yes` policy. It must create ordinary commits only from accepted state, never stage unrelated user work, force-push, reset, rebase, or alter remotes.
-- [ ] Add a dry-run publish plan explaining the commit tree and changed paths before any branch/ref update.
+- [x] Record command, exit code, duration, bounded/redacted output, exact tested tree, and runner identity (`runnerId`).
+- [x] Require passing applicable validation for the exact accepted tree before publish.
+- [x] Implement `publish --branch <branch>` with explicit confirmation or explicit noninteractive `--yes` policy. It must create ordinary commits only from accepted state, never stage unrelated user work, force-push, reset, rebase, or alter remotes.
+- [x] Add a dry-run publish plan explaining the commit tree and changed paths before any branch/ref update.
 
 **Acceptance test:** accepted work in a fixture is validated and published as a normal commit on a test remote; unstaged unrelated files and the active branch remain unchanged.
 
-### Milestone E — production agent and editor entry points — PARTIAL
+### Milestone E — production agent and editor entry points — PARTIAL (MCP server and CLI wrapper COMPLETE)
 
 Keep the daemon as the correctness authority; integrations only add context.
 
-- [ ] Make the current MCP-shaped stdio process a standards-compliant MCP transport backed by the daemon HTTP API, with initialization, tool discovery, JSON-schema inputs, and the tools listed in section 13.
-- [ ] Replace placeholder MCP coordination methods with persisted daemon/service operations.
-- [ ] Provide documented MCP configurations for Codex, Claude Code, and OpenCode.
-- [ ] Add automated coverage for `crosscode run -- <tool>` argument and exit-code pass-through; the wrapper implementation exists.
+- [x] Make the current MCP-shaped stdio process a standards-compliant MCP transport backed by the daemon HTTP API, with initialization, tool discovery, JSON-schema inputs, and the tools listed in section 13. `apps/mcp-server/src/index.ts` uses the official `@modelcontextprotocol/sdk` `Server`, implements `ListToolsRequestSchema`/`CallToolRequestSchema`, and generates JSON Schema input declarations from the same Zod request schemas the daemon HTTP API validates against (`zodToJsonSchema`).
+- [x] Replace placeholder MCP coordination methods with persisted daemon/service operations. All twelve tools from section 13 (`get_workspace_state` through `create_checkpoint`) call `DaemonClient` methods that hit the real daemon HTTP API (`/v1/status`, `/v1/tasks`, `/v1/claims`, `/v1/transactions`, `/v1/operations`, `/v1/handoffs`, `/v1/validate`, `/v1/checkpoints`); none are stubbed or echo fake data. Covered by `apps/mcp-server/src/index.test.ts`, including an end-to-end test that drives a real stdio `initialize`/`tools/list`/`tools/call` exchange against a real daemon.
+- [x] Provide documented MCP configurations for Codex, Claude Code, and OpenCode. See `docs/mcp-clients.md` for exact config file locations (`.mcp.json`, `~/.codex/config.toml`, `opencode.json`) per client; no additional auth/token setup is needed on the client side because the MCP server authenticates to the daemon itself via the local connection descriptor (`.git/crosscode/daemon.json`).
+- [x] Add automated coverage for `crosscode run -- <tool>` argument and exit-code pass-through; the wrapper implementation exists. Covered by `apps/cli/src/index.test.ts`, which asserts zero and nonzero child exit codes pass through unchanged, that arguments (including ones shaped like CLI flags) are forwarded to the child verbatim after `--`, and that a missing `--`/command is rejected.
 - [ ] Build the VS Code/Cursor extension last: status, tasks, claims, proposals, validation, diff review, and confirmation UI only. It must not contain sync authority.
 
-**Acceptance test:** an unwrapped editor, each MCP client, and the VS Code extension can collaborate in the same workspace; disabling any integration leaves daemon coordination intact.
+**Acceptance test:** an unwrapped editor, each MCP client, and the VS Code extension can collaborate in the same workspace; disabling any integration leaves daemon coordination intact. MCP server and CLI wrapper acceptance are proven by the automated tests above; the VS Code/Cursor extension remains not started, so the full multi-integration acceptance test is not yet run.
 
 ## 25. AI-assisted file review and semantic-conflict design
 

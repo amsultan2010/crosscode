@@ -220,7 +220,7 @@ export const cursorResponseSchema = z.object({
 }).strict();
 export type CursorResponse = z.infer<typeof cursorResponseSchema>;
 
-export const validationSchema = z.object({ id: z.string(), profile: z.string(), command: z.string(), exitCode: z.number().int(), durationMs: z.number().nonnegative(), tree: z.string().optional(), output: z.string(), createdAt: z.string().datetime() });
+export const validationSchema = z.object({ id: z.string(), profile: z.string(), command: z.string(), exitCode: z.number().int(), durationMs: z.number().nonnegative(), tree: z.string().optional(), output: z.string(), runnerId: z.string(), createdAt: z.string().datetime() });
 export type Validation = z.infer<typeof validationSchema>;
 
 export const taskRequestSchema = z.object({
@@ -448,6 +448,17 @@ export const wsSubscribeAckSchema = z.object({
   cursor: z.number().int().nonnegative()
 }).strict();
 export type WsSubscribeAck = z.infer<typeof wsSubscribeAckSchema>;
+
+export const semanticReviewRequestBodySchema = z.object({
+  path: z.string().min(1).max(2_000),
+  providerId: z.string().min(1).max(200)
+}).strict();
+export type SemanticReviewRequestBody = z.infer<typeof semanticReviewRequestBodySchema>;
+
+export const acceptOperationRequestSchema = z.object({
+  reviewApprovals: z.record(z.string().min(1).max(2_000), z.string().min(1)).optional()
+}).strict().optional();
+export type AcceptOperationRequest = z.infer<typeof acceptOperationRequestSchema>;
 
 export const wsErrorMessageSchema = z.object({
   type: z.literal("error"),
