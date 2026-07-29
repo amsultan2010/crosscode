@@ -2,7 +2,7 @@
 
 ## 0. Current implementation status
 
-Last updated: 2026-07-27.
+Last updated: 2026-07-28.
 
 Crosscode currently has a tested local safety core, but it is not yet a deployable multi-machine collaboration product. The daemon is the sole local authority; the CLI and current MCP-shaped entry point communicate through its authenticated loopback API.
 
@@ -18,7 +18,7 @@ Crosscode currently has a tested local safety core, but it is not yet a deployab
 - Built-in and committed path exclusions, symlink traversal protection, checkpoint-ref validation, critical-path risk recomputation, text-only transaction enforcement, and byte-preserving checkpoint restoration.
 - Same-HEAD reset detection through the HEAD reflog plus branch, HEAD, index, merge, rebase, cherry-pick, revert, and worktree observation.
 - HTTP-backed CLI commands for initialization, join metadata, status, tasks, path claims, checkpoints, proposals, accept/reject, configured validation, and command wrapping.
-- An MCP-shaped stdio tool mapping backed by the daemon HTTP client.
+- A standards-compliant MCP stdio server (`@modelcontextprotocol/sdk`) exposing all twelve section 13 coordination tools with JSON-Schema tool discovery, backed end-to-end by the daemon HTTP client, with documented Claude Code/Codex CLI/OpenCode configurations (`docs/mcp-clients.md`) and automated coverage for `crosscode run -- <tool>` exit-code/argument pass-through.
 - A real child-process fixture covering daemon exclusivity, authenticated readiness, offline edits, pending proposals, branch transitions, `SIGKILL`, restart recovery, checkpoint persistence, and graceful shutdown.
 - Milestone B1: a standalone PostgreSQL service with one-time enrollment, short-lived authenticated replica access, current-membership authorization, idempotent ordered operation ingest, cursor reconnect, audit records, and daemon polling from a durable SQLite outbox.
 - Milestone B2: an authenticated WebSocket gateway (`/v1/stream`) that broadcasts presence on connect/disconnect and fans out accepted operations live to subscribed replicas, plus a daemon-side live sync client with reconnect backoff that falls back to the existing 1s poll whenever the socket is unavailable, covered by unit tests. A real three-daemon/PostgreSQL fixture (`apps/daemon/src/live-coordination.integration.test.ts`) is written to verify live presence visibility across replicas, live proposal fan-out well within one poll interval, and lossless recovery through the poll fallback after a WebSocket outage; see the B2 acceptance note under Milestone B for its actual run status.
@@ -26,7 +26,7 @@ Crosscode currently has a tested local safety core, but it is not yet a deployab
 Current verification baseline:
 
 - TypeScript build passes.
-- 52 tests pass without a configured test database; 55 total once `CROSSCODE_TEST_DATABASE_URL` is set, adding the real-PostgreSQL B1 reconnect, service store, and B2 live-coordination fixtures.
+- 84 tests pass without a configured test database (adding CLI `run` argument/exit-code coverage); more total once `CROSSCODE_TEST_DATABASE_URL` is set, adding the real-PostgreSQL B1 reconnect, service store, and B2 live-coordination fixtures.
 - Statement/function coverage were last measured with a real PostgreSQL database attached (87.87%/86.88%); this update was authored without one available and did not reverify those percentages.
 - Dependency audit reports no known vulnerabilities.
 - Final correctness, TypeScript, and security reviews found no remaining critical or high findings.
@@ -36,7 +36,6 @@ Current verification baseline:
 - The network coordination service implements the B1 durable HTTP path plus the B2 live WebSocket vertical: authenticated presence broadcast and live operation fan-out at `/v1/stream`, with graceful poll fallback. Durable session summaries for disconnected replicas and network synchronization of tasks/claims/handoffs remain outstanding.
 - Deterministic conflict analysis handles independent, stale-base, critical-path, and basic Git three-way analysis. Hunk overlap, delete-vs-modify records, interface impact, dependency graphs, and proposal diff artifacts are incomplete.
 - Validation runs committed profiles locally and binds results to an exact tree. Validation policy enforcement before publish and shared validation reporting are incomplete.
-- The MCP tool names exist, but the process is not yet a standards-compliant MCP server with initialization, tool discovery, JSON Schema declarations, and documented client configurations. Some coordination tools remain placeholders.
 
 ### Not implemented
 
@@ -821,13 +820,13 @@ Implement in order. Do not begin later phases until the preceding acceptance cri
 
 **Exit criteria:** three fixture participants can see claims, receive overlap warnings, accept safe work, and attribute a validation result to the exact tree tested.
 
-### Phase 4 — MCP and tool adapters — PARTIAL
+### Phase 4 — MCP and tool adapters — COMPLETE
 
-- Implement MCP server and generic CLI wrapper.
-- Add Codex, Claude Code, and OpenCode configuration/documentation adapters built on the same MCP contract.
-- Normalize optional lifecycle events without making them necessary for sync.
+- [x] Implement MCP server and generic CLI wrapper.
+- [x] Add Codex, Claude Code, and OpenCode configuration/documentation adapters built on the same MCP contract.
+- [x] Normalize optional lifecycle events without making them necessary for sync (the CLI wrapper records session boundaries, process metadata, and exit codes without those events being required for daemon-level correctness).
 
-**Exit criteria:** an MCP-capable client can claim a task, declare intent, query overlap, and create a checkpoint; the same workspace still works with an unwrapped generic editor.
+**Exit criteria: met.** An MCP-capable client can claim a task, declare intent, query overlap, and create a checkpoint; the same workspace still works with an unwrapped generic editor.
 
 ### Phase 5 — VS Code/Cursor extension — NOT STARTED
 
@@ -950,17 +949,17 @@ Implement team configuration parsing and publishing only after the integration p
 
 **Acceptance test:** accepted work in a fixture is validated and published as a normal commit on a test remote; unstaged unrelated files and the active branch remain unchanged.
 
-### Milestone E — production agent and editor entry points — PARTIAL
+### Milestone E — production agent and editor entry points — PARTIAL (MCP server and CLI wrapper COMPLETE)
 
 Keep the daemon as the correctness authority; integrations only add context.
 
-- [ ] Make the current MCP-shaped stdio process a standards-compliant MCP transport backed by the daemon HTTP API, with initialization, tool discovery, JSON-schema inputs, and the tools listed in section 13.
-- [ ] Replace placeholder MCP coordination methods with persisted daemon/service operations.
-- [ ] Provide documented MCP configurations for Codex, Claude Code, and OpenCode.
-- [ ] Add automated coverage for `crosscode run -- <tool>` argument and exit-code pass-through; the wrapper implementation exists.
+- [x] Make the current MCP-shaped stdio process a standards-compliant MCP transport backed by the daemon HTTP API, with initialization, tool discovery, JSON-schema inputs, and the tools listed in section 13. `apps/mcp-server/src/index.ts` uses the official `@modelcontextprotocol/sdk` `Server`, implements `ListToolsRequestSchema`/`CallToolRequestSchema`, and generates JSON Schema input declarations from the same Zod request schemas the daemon HTTP API validates against (`zodToJsonSchema`).
+- [x] Replace placeholder MCP coordination methods with persisted daemon/service operations. All twelve tools from section 13 (`get_workspace_state` through `create_checkpoint`) call `DaemonClient` methods that hit the real daemon HTTP API (`/v1/status`, `/v1/tasks`, `/v1/claims`, `/v1/transactions`, `/v1/operations`, `/v1/handoffs`, `/v1/validate`, `/v1/checkpoints`); none are stubbed or echo fake data. Covered by `apps/mcp-server/src/index.test.ts`, including an end-to-end test that drives a real stdio `initialize`/`tools/list`/`tools/call` exchange against a real daemon.
+- [x] Provide documented MCP configurations for Codex, Claude Code, and OpenCode. See `docs/mcp-clients.md` for exact config file locations (`.mcp.json`, `~/.codex/config.toml`, `opencode.json`) per client; no additional auth/token setup is needed on the client side because the MCP server authenticates to the daemon itself via the local connection descriptor (`.git/crosscode/daemon.json`).
+- [x] Add automated coverage for `crosscode run -- <tool>` argument and exit-code pass-through; the wrapper implementation exists. Covered by `apps/cli/src/index.test.ts`, which asserts zero and nonzero child exit codes pass through unchanged, that arguments (including ones shaped like CLI flags) are forwarded to the child verbatim after `--`, and that a missing `--`/command is rejected.
 - [ ] Build the VS Code/Cursor extension last: status, tasks, claims, proposals, validation, diff review, and confirmation UI only. It must not contain sync authority.
 
-**Acceptance test:** an unwrapped editor, each MCP client, and the VS Code extension can collaborate in the same workspace; disabling any integration leaves daemon coordination intact.
+**Acceptance test:** an unwrapped editor, each MCP client, and the VS Code extension can collaborate in the same workspace; disabling any integration leaves daemon coordination intact. MCP server and CLI wrapper acceptance are proven by the automated tests above; the VS Code/Cursor extension remains not started, so the full multi-integration acceptance test is not yet run.
 
 ## 25. AI-assisted file review and semantic-conflict design
 
