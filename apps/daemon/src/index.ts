@@ -10,7 +10,7 @@ import {
   isReviewEligible, looksLikeInterfaceChange, pathOverlaps, redactPath, transactionRisk, validateSemanticReview,
   type OperationAnalysis, type SemanticReviewer
 } from "@crosscode/core";
-import { createCheckpoint, discoverRepository, findSymbolReferences, inspectCheckpoint, publishCommit, readRevisionFile, restoreCheckpointFile, safeRepositoryPath, snapshotWorktreeTree, threeWayMerge, unifiedDiff } from "@crosscode/git";
+import { createCheckpoint, discoverRepository, findAstDependentFiles, findSymbolReferences, inspectCheckpoint, publishCommit, readRevisionFile, restoreCheckpointFile, safeRepositoryPath, snapshotWorktreeTree, threeWayMerge, unifiedDiff } from "@crosscode/git";
 import {
   acceptOperationRequestSchema,
   captureRequestSchema,
@@ -52,7 +52,7 @@ import {
 } from "@crosscode/protocol";
 import type { CoordinationService } from "../../service/src/index.js";
 import { configuredAiReviewPolicy, configuredExcludedPaths, matchesConfiguredExclusion, validationCommands } from "./config.js";
-import { DaemonStateStore, type CheckpointRecord, type ClaimOutboundRecord, type GitState, type HandoffOutboundRecord, type IntentOutboundRecord, type OutboundRecord, type TaskOutboundRecord } from "./state.js";
+import { DaemonStateStore, type CheckpointRecord, type ClaimOutboundRecord, type ConflictArtifactRecord, type GitState, type HandoffOutboundRecord, type IntentOutboundRecord, type OutboundRecord, type TaskOutboundRecord } from "./state.js";
 import type { SemanticReviewRecord, StoredOperation } from "./types.js";
 
 const exec = promisify(execFile);
@@ -604,9 +604,14 @@ export class LocalDaemon {
     let dependents: string[] | undefined;
     if (semanticOverlap) {
       const changedSymbols = changedExportedSymbols(beforeText, change.afterContent);
-      const direct = changedSymbols.length ? await findSymbolReferences(this.root, changedSymbols, change.path) : [];
-      const transitive = direct.length ? await this.findTransitiveDependents(direct, change.path) : [];
-      dependents = [...new Set([...direct, ...transitive])].sort();
+      const astDependents = changedSymbols.length ? await findAstDependentFiles(this.root, changedSymbols, change.path) : undefined;
+      if (astDependents !== undefined) {
+        dependents = astDependents;
+      } else {
+        const direct = changedSymbols.length ? await findSymbolReferences(this.root, changedSymbols, change.path) : [];
+        const transitive = direct.length ? await this.findTransitiveDependents(direct, change.path) : [];
+        dependents = [...new Set([...direct, ...transitive])].sort();
+      }
     }
     let analysis = analyzeOperation({ path: change.path, baseMatches: change.kind === "add" ? current === undefined : baseMatches, overlaps, kind: change.kind, conflictingKind: conflicting?.kind, semanticOverlap, dependents });
     let mergedCandidate: string | undefined;
@@ -665,6 +670,16 @@ export class LocalDaemon {
       const { analysis, beforeText, current, mergedCandidate } = await this.analyzeChange(id, change);
       return { path: change.path, base: beforeText, local: current, proposed: change.afterContent, classification: analysis.classification, risk: analysis.risk, requiresApproval: analysis.requiresApproval, dependents: analysis.dependents, mergedCandidate };
     }));
+  }
+  /**
+   * Reads the persisted `conflict_artifact` rows for an operation directly, unlike
+   * `diffProposal`, which recomputes classification live. This is the historical
+   * record written at the time each classification required approval and does not
+   * change if the working tree or pending operations change afterward.
+   */
+  conflictArtifacts(operationId: string): ConflictArtifactRecord[] {
+    if (!this.operations.has(operationId)) throw new Error("Proposal was not found");
+    return this.state.listConflictArtifacts(operationId);
   }
   /**
    * Non-authoritative AI semantic review (BUILD_INSTRUCTIONS.md section 25). Only callable
@@ -853,7 +868,7 @@ async function readJsonBody(request: import("node:http").IncomingMessage): Promi
   });
 }
 
-function operationId(pathname: string, action: "accept" | "reject" | "analysis" | "diff"): string | undefined {
+function operationId(pathname: string, action: "accept" | "reject" | "analysis" | "diff" | "artifacts"): string | undefined {
   const match = pathname.match(new RegExp(`^/v1/operations/([^/]+)/${action}$`));
   if (!match) return undefined;
   try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid operation ID"); }
@@ -904,6 +919,7 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
       const rejectId = operationId(pathname, "reject");
       const analysisId = operationId(pathname, "analysis");
       const diffId = operationId(pathname, "diff");
+      const artifactsId = operationId(pathname, "artifacts");
       const respondHandoffId = handoffRespondId(pathname);
       const updateTaskId = taskId(pathname);
       const releaseClaimId = claimReleaseId(pathname);
@@ -926,6 +942,7 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
         else if (method === "GET" && pathname === "/v1/claims") data = [...daemon.claims.values()];
         else if (method === "GET" && analysisId) data = { operation: daemon.operations.get(analysisId), analysis: await daemon.analyzeProposal(analysisId) };
         else if (method === "GET" && diffId) data = await daemon.diffProposal(diffId);
+        else if (method === "GET" && artifactsId) data = daemon.conflictArtifacts(artifactsId);
         else if (method === "POST" && acceptId) { const body = acceptOperationRequestSchema.parse(payload); data = await daemon.accept(acceptId, { reviewApprovals: body?.reviewApprovals }); }
         else if (method === "POST" && rejectId) data = await daemon.reject(rejectId);
         else if (method === "GET" && reviewsOperationId) data = daemon.listSemanticReviewsFor(reviewsOperationId);

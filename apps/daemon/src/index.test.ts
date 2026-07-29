@@ -520,6 +520,34 @@ describe("local daemon coordination", () => {
     expect(rows).toEqual([{ classification: "interface-impact", dependents: JSON.stringify(["caller.ts", "consumer.ts"]) }]);
   });
 
+  it("reads back the persisted conflict_artifact rows for an operation directly, independent of live recomputation", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const lib = "export function greet(name: string): string { return name; }\n";
+    const caller = "import { greet } from \"./lib\";\nexport function callGreet(name: string): string { return greet(name); }\n";
+    for (const root of [senderRoot, receiverRoot]) {
+      await writeFile(join(root, "lib.ts"), lib);
+      await writeFile(join(root, "caller.ts"), caller);
+      await exec("git", ["-C", root, "add", "."]);
+      await exec("git", ["-C", root, "commit", "-qm", "seed"]);
+    }
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+
+    await writeFile(join(senderRoot, "lib.ts"), "export function greet(name: string, loud: boolean): string { return name; }\n");
+    const operation = await sender.capture("widen greet signature", service);
+    await receiver.sync(service);
+    await expect(receiver.accept(operation.id)).rejects.toThrow("requires local human approval");
+
+    expect(() => receiver.conflictArtifacts("nonexistent")).toThrow("Proposal was not found");
+    const artifacts = receiver.conflictArtifacts(operation.id);
+    expect(artifacts).toMatchObject([{ operationId: operation.id, path: "lib.ts", classification: "interface-impact", baseContent: lib, localContent: lib, proposedContent: "export function greet(name: string, loud: boolean): string { return name; }\n", dependents: ["caller.ts"] }]);
+
+    // Further local edits change what a live diffProposal would recompute, but the
+    // historical artifact row -- written at classification time -- does not change.
+    await writeFile(join(receiverRoot, "caller.ts"), "export const unrelated = 1;\n");
+    expect(receiver.conflictArtifacts(operation.id)).toEqual(artifacts);
+  });
+
   it("rejects publish when no validation for the profile has passed", async () => {
     const root = await repo();
     const daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });

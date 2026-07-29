@@ -111,7 +111,7 @@ describe("service HTTP boundary", () => {
       listHandoffs: async () => ({ items: [remoteHandoff], nextCursor: remoteHandoff.updatedAt }),
       upsertIntent: async () => remoteIntent,
       listIntents: async () => ({ items: [remoteIntent], nextCursor: remoteIntent.updatedAt }),
-      listActiveSessions: async () => [{ replicaId: claims.replicaId, actorId: claims.actorId, startedAt: "2026-01-01T00:00:00.000Z" }]
+      listPresence: async () => [{ replicaId: claims.replicaId, actorId: claims.actorId, status: "online", lastSeenAt: "2026-01-01T00:00:00.000Z", cursor: 0 }]
     } as unknown as PgStore;
     const base = await listen(store);
     const exchange = await post(base, "/v1/token", {
@@ -132,7 +132,10 @@ describe("service HTTP boundary", () => {
     expect((await intentList.json()) as any).toMatchObject({ ok: true, data: { intents: [{ intent: { id: "intent-1" } }] } });
 
     const presence = await fetch(`${base}/v1/presence`, { headers: { authorization: `Bearer ${accessToken}` } });
-    expect((await presence.json()) as any).toMatchObject({ ok: true, data: { sessions: [{ replicaId: claims.replicaId }] } });
+    expect((await presence.json()) as any).toMatchObject({
+      ok: true,
+      data: { sessions: [{ replicaId: claims.replicaId, status: "online", cursor: 0 }] }
+    });
   });
 
   it("enforces JSON bodies, body caps, authentication, and principal binding", async () => {

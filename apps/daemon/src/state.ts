@@ -238,6 +238,23 @@ export class DaemonStateStore {
       .run(record.id, record.operationId, record.path, record.classification, record.baseContent ?? null, record.localContent ?? null, record.proposedContent ?? null, record.dependents ? JSON.stringify(record.dependents) : null, record.mergedCandidate ?? null, record.createdAt);
   }
 
+  listConflictArtifacts(operationId: string): ConflictArtifactRecord[] {
+    const rows = this.database.prepare("SELECT id, operation_id, path, classification, base_content, local_content, proposed_content, dependents, merged_candidate, created_at FROM conflict_artifact WHERE operation_id = ? ORDER BY created_at, id")
+      .all(operationId) as Array<{ id: string; operation_id: string; path: string; classification: string; base_content: string | null; local_content: string | null; proposed_content: string | null; dependents: string | null; merged_candidate: string | null; created_at: string }>;
+    return rows.map((row) => ({
+      id: row.id,
+      operationId: row.operation_id,
+      path: row.path,
+      classification: row.classification,
+      baseContent: row.base_content ?? undefined,
+      localContent: row.local_content ?? undefined,
+      proposedContent: row.proposed_content ?? undefined,
+      dependents: row.dependents ? JSON.parse(row.dependents) as string[] : undefined,
+      mergedCandidate: row.merged_candidate ?? undefined,
+      createdAt: row.created_at
+    }));
+  }
+
   upsertSemanticReview(record: SemanticReviewRecord): void {
     this.database.prepare("INSERT INTO semantic_review (id, payload) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload")
       .run(record.id, JSON.stringify(record));

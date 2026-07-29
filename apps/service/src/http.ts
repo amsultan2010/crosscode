@@ -240,7 +240,7 @@ async function handleRequest(
   }
 
   if (method === "GET" && url.pathname === "/v1/presence") {
-    const sessions = await options.store.listActiveSessions(identity.workspaceId);
+    const sessions = await options.store.listPresence(identity.workspaceId);
     send(response, 200, { sessions });
     return;
   }
