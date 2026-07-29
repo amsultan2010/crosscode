@@ -486,13 +486,13 @@ describe("local daemon coordination", () => {
     const localRoot = await repo();
     const bareRemote = join(await mkdtemp(join(tmpdir(), "crosscode-bare-")), "origin.git");
     directories.push(dirname(bareRemote));
-    await exec("git", ["init", "-q", "--bare", bareRemote]);
+    await exec("git", ["init", "-q", "--bare", "-b", "main", bareRemote]);
     await exec("git", ["-C", localRoot, "remote", "add", "origin", bareRemote]);
     await exec("git", ["-C", localRoot, "push", "-q", "origin", "main"]);
 
     const upstreamClone = await mkdtemp(join(tmpdir(), "crosscode-upstream-"));
     directories.push(upstreamClone);
-    await exec("git", ["clone", "-q", bareRemote, upstreamClone]);
+    await exec("git", ["clone", "-q", "-b", "main", bareRemote, upstreamClone]);
     await exec("git", ["-C", upstreamClone, "config", "user.email", "test@example.com"]);
     await exec("git", ["-C", upstreamClone, "config", "user.name", "Test"]);
     await writeFile(join(upstreamClone, "a.txt"), "pulled-from-remote\n");
