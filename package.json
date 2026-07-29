@@ -9,6 +9,7 @@
     "test:watch": "vitest",
     "crosscode": "tsx apps/cli/src/index.ts",
     "daemon": "tsx apps/daemon/src/main.ts",
+    "mcp": "tsx apps/mcp-server/src/main.ts",
     "service": "tsx apps/service/src/main.ts",
     "service:migrate": "tsx apps/service/src/migrate.ts",
     "service:provision": "tsx apps/service/src/provision-admin.ts",

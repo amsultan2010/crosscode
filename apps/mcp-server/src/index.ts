@@ -15,6 +15,7 @@ import {
   validationRequestSchema
 } from "@crosscode/protocol";
 import { DaemonClient } from "../../daemon/src/client.js";
+import { ensureDaemonRunning } from "./bootstrap.js";
 
 const emptyInputSchema = z.object({}).strict();
 const claimTaskInputSchema = taskRequestSchema.pick({ title: true, paths: true });
@@ -115,7 +116,7 @@ export function buildMcpServer(client: DaemonClient): Server {
 }
 
 export async function serveMcp(directory = process.cwd()): Promise<void> {
-  const client = await DaemonClient.connect(directory);
+  const client = await ensureDaemonRunning(directory);
   const server = buildMcpServer(client);
   await server.connect(new StdioServerTransport());
 }

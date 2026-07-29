@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +17,7 @@ const exec = promisify(execFile);
 const directories: string[] = [];
 const daemons: RunningDaemon[] = [];
 const clients: Client[] = [];
+const spawnedDaemonPids: number[] = [];
 
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const tsxBin = join(repoRoot, "node_modules", ".bin", "tsx");
@@ -25,6 +26,7 @@ const mcpMain = join(repoRoot, "apps/mcp-server/src/main.ts");
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close()));
   await Promise.all(daemons.splice(0).map((daemon) => daemon.close()));
+  for (const pid of spawnedDaemonPids.splice(0)) { try { process.kill(pid, "SIGTERM"); } catch {} }
   await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
@@ -152,5 +154,32 @@ describe("MCP daemon boundary", () => {
     const listed = await client.callTool({ name: "list_tasks", arguments: {} });
     const tasks = JSON.parse((listed.content as Array<{ type: string; text: string }>)[0]!.text) as Array<{ id: string }>;
     expect(tasks.map((entry) => entry.id)).toContain(task.id);
+  }, 20_000);
+
+  it("auto-bootstraps identity and spawns its own daemon when neither exists yet, so a fresh checkout works with zero manual setup", async () => {
+    const root = await initRepo();
+    const connectionPath = await daemonConnectionPath(root);
+    await expect(readFile(connectionPath, "utf8")).rejects.toThrow();
+
+    const transport = new StdioClientTransport({ command: tsxBin, args: [mcpMain], cwd: root, stderr: "inherit" });
+    const client = new Client({ name: "crosscode-mcp-bootstrap-test-client", version: "0.1.0" });
+    clients.push(client);
+    await client.connect(transport);
+
+    const statusResult = await client.callTool({ name: "get_workspace_state", arguments: {} });
+    const status = JSON.parse((statusResult.content as Array<{ type: string; text: string }>)[0]!.text) as { root: string; branch?: string };
+    const expectedRoot = (await exec("git", ["-C", root, "rev-parse", "--show-toplevel"])).stdout.trim();
+    expect(status.root).toBe(expectedRoot);
+
+    // The MCP server spawned a real, independent daemon process (not one this test started)
+    // and it wrote its own connection descriptor -- confirm one now exists and track its pid
+    // so it can be torn down after the test.
+    const connection = daemonConnectionSchema.parse(JSON.parse(await readFile(connectionPath, "utf8")));
+    expect(connection.pid).not.toBe(process.pid);
+    spawnedDaemonPids.push(connection.pid);
+
+    const createdTask = await client.callTool({ name: "claim_task", arguments: { title: "Works without any manual init or daemon start" } });
+    const task = JSON.parse((createdTask.content as Array<{ type: string; text: string }>)[0]!.text) as { id: string; title: string };
+    expect(task.title).toBe("Works without any manual init or daemon start");
   }, 20_000);
 });
