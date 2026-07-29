@@ -5,8 +5,8 @@ import { basename, dirname, join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import chokidar, { type FSWatcher } from "chokidar";
-import { analyzeOperation, changedExportedSymbols, contentHash, hunksOverlap, looksLikeInterfaceChange, pathOverlaps, redactPath, transactionRisk, type OperationAnalysis } from "@crosscode/core";
-import { createCheckpoint, discoverRepository, findSymbolReferences, inspectCheckpoint, publishCommit, readRevisionFile, restoreCheckpointFile, safeRepositoryPath, snapshotWorktreeTree, threeWayMerge } from "@crosscode/git";
+import { analyzeOperation, changedExportedSymbols, contentHash, exportedSymbolNames, hunksOverlap, looksLikeInterfaceChange, pathOverlaps, redactPath, transactionRisk, type OperationAnalysis } from "@crosscode/core";
+import { createCheckpoint, discoverRepository, findSymbolReferences, inspectCheckpoint, publishCommit, readRevisionFile, restoreCheckpointFile, safeRepositoryPath, snapshotWorktreeTree, threeWayMerge, unifiedDiff } from "@crosscode/git";
 import {
   captureRequestSchema,
   changeTransactionSchema,
@@ -271,7 +271,7 @@ export class LocalDaemon {
   }
 
   async capture(intent: string, service?: CoordinationService, kind: CaptureKind = "intent"): Promise<StoredOperation> {
-    let snapshot: { repository: Awaited<ReturnType<typeof discoverRepository>>; checkpoint: Awaited<ReturnType<LocalDaemon["checkpoint"]>>; changes: Array<{ path: string; kind: "add" | "modify" | "delete"; beforeHash?: string; afterHash?: string; afterContent?: string }> } | undefined;
+    let snapshot: { repository: Awaited<ReturnType<typeof discoverRepository>>; checkpoint: Awaited<ReturnType<LocalDaemon["checkpoint"]>>; changes: Array<{ path: string; kind: "add" | "modify" | "delete"; beforeHash?: string; afterHash?: string; afterContent?: string; unifiedPatch?: string }> } | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const repository = await discoverRepository(this.root); const names = await this.changedPaths();
       if (!names.length) throw new Error("No eligible working-tree changes to capture");
@@ -280,7 +280,8 @@ export class LocalDaemon {
         const beforeBytes = kind === "add" ? undefined : await readRevisionFile(this.root, "HEAD", path).catch(() => undefined);
         const before = beforeBytes === undefined ? undefined : decodeText(beforeBytes, path);
         const after = kind === "delete" ? undefined : await this.readWorkingText(path);
-        return { path, kind, beforeHash: before === undefined ? undefined : contentHash(before), afterHash: after === undefined ? undefined : contentHash(after), afterContent: after };
+        const unifiedPatch = await unifiedDiff(before, after);
+        return { path, kind, beforeHash: before === undefined ? undefined : contentHash(before), afterHash: after === undefined ? undefined : contentHash(after), afterContent: after, unifiedPatch };
       }));
       if (!(await this.snapshotIsStable(repository, changes))) continue;
       const checkpoint = await this.checkpoint(`Crosscode: ${intent}`);
@@ -578,7 +579,9 @@ export class LocalDaemon {
     let dependents: string[] | undefined;
     if (semanticOverlap) {
       const changedSymbols = changedExportedSymbols(beforeText, change.afterContent);
-      dependents = changedSymbols.length ? await findSymbolReferences(this.root, changedSymbols, change.path) : [];
+      const direct = changedSymbols.length ? await findSymbolReferences(this.root, changedSymbols, change.path) : [];
+      const transitive = direct.length ? await this.findTransitiveDependents(direct, change.path) : [];
+      dependents = [...new Set([...direct, ...transitive])].sort();
     }
     let analysis = analyzeOperation({ path: change.path, baseMatches: change.kind === "add" ? current === undefined : baseMatches, overlaps, kind: change.kind, conflictingKind: conflicting?.kind, semanticOverlap, dependents });
     let mergedCandidate: string | undefined;
@@ -598,12 +601,25 @@ export class LocalDaemon {
       this.operations.set(operation.id, stamped);
       await this.persist("transaction.safety_updated", stamped);
     }
-    if (analysis.classification === "delete-vs-modify" || analysis.classification === "semantic-overlap" || analysis.classification === "stale-base" || analysis.classification === "stale-base-resolved") {
+    if (analysis.classification === "delete-vs-modify" || analysis.classification === "semantic-overlap" || analysis.classification === "interface-impact" || analysis.classification === "stale-base" || analysis.classification === "stale-base-resolved") {
       await this.persistConflictArtifact(operation.id, change.path, analysis.classification, beforeText, current, change.afterContent, analysis.dependents, mergedCandidate);
     }
     if (analysis.classification === "stale-base") { const conflicted = { ...this.operations.get(operation.id)!, status: "conflicted" as const }; this.operations.set(operation.id, conflicted); await this.persist("transaction.conflicted", conflicted); throw new Error("Proposal has a stale base; local work was not changed"); }
     if (analysis.classification === "stale-base-resolved") throw new Error("Proposal has a stale base; a three-way merge candidate was prepared and requires human approval");
     if (analysis.requiresApproval) throw new Error("High-risk proposal requires local human approval policy");
+  }
+  private async findTransitiveDependents(direct: string[], excludePath: string): Promise<string[]> {
+    const visited = new Set([excludePath, ...direct]);
+    const transitive = new Set<string>();
+    for (const dependentPath of direct) {
+      const content = await this.readWorkingText(dependentPath).catch(() => undefined);
+      if (content === undefined) continue;
+      const symbols = exportedSymbolNames(content);
+      if (!symbols.length) continue;
+      const nextHop = await findSymbolReferences(this.root, symbols, dependentPath);
+      for (const found of nextHop) if (!visited.has(found)) { transitive.add(found); visited.add(found); }
+    }
+    return [...transitive];
   }
   private findConflictingChange(operationId: string, path: string): ChangeTransaction["changes"][number] | undefined {
     for (const candidate of this.operations.values()) {

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { createCheckpoint, discoverRepository, findSymbolReferences, inspectCheckpoint, publishCommit, restoreCheckpointFile, threeWayMerge } from "./index.js";
+import { createCheckpoint, discoverRepository, findSymbolReferences, inspectCheckpoint, publishCommit, restoreCheckpointFile, threeWayMerge, unifiedDiff } from "./index.js";
 
 const exec = promisify(execFile);
 const directories: string[] = [];
@@ -60,6 +60,21 @@ describe("git safety", () => {
 
   it("uses Git three-way merge analysis without writing files", async () => {
     await expect(threeWayMerge("one\ntwo\nthree\n", "one-local\ntwo\nthree\n", "one\ntwo\nthree-remote\n")).resolves.toMatchObject({ clean: true, content: "one-local\ntwo\nthree-remote\n" });
+  });
+
+  it("produces a real unified diff with parseable hunk headers for changed line ranges", async () => {
+    const before = "line1\nline2\nline3\nline4\nline5\nline6\n";
+    const after = "line1\nline2\nline3\nline4\nLINE5\nLINE6\n";
+    const patch = await unifiedDiff(before, after);
+    expect(patch).toMatch(/^@@ -5,2 \+5,2 @@/m);
+    expect(patch).toContain("-line5");
+    expect(patch).toContain("+LINE5");
+  });
+
+  it("produces an empty diff for identical content and full-file diffs for add/delete", async () => {
+    await expect(unifiedDiff("same\n", "same\n")).resolves.toBe("");
+    await expect(unifiedDiff(undefined, "new\n")).resolves.toMatch(/^@@ -0,0 \+1 @@\n\+new/m);
+    await expect(unifiedDiff("gone\n", undefined)).resolves.toMatch(/^@@ -1 \+0,0 @@\n-gone/m);
   });
 
   it("finds other tracked files that reference a changed exported symbol", async () => {

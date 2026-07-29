@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ChangeTransaction } from "@crosscode/protocol";
 
-export type Classification = "independent" | "likely-compatible" | "delete-vs-modify" | "semantic-overlap" | "stale-base" | "stale-base-resolved" | "critical";
+export type Classification = "independent" | "likely-compatible" | "delete-vs-modify" | "semantic-overlap" | "interface-impact" | "stale-base" | "stale-base-resolved" | "critical";
 export type Risk = "low" | "medium" | "high" | "critical";
 export type OperationAnalysis = { classification: Classification; requiresApproval: boolean; risk: Risk; deletedSide?: "incoming" | "local"; dependents?: string[] };
 export type HunkRange = { start: number; length: number };
@@ -39,6 +39,7 @@ function exportedSymbolMap(source: string): Map<string, string> {
   }
   return map;
 }
+export function exportedSymbolNames(source: string): string[] { return [...exportedSymbolMap(source).keys()]; }
 export function changedExportedSymbols(before: string | undefined, after: string | undefined): string[] {
   const beforeMap = exportedSymbolMap(before ?? "");
   const afterMap = exportedSymbolMap(after ?? "");
@@ -58,6 +59,7 @@ export function riskForClassification(classification: Classification): Risk {
     case "critical": return "critical";
     case "independent": return "low";
     case "likely-compatible": return "medium";
+    case "interface-impact": return "high";
     default: return "high";
   }
 }
@@ -68,6 +70,7 @@ export function analyzeOperation(input: { path: string; baseMatches: boolean; ov
     if (input.overlaps && (input.kind === "delete" || input.conflictingKind === "delete") && input.kind !== input.conflictingKind) {
       return { classification: "delete-vs-modify", requiresApproval: true, deletedSide: input.kind === "delete" ? "incoming" : "local" };
     }
+    if (input.semanticOverlap && input.dependents !== undefined && input.dependents.length > 0) return { classification: "interface-impact", requiresApproval: true };
     if (input.overlaps && input.semanticOverlap) return { classification: "semantic-overlap", requiresApproval: true };
     return input.overlaps ? { classification: "likely-compatible", requiresApproval: true } : { classification: "independent", requiresApproval: false };
   };

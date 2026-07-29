@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { analyzeOperation, changedExportedSymbols, hunksOverlap, looksLikeInterfaceChange, pathOverlaps, redactPath, riskForClassification } from "./index.js";
+import { analyzeOperation, changedExportedSymbols, exportedSymbolNames, hunksOverlap, looksLikeInterfaceChange, pathOverlaps, redactPath, riskForClassification } from "./index.js";
 
 describe("core safety rules", () => {
   it("detects path overlap and secret paths", () => {
@@ -54,5 +54,17 @@ describe("core safety rules", () => {
     expect(changedExportedSymbols("export function greet(): void {}\nexport const stable = 1;", "export function greet(): void {}\nexport const stable = 1;")).toEqual([]);
     expect(changedExportedSymbols(undefined, "export function added(): void {}")).toEqual(["added"]);
     expect(changedExportedSymbols("export function removed(): void {}", undefined)).toEqual(["removed"]);
+  });
+
+  it("lists the names of every exported symbol in a source file", () => {
+    expect(exportedSymbolNames("export function greet(): void {}\nexport const stable = 1;\nfunction helper() {}")).toEqual(["greet", "stable"]);
+    expect(exportedSymbolNames("")).toEqual([]);
+  });
+
+  it("classifies a semantic export change with known dependents as interface-impact, distinct from semantic-overlap", () => {
+    expect(analyzeOperation({ path: "src/a.ts", baseMatches: true, overlaps: false, kind: "modify", semanticOverlap: true, dependents: ["src/b.ts"] })).toEqual({ classification: "interface-impact", requiresApproval: true, risk: "high", dependents: ["src/b.ts"] });
+    expect(analyzeOperation({ path: "src/a.ts", baseMatches: true, overlaps: true, kind: "modify", semanticOverlap: true, dependents: ["src/b.ts", "src/c.ts"] }).classification).toBe("interface-impact");
+    expect(analyzeOperation({ path: "src/a.ts", baseMatches: true, overlaps: true, kind: "modify", semanticOverlap: true, dependents: [] }).classification).toBe("semantic-overlap");
+    expect(riskForClassification("interface-impact")).toBe("high");
   });
 });

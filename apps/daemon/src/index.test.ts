@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { CoordinationService } from "../../service/src/index.js";
 import { contentHash } from "@crosscode/core";
+import { unifiedDiff } from "@crosscode/git";
 import { LocalDaemon } from "./index.js";
 
 const exec = promisify(execFile); const directories: string[] = [];
@@ -441,6 +442,82 @@ describe("local daemon coordination", () => {
 
     await expect(receiver.accept(operation.id)).rejects.toThrow("requires local human approval");
     expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe(base);
+  });
+
+  it("populates unifiedPatch with a real diff during capture, end-to-end, without any test manually setting the field", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const base = "line1\nline2\nline3\nline4\nline5\nline6\n";
+    await writeFile(join(senderRoot, "a.txt"), base); await exec("git", ["-C", senderRoot, "commit", "-aqm", "seed"]);
+    await writeFile(join(receiverRoot, "a.txt"), base); await exec("git", ["-C", receiverRoot, "commit", "-aqm", "seed"]);
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+
+    await writeFile(join(senderRoot, "a.txt"), "line1\nline2\nline3\nline4\nLINE5\nLINE6\n");
+    const operation = await sender.capture("edit bottom lines", service);
+    expect(operation.transaction.changes[0]!.unifiedPatch).toMatch(/^@@ -5,2 \+5,2 @@/m);
+    await receiver.sync(service);
+    expect(receiver.operations.get(operation.id)!.transaction.changes[0]!.unifiedPatch).toBe(operation.transaction.changes[0]!.unifiedPatch);
+
+    const nonOverlappingContent = "LINE1\nLINE2\nline3\nline4\nline5\nline6\n";
+    const nonOverlapping = { path: "a.txt", kind: "modify" as const, beforeHash: contentHash(base), afterHash: contentHash(nonOverlappingContent), afterContent: nonOverlappingContent, unifiedPatch: await unifiedDiff(base, nonOverlappingContent) };
+    const pendingLocal = { id: "fake-local-op", workspaceId: "w", senderReplicaId: "receiver", transaction: { id: "fake-local-op", base: { files: [] }, changes: [nonOverlapping], provenance: { source: "filesystem" as const, confidence: "known" as const }, safety: { risk: "low" as const, requiresApproval: false } }, sequence: 1, createdAt: new Date().toISOString(), status: "local" as const };
+    receiver.operations.set(pendingLocal.id, pendingLocal);
+
+    await receiver.accept(operation.id);
+    expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe("line1\nline2\nline3\nline4\nLINE5\nLINE6\n");
+  });
+
+  it("requires approval when real capture-generated diffs overlap the same hunk range, without manually set patches", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const base = "line1\nline2\nline3\nline4\nline5\nline6\n";
+    await writeFile(join(senderRoot, "a.txt"), base); await exec("git", ["-C", senderRoot, "commit", "-aqm", "seed"]);
+    await writeFile(join(receiverRoot, "a.txt"), base); await exec("git", ["-C", receiverRoot, "commit", "-aqm", "seed"]);
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+
+    await writeFile(join(senderRoot, "a.txt"), "line1\nline2\nline3\nline4\nLINE5\nLINE6\n");
+    const operation = await sender.capture("edit bottom lines", service);
+    await receiver.sync(service);
+    expect(receiver.operations.get(operation.id)!.transaction.changes[0]!.unifiedPatch).toMatch(/^@@ -5,2 \+5,2 @@/m);
+
+    const overlappingContent = "line1\nline2\nline3\nline4\nLINE5\nline6\n";
+    const overlapping = { path: "a.txt", kind: "modify" as const, beforeHash: contentHash(base), afterHash: contentHash(overlappingContent), afterContent: overlappingContent, unifiedPatch: await unifiedDiff(base, overlappingContent) };
+    const pendingLocal = { id: "fake-local-op", workspaceId: "w", senderReplicaId: "receiver", transaction: { id: "fake-local-op", base: { files: [] }, changes: [overlapping], provenance: { source: "filesystem" as const, confidence: "known" as const }, safety: { risk: "low" as const, requiresApproval: false } }, sequence: 1, createdAt: new Date().toISOString(), status: "local" as const };
+    receiver.operations.set(pendingLocal.id, pendingLocal);
+
+    await expect(receiver.accept(operation.id)).rejects.toThrow("requires local human approval");
+    expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe(base);
+  });
+
+  it("classifies an exported interface change with known dependents as interface-impact, including transitive dependents beyond the direct caller", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const lib = "export function greet(name: string): string { return name; }\n";
+    const caller = "import { greet } from \"./lib\";\nexport function callGreet(name: string): string { return greet(name); }\n";
+    const consumer = "import { callGreet } from \"./caller\";\ncallGreet(\"world\");\n";
+    for (const root of [senderRoot, receiverRoot]) {
+      await writeFile(join(root, "lib.ts"), lib);
+      await writeFile(join(root, "caller.ts"), caller);
+      await writeFile(join(root, "consumer.ts"), consumer);
+      await exec("git", ["-C", root, "add", "."]);
+      await exec("git", ["-C", root, "commit", "-qm", "seed"]);
+    }
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+
+    await writeFile(join(senderRoot, "lib.ts"), "export function greet(name: string, loud: boolean): string { return name; }\n");
+    const operation = await sender.capture("widen greet signature", service);
+    await receiver.sync(service);
+
+    const diff = await receiver.diffProposal(operation.id);
+    const libChange = diff.find((entry) => entry.path === "lib.ts");
+    expect(libChange).toMatchObject({ classification: "interface-impact", risk: "high", requiresApproval: true, dependents: ["caller.ts", "consumer.ts"] });
+
+    const statePath = join(receiverRoot, ".git", "crosscode", "state.sqlite");
+    await expect(receiver.accept(operation.id)).rejects.toThrow("requires local human approval");
+    const database = new DatabaseSync(statePath, { readOnly: true });
+    const rows = database.prepare("SELECT classification, dependents FROM conflict_artifact WHERE operation_id = ? AND path = ?").all(operation.id, "lib.ts") as Array<{ classification: string; dependents: string }>;
+    database.close();
+    expect(rows).toEqual([{ classification: "interface-impact", dependents: JSON.stringify(["caller.ts", "consumer.ts"]) }]);
   });
 
   it("rejects publish when no validation for the profile has passed", async () => {
