@@ -22,13 +22,14 @@ Crosscode currently has a tested local safety core, but it is not yet a deployab
 - A real child-process fixture covering daemon exclusivity, authenticated readiness, offline edits, pending proposals, branch transitions, `SIGKILL`, restart recovery, checkpoint persistence, and graceful shutdown.
 - Milestone B1: a standalone PostgreSQL service with one-time enrollment, short-lived authenticated replica access, current-membership authorization, idempotent ordered operation ingest, cursor reconnect, audit records, and daemon polling from a durable SQLite outbox.
 - Milestone B2: an authenticated WebSocket gateway (`/v1/stream`) that broadcasts presence on connect/disconnect and fans out accepted operations live to subscribed replicas, plus a daemon-side live sync client with reconnect backoff that falls back to the existing 1s poll whenever the socket is unavailable, covered by unit tests. A real three-daemon/PostgreSQL fixture (`apps/daemon/src/live-coordination.integration.test.ts`) is written to verify live presence visibility across replicas, live proposal fan-out well within one poll interval, and lossless recovery through the poll fallback after a WebSocket outage; see the B2 acceptance note under Milestone B for its actual run status.
+- Phase 6 (partial): provider-neutral AI semantic review in `packages/core` (types, strict output schema, redaction/bundle construction, prompt-injection-resistant request construction, policy gates) wired into the daemon's proposal accept flow as a non-authoritative, dependency-injected reviewer with a `MockSemanticReviewer` test double; see the Phase 6 entry under section 20 for the exact scope and what's still outstanding.
 
 Current verification baseline:
 
 - TypeScript build passes.
-- 84 tests pass without a configured test database (adding CLI `run` argument/exit-code coverage); more total once `CROSSCODE_TEST_DATABASE_URL` is set, adding the real-PostgreSQL B1 reconnect, service store, and B2 live-coordination fixtures.
+- Tests pass without a configured test database (see the actual current count from `pnpm test`); additional real-PostgreSQL B1 reconnect, service store, and B2 live-coordination fixtures run once `CROSSCODE_TEST_DATABASE_URL` is set.
 - Statement/function coverage were last measured with a real PostgreSQL database attached (87.87%/86.88%); this update was authored without one available and did not reverify those percentages.
-- Dependency audit reports no known vulnerabilities.
+- `pnpm audit --audit-level high` reports no known vulnerabilities.
 - Final correctness, TypeScript, and security reviews found no remaining critical or high findings.
 
 ### Partially implemented
@@ -40,9 +41,8 @@ Current verification baseline:
 ### Not implemented
 
 - Durable session summaries for disconnected replicas, and network synchronization of tasks/claims/intent/handoffs over the live channel.
-- Publish planning and safe ordinary Git commit/push workflow.
 - VS Code/Cursor extension.
-- Provider-neutral AI semantic review.
+- A real external AI provider behind the semantic-review interface (only a mock reviewer test double exists; see Phase 6).
 - Full three-participant end-to-end acceptance fixture.
 
 ### Known foundation debt
@@ -835,12 +835,13 @@ Implement in order. Do not begin later phases until the preceding acceptance cri
 
 **Exit criteria:** a VS Code/Cursor user can complete all common review/accept/reject actions without the terminal; disabling the extension does not disrupt daemon sync.
 
-### Phase 6 — AI review and publishing — NOT STARTED
+### Phase 6 — AI review and publishing — PARTIAL
 
-- Add provider-agnostic semantic-review interface, strict structured output, redaction, audit, policy controls, and test gates.
-- Implement conservative publish workflow for accepted validated state.
+- Done: provider-neutral `SemanticReviewRequest`/`SemanticReview`/`SemanticReviewer` types and a strict runtime-validated response schema live in `packages/core` (`packages/core/src/semantic-review.ts`), with zero provider SDK in protocol/transaction code. A redaction-and-bundle-construction function rejects configured exclusions, `.env`/private-key/credential paths, and secret-pattern content, logging only hashes and reasons. Workspace policy (`externalAiReview: disabled|approved`, allowed-provider list, per-review local confirmation) is read from committed `.crosscode/config.yaml`. The daemon (`apps/daemon/src/index.ts`) only offers review for the two classifications deterministic analysis already marks ambiguous (`likely-compatible`, `semantic-overlap`); high/critical risk always forces `requiresHumanApproval`. A review only ever writes an immutable audit record (`semantic_review` table) — accepting it is itself audit-only, and materialization still runs through the existing checkpointed `accept()` path, which re-verifies base/local/proposed hashes against the approved review and refuses on any drift. Rejecting a review (or not approving one) leaves the working tree and Git state untouched. The reviewer is dependency-injected (`DaemonOptions.reviewer`); a `MockSemanticReviewer` test double in `packages/core` is the only implementation wired up. Unit/integration coverage: redaction, strict schema handling of malformed output, policy gates, prompt-injection-resistant request construction, human-rejection safety, and secrets never appearing in provider requests or audit logs (`packages/core/src/semantic-review.test.ts`, `apps/daemon/src/semantic-review.integration.test.ts`).
+- Done (Milestone D, prior work): conservative publish workflow for accepted validated state (`apps/daemon/src/index.ts` `publish()`, `apps/daemon/src/publish.integration.test.ts`).
+- Outstanding: no real external AI provider is integrated and no live network calls to one are made — no API keys are configured and none were authorized for this work; a concrete `SemanticReviewer` for a real vendor is a follow-up once a provider is chosen and credentials are available. The daemon does not yet auto-trigger a review at the moment deterministic analysis first classifies a transaction ambiguous; a review is requested on demand (CLI/editor UI wiring for that trigger is future work).
 
-**Exit criteria:** ambiguous changes receive a non-authoritative AI proposal, high-risk changes require approval, and publishing creates/pushes normal Git commits without force operations.
+**Exit criteria:** ambiguous changes receive a non-authoritative AI proposal, high-risk changes require approval, and publishing creates/pushes normal Git commits without force operations. Met for the mock-backed reviewer; a real provider integration remains to close out this phase fully.
 
 ### Phase 7 — later enhancements — NOT STARTED
 
@@ -877,8 +878,8 @@ Before calling the functional MVP complete, demonstrate all of the following wit
 - [ ] A user can keep using ordinary `git commit`, `git pull`, branches, worktrees, and rebase; Crosscode detects and safely reconciles state changes.
 - [x] Automatic checkpoints are recoverable and do not pollute normal branch history.
 - [ ] Offline edits persist and reconnect without duplicate events or blind overwrites.
-- [ ] High-risk paths and all AI-generated resolutions require explicit approval by default.
-- [ ] Repository secrets and excluded files never leave the machine through Crosscode events or AI review.
+- [x] High-risk paths and all AI-generated resolutions require explicit approval by default (mock-backed reviewer; no real provider is wired in yet).
+- [x] Repository secrets and excluded files never leave the machine through Crosscode events or AI review.
 - [ ] Accepted work can be published as standard Git commits to a normal remote.
 - [ ] Removing/turning off Crosscode leaves an ordinary functioning repository with all code still present.
 

@@ -2,7 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import type { CaptureKind, Claim, Handoff, Intent, Task, Validation } from "@crosscode/protocol";
 import { daemonConnectionSchema, type DaemonConnection } from "@crosscode/protocol";
 import type { CheckpointRecord } from "./state.js";
-import type { StoredOperation } from "./types.js";
+import type { SemanticReviewRecord, StoredOperation } from "./types.js";
 import { daemonConnectionPath } from "./runtime.js";
 
 type Status = {
@@ -51,8 +51,12 @@ export class DaemonClient {
   operations(): Promise<StoredOperation[]> { return this.request("GET", "/v1/operations"); }
   analyze(id: string): Promise<{ operation: StoredOperation; analysis: string }> { return this.request("GET", `/v1/operations/${encodeURIComponent(id)}/analysis`); }
   diff(id: string): Promise<Array<{ path: string; base?: string; local?: string; proposed?: string; classification: string; risk: string; requiresApproval: boolean; dependents?: string[]; mergedCandidate?: string }>> { return this.request("GET", `/v1/operations/${encodeURIComponent(id)}/diff`); }
-  accept(id: string): Promise<StoredOperation> { return this.request("POST", `/v1/operations/${encodeURIComponent(id)}/accept`, {}); }
+  accept(id: string, options?: { reviewApprovals?: Record<string, string> }): Promise<StoredOperation> { return this.request("POST", `/v1/operations/${encodeURIComponent(id)}/accept`, options ?? {}); }
   reject(id: string): Promise<StoredOperation> { return this.request("POST", `/v1/operations/${encodeURIComponent(id)}/reject`, {}); }
+  requestSemanticReview(operationId: string, path: string, providerId: string): Promise<SemanticReviewRecord> { return this.request("POST", `/v1/operations/${encodeURIComponent(operationId)}/reviews`, { path, providerId }); }
+  semanticReviews(operationId: string): Promise<SemanticReviewRecord[]> { return this.request("GET", `/v1/operations/${encodeURIComponent(operationId)}/reviews`); }
+  acceptSemanticReview(reviewId: string): Promise<SemanticReviewRecord> { return this.request("POST", `/v1/reviews/${encodeURIComponent(reviewId)}/accept`, {}); }
+  rejectSemanticReview(reviewId: string): Promise<SemanticReviewRecord> { return this.request("POST", `/v1/reviews/${encodeURIComponent(reviewId)}/reject`, {}); }
   checkpoints(): Promise<CheckpointRecord[]> { return this.request("GET", "/v1/checkpoints"); }
   checkpoint(message?: string): Promise<{ ref: string; commit: string; tree: string }> { return this.request("POST", "/v1/checkpoints", message ? { message } : {}); }
   inspectCheckpoint(ref: string): Promise<{ ref: string; commit: string; tree: string; files: string[] }> { return this.request("POST", "/v1/checkpoints/inspect", { ref }); }
