@@ -2,7 +2,16 @@ import { readFile, readdir } from "node:fs/promises";
 import { posix } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import ts from "typescript";
+import type TS from "typescript";
+
+/**
+ * "typescript" is a large (~9.5 MB minified) compiler package. It is loaded
+ * lazily, on first actual use, so that consumers of this module (such as the
+ * VS Code extension, which imports @crosscode/git for discoverRepository but
+ * never calls findAstDependentFiles) do not pull the compiler into their
+ * bundle or process just by importing this file.
+ */
+async function loadTs(): Promise<typeof TS> { return (await import("typescript")).default; }
 
 const exec = promisify(execFile);
 
@@ -52,11 +61,11 @@ function resolveRelativeSpecifier(importerPath: string, specifier: string, track
 
 type ImportEdge = { targetFile: string; names: string[]; isNamespace: boolean };
 
-function parseImportEdges(sourceFile: ts.SourceFile, importerPath: string, trackedFiles: Set<string>, packages: Map<string, string>): ImportEdge[] {
+function parseImportEdges(ts: typeof TS, sourceFile: TS.SourceFile, importerPath: string, trackedFiles: Set<string>, packages: Map<string, string>): ImportEdge[] {
   const edges: ImportEdge[] = [];
   const resolveSpecifier = (specifier: string): string | undefined =>
     specifier.startsWith(".") ? resolveRelativeSpecifier(importerPath, specifier, trackedFiles) : packages.get(specifier);
-  const visit = (node: ts.Node): void => {
+  const visit = (node: TS.Node): void => {
     if (ts.isImportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
       const targetFile = resolveSpecifier(node.moduleSpecifier.text);
       if (targetFile) {
@@ -92,7 +101,7 @@ function parseImportEdges(sourceFile: ts.SourceFile, importerPath: string, track
   return edges;
 }
 
-function scriptKindFor(path: string): ts.ScriptKind {
+function scriptKindFor(ts: typeof TS, path: string): TS.ScriptKind {
   return path.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
 }
 
@@ -109,14 +118,15 @@ export async function findAstDependentFiles(root: string, symbols: string[], cha
     const files = await listTrackedTsFiles(root);
     const trackedFiles = new Set(files);
     if (!trackedFiles.has(changedPath)) return undefined;
+    const ts = await loadTs();
     const packages = await workspacePackageEntries(root);
     const importEdges = new Map<string, ImportEdge[]>();
     for (const file of files) {
       if (file === changedPath) continue;
       const content = await readFile(posix.join(root, file), "utf8").catch(() => undefined);
       if (content === undefined) continue;
-      const sourceFile = ts.createSourceFile(file, content, ts.ScriptTarget.Latest, true, scriptKindFor(file));
-      importEdges.set(file, parseImportEdges(sourceFile, file, trackedFiles, packages));
+      const sourceFile = ts.createSourceFile(file, content, ts.ScriptTarget.Latest, true, scriptKindFor(ts, file));
+      importEdges.set(file, parseImportEdges(ts, sourceFile, file, trackedFiles, packages));
     }
     const symbolSet = new Set(symbols);
     const visited = new Set<string>([changedPath]);
