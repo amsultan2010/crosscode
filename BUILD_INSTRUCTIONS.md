@@ -22,6 +22,7 @@ Crosscode currently has a tested local safety core, but it is not yet a deployab
 - A real child-process fixture covering daemon exclusivity, authenticated readiness, offline edits, pending proposals, branch transitions, `SIGKILL`, restart recovery, checkpoint persistence, and graceful shutdown.
 - Milestone B1: a standalone PostgreSQL service with one-time enrollment, short-lived authenticated replica access, current-membership authorization, idempotent ordered operation ingest, cursor reconnect, audit records, and daemon polling from a durable SQLite outbox.
 - Milestone B2: an authenticated WebSocket gateway (`/v1/stream`) that broadcasts presence on connect/disconnect and fans out accepted operations live to subscribed replicas, plus a daemon-side live sync client with reconnect backoff that falls back to the existing 1s poll whenever the socket is unavailable, covered by unit tests. A real three-daemon/PostgreSQL fixture (`apps/daemon/src/live-coordination.integration.test.ts`) is written to verify live presence visibility across replicas, live proposal fan-out well within one poll interval, and lossless recovery through the poll fallback after a WebSocket outage; see the B2 acceptance note under Milestone B for its actual run status.
+- A VS Code/Cursor extension (`apps/vscode-extension`) implementing the Phase 5 MVP feature list as a thin daemon-HTTP client with no sync authority of its own: a status tree view, a tasks/claims tree view with create-task/claim-path/release-claim commands, a proposals tree view with normal `vscode.diff` review and confirm-gated accept/reject (extra confirmation copy for high/critical risk), a `FileDecorationProvider` badging claimed/proposed paths in the Explorer, and a validation view that runs a named committed profile on demand. It compiles (`tsc --noEmit`), bundles with esbuild, and packages with `vsce package` locally. See the Phase 5 status note below for what is not yet verified.
 
 Current verification baseline:
 
@@ -42,7 +43,7 @@ Current verification baseline:
 
 - Durable session summaries for disconnected replicas, and network synchronization of tasks/claims/intent/handoffs over the live channel.
 - Publish planning and safe ordinary Git commit/push workflow.
-- VS Code/Cursor extension.
+- Manual verification of the VS Code/Cursor extension inside a real VS Code window (it is built, packaged, and unit-tested per the note above, but has not been run interactively in the VS Code UI in this environment).
 - Provider-neutral AI semantic review.
 - Full three-participant end-to-end acceptance fixture.
 
@@ -829,12 +830,14 @@ Implement in order. Do not begin later phases until the preceding acceptance cri
 
 **Exit criteria:** an MCP-capable client can claim a task, declare intent, query overlap, and create a checkpoint; the same workspace still works with an unwrapped generic editor.
 
-### Phase 5 — VS Code/Cursor extension — NOT STARTED
+### Phase 5 — VS Code/Cursor extension — MVP BUILT, NOT MANUALLY VERIFIED IN VS CODE
 
-- Build status, tasks/claims, proposal review, file decoration, and validation views.
-- Use normal diff/confirmation UI and the daemon API only.
+- `apps/vscode-extension` implements the five MVP views/actions from section 14: a status view (daemon/repo/service/outbox health, the same fields as `crosscode status --json`), a tasks/claims view with create-task, claim-path, and release-claim commands, a proposals view with per-file diffs opened through the normal `vscode.diff` editor and modal-confirmed accept/reject (with extra warning copy for high/critical risk operations), a `FileDecorationProvider` badging claimed (`C`) and proposed (`P`) paths in the Explorer, and a validation view that runs a named committed profile on demand and lists pass/fail results.
+- It contains no sync authority: every state-changing action calls an existing (or, for claim-release/task-update, newly exposed) method on `@crosscode/daemon`'s `DaemonClient` HTTP wrapper — it never writes files, never re-implements accept/reject, and degrades to a "disconnected" status when the daemon is unreachable rather than acting on stale/cached data.
+- Verified so far: `tsc --noEmit` passes with the extension's sources included, `pnpm --filter crosscode-vscode-extension build` bundles it with esbuild, and `vsce package --no-dependencies` produces a local `.vsix`. The daemon-API client wrapper (`src/client.ts`) has unit tests covering connection caching, reconnect-after-failure, and the accept/reject/validate/releaseClaim/proposals-filtering delegation.
+- Not yet done: interactive verification inside an actual VS Code/Cursor window (tree views, diff rendering, decorations, and command palette entries have not been exercised against a real running daemon in this environment), and no `packages/test-fixtures`-style end-to-end fixture drives the extension itself. Treat the manual walkthrough as outstanding before calling Phase 5 fully complete.
 
-**Exit criteria:** a VS Code/Cursor user can complete all common review/accept/reject actions without the terminal; disabling the extension does not disrupt daemon sync.
+**Exit criteria:** a VS Code/Cursor user can complete all common review/accept/reject actions without the terminal (built, not yet manually confirmed); disabling the extension does not disrupt daemon sync (true by construction — the extension is a client of the daemon's existing HTTP API and does not participate in sync itself, but this has not been exercised with the extension actually toggled on/off in a running VS Code instance).
 
 ### Phase 6 — AI review and publishing — NOT STARTED
 
@@ -872,7 +875,7 @@ Before calling the functional MVP complete, demonstrate all of the following wit
 
 - [ ] A plain editor with only the daemon can join and contribute safely.
 - [ ] Codex, Claude Code, and OpenCode can use shared MCP tools when configured.
-- [ ] Cursor/VS Code can see and review activity through the extension.
+- [ ] Cursor/VS Code can see and review activity through the extension. (Extension built, unit-tested at the client-wrapper level, and locally packageable with `vsce package`; not yet exercised interactively inside a real VS Code/Cursor window, so this is not fully demonstrated.)
 - [ ] Independent changes from three separate worktrees preserve all participants' work.
 - [ ] Same-file/same-symbol and delete-vs-modify collisions never silently overwrite files.
 - [ ] A user can keep using ordinary `git commit`, `git pull`, branches, worktrees, and rebase; Crosscode detects and safely reconciles state changes.

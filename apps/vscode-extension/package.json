@@ -1,0 +1,76 @@
+{
+  "name": "crosscode-vscode-extension",
+  "displayName": "Crosscode",
+  "description": "Utilitarian VS Code/Cursor client for the local Crosscode daemon: status, tasks/claims, proposal review, and validation.",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "publisher": "crosscode",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "main": "./dist/extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "crosscode",
+          "title": "Crosscode",
+          "icon": "$(git-merge)"
+        }
+      ]
+    },
+    "views": {
+      "crosscode": [
+        { "id": "crosscode.statusView", "name": "Status" },
+        { "id": "crosscode.tasksView", "name": "Tasks & Claims" },
+        { "id": "crosscode.proposalsView", "name": "Proposals" },
+        { "id": "crosscode.validationView", "name": "Validation" }
+      ]
+    },
+    "commands": [
+      { "command": "crosscode.refresh", "title": "Crosscode: Refresh", "icon": "$(refresh)" },
+      { "command": "crosscode.createTask", "title": "Crosscode: Create Task" },
+      { "command": "crosscode.claimPath", "title": "Crosscode: Claim Path" },
+      { "command": "crosscode.releaseClaim", "title": "Crosscode: Release Claim" },
+      { "command": "crosscode.acceptProposal", "title": "Crosscode: Accept Proposal" },
+      { "command": "crosscode.rejectProposal", "title": "Crosscode: Reject Proposal" },
+      { "command": "crosscode.runValidation", "title": "Crosscode: Validate" }
+    ],
+    "menus": {
+      "commandPalette": [
+        { "command": "crosscode.releaseClaim", "when": "false" },
+        { "command": "crosscode.acceptProposal", "when": "false" },
+        { "command": "crosscode.rejectProposal", "when": "false" }
+      ],
+      "view/title": [
+        { "command": "crosscode.refresh", "when": "view =~ /^crosscode\\./", "group": "navigation" },
+        { "command": "crosscode.createTask", "when": "view == crosscode.tasksView", "group": "navigation" },
+        { "command": "crosscode.runValidation", "when": "view == crosscode.validationView", "group": "navigation" }
+      ],
+      "view/item/context": [
+        { "command": "crosscode.releaseClaim", "when": "view == crosscode.tasksView && viewItem == crosscode.claim" },
+        { "command": "crosscode.acceptProposal", "when": "view == crosscode.proposalsView && viewItem == crosscode.proposal" },
+        { "command": "crosscode.rejectProposal", "when": "view == crosscode.proposalsView && viewItem == crosscode.proposal" }
+      ],
+      "explorer/context": [
+        { "command": "crosscode.claimPath", "group": "crosscode" }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "package": "node esbuild.mjs && vsce package --no-dependencies -o dist/"
+  },
+  "dependencies": {
+    "@crosscode/daemon": "workspace:*",
+    "@crosscode/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.28.1"
+  }
+}
