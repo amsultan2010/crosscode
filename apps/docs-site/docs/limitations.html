@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Current limitations — Crosscode</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <nav>
+      <a class="brand" href="/">Crosscode</a>
+      <a href="/docs/index.html">Docs</a>
+      <a href="/docs/install.html">Install &amp; quickstart</a>
+      <a href="/docs/cli.html">CLI reference</a>
+      <a href="/docs/limitations.html">Limitations</a>
+    </nav>
+  </header>
+
+  <main>
+    <h1>Current limitations</h1>
+    <p class="subtitle">Taken directly from this repository's README.md.</p>
+
+    <ul>
+      <li>B1 uses polling for reconnect; WebSocket fan-out and presence are B2.</li>
+      <li>Production PostgreSQL role grants and retention policies still need environment-specific deployment hardening.</li>
+      <li>Replica secrets use the protected Git-directory configuration fallback; OS-keychain integration is still planned.</li>
+      <li>Transactions are text-only. Binary files are rejected for sharing, although checkpoint restore preserves their exact bytes.</li>
+      <li>Renames are represented as explicit delete/add changes.</li>
+      <li>Hunk-level, interface-impact, and semantic-conflict analysis is incomplete.</li>
+      <li>MCP transport is not yet fully standards-compliant.</li>
+      <li>There is no safe publish command or editor extension yet.</li>
+    </ul>
+
+    <h2>Not implemented yet</h2>
+    <p>
+      Per the README's "What works today" section: WebSocket presence, the VS
+      Code extension, publishing, and AI semantic review are not implemented
+      yet.
+    </p>
+
+    <div class="callout">
+      This is a functionality-first, pre-1.0 project. Do not treat anything on
+      this page, or absent from the <a href="/docs/index.html">what works
+      today</a> list, as available.
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    Crosscode &mdash; local-first Git coordination.
+  </footer>
+</body>
+</html>

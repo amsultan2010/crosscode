@@ -70,6 +70,12 @@ importers:
         specifier: ^8.18.1
         version: 8.18.1
 
+  apps/docs-site:
+    devDependencies:
+      vite:
+        specifier: ^7.1.0
+        version: 7.3.6(@types/node@22.20.1)(tsx@4.23.1)(yaml@2.9.0)
+
   apps/mcp-server:
     dependencies:
       '@crosscode/core':
