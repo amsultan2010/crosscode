@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CLI reference — Crosscode</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <nav>
+      <a class="brand" href="/">Crosscode</a>
+      <a href="/docs/index.html">Docs</a>
+      <a href="/docs/install.html">Install &amp; quickstart</a>
+      <a href="/docs/cli.html">CLI reference</a>
+      <a href="/docs/limitations.html">Limitations</a>
+    </nav>
+  </header>
+
+  <main>
+    <h1>CLI reference</h1>
+    <p class="subtitle">
+      The <code>crosscode</code> CLI is minimal and scriptable. Every command
+      supports a stable <code>--json</code> output mode for agents and scripts;
+      default human output is concise. From a checkout, invoke it with
+      <code>pnpm crosscode -- &lt;command&gt;</code>.
+    </p>
+
+    <div class="callout">
+      This page lists the CLI command surface as specified in
+      <code>BUILD_INSTRUCTIONS.md</code> section 15. See
+      <a href="/docs/limitations.html">current limitations</a> for what is and
+      isn't finished, and the <a href="/docs/install.html">install &amp; quickstart
+      guide</a> for commands in context.
+    </div>
+
+    <table>
+      <thead>
+        <tr><th>Command</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>crosscode init</code></td><td>Initialize local Crosscode state for this checkout.</td></tr>
+        <tr><td><code>crosscode join &lt;workspace&gt;</code></td><td>Enroll this replica in a workspace using a one-time enrollment token.</td></tr>
+        <tr><td><code>crosscode status --json</code></td><td>Show repository, daemon, outbox, cursor, and service health.</td></tr>
+        <tr><td><code>crosscode task create "Implement checkout API" --path server/routes/checkout</code></td><td>Declare a task and the paths it covers.</td></tr>
+        <tr><td><code>crosscode claim path src/checkout --task &lt;id&gt;</code></td><td>Advertise an advisory claim on a path for a task.</td></tr>
+        <tr><td><code>crosscode intent "Add paymentStatus to CheckoutResponse" --task &lt;id&gt;</code></td><td>Publish a plain-language intent for a task.</td></tr>
+        <tr><td><code>crosscode proposals list</code></td><td>List remote operations proposed to this replica.</td></tr>
+        <tr><td><code>crosscode accept &lt;operation-id&gt;</code></td><td>Materialize an accepted proposal after re-checking the local base and creating a checkpoint.</td></tr>
+        <tr><td><code>crosscode reject &lt;operation-id&gt; --reason "..."</code></td><td>Reject a proposal; no local files are changed.</td></tr>
+        <tr><td><code>crosscode checkpoint [--message "..."]</code></td><td>Create a hidden Git checkpoint without moving HEAD or the index.</td></tr>
+        <tr><td><code>crosscode validate [--profile affected]</code></td><td>Run commands from a committed <code>.crosscode/config.yaml</code> validation profile.</td></tr>
+        <tr><td><code>crosscode publish --branch &lt;branch&gt;</code></td><td>Create ordinary commits on a branch from accepted, validated state. Requires confirmation unless run noninteractively with an explicit <code>--yes</code> flag and workspace policy allows it. Never force-pushes.</td></tr>
+        <tr><td><code>crosscode run -- &lt;tool-and-arguments&gt;</code></td><td>Run an arbitrary local tool/command under the current checkout.</td></tr>
+      </tbody>
+    </table>
+
+    <h2>JSON output</h2>
+    <p>
+      Every command accepts a <code>--json</code> flag. Scripts and agents
+      should always pass it; default (non-JSON) output is intended for humans
+      reading a terminal and is not a stable interface.
+    </p>
+  </main>
+
+  <footer class="site-footer">
+    Crosscode &mdash; local-first Git coordination.
+  </footer>
+</body>
+</html>
