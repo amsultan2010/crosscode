@@ -521,7 +521,7 @@ export class LocalDaemon {
       const result = await exec(command, { cwd: this.root, shell: true, timeout: 300_000, maxBuffer: 1024 * 1024 }).then(({ stdout, stderr }) => ({ exitCode: 0, output: `${stdout}${stderr}` })).catch((error: { code?: number | string; stdout?: string; stderr?: string; killed?: boolean }) => ({ exitCode: typeof error.code === "number" ? error.code : 1, output: `${error.stdout ?? ""}${error.stderr ?? ""}${error.killed ? "\nValidation timed out" : ""}` }));
       const afterTree = await snapshotWorktreeTree(this.root);
       const changedDuringValidation = afterTree !== checkpoint.tree;
-      const validation = { id: randomUUID(), profile, command, exitCode: changedDuringValidation && result.exitCode === 0 ? 1 : result.exitCode, output: this.redactValidationOutput(`${changedDuringValidation ? "Validation invalidated because the working tree changed during the command\n" : ""}${result.output}`), durationMs: Date.now() - started, tree: checkpoint.tree, createdAt: now() };
+      const validation = { id: randomUUID(), profile, command, exitCode: changedDuringValidation && result.exitCode === 0 ? 1 : result.exitCode, output: this.redactValidationOutput(`${changedDuringValidation ? "Validation invalidated because the working tree changed during the command\n" : ""}${result.output}`), durationMs: Date.now() - started, tree: checkpoint.tree, runnerId: this.options.actorId, createdAt: now() };
       this.validations.push(validation); output.push(validation);
     }
     await this.persist("validation.completed", output);

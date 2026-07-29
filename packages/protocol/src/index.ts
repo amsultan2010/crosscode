@@ -220,7 +220,7 @@ export const cursorResponseSchema = z.object({
 }).strict();
 export type CursorResponse = z.infer<typeof cursorResponseSchema>;
 
-export const validationSchema = z.object({ id: z.string(), profile: z.string(), command: z.string(), exitCode: z.number().int(), durationMs: z.number().nonnegative(), tree: z.string().optional(), output: z.string(), createdAt: z.string().datetime() });
+export const validationSchema = z.object({ id: z.string(), profile: z.string(), command: z.string(), exitCode: z.number().int(), durationMs: z.number().nonnegative(), tree: z.string().optional(), output: z.string(), runnerId: z.string(), createdAt: z.string().datetime() });
 export type Validation = z.infer<typeof validationSchema>;
 
 export const taskRequestSchema = z.object({
