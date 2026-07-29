@@ -2,7 +2,7 @@
 
 ## 0. Current implementation status
 
-Last updated: 2026-07-28.
+Last updated: 2026-07-29.
 
 Crosscode currently has a tested local safety core, but it is not yet a deployable multi-machine collaboration product. The daemon is the sole local authority; the CLI and current MCP-shaped entry point communicate through its authenticated loopback API.
 
@@ -28,7 +28,7 @@ Crosscode currently has a tested local safety core, but it is not yet a deployab
 Current verification baseline:
 
 - TypeScript build passes.
-- Tests pass without a configured test database (see the actual current count from `pnpm test`); additional real-PostgreSQL B1 reconnect, service store, and B2 live-coordination fixtures run once `CROSSCODE_TEST_DATABASE_URL` is set.
+- 122 tests pass without a configured test database; 126 total once `CROSSCODE_TEST_DATABASE_URL` is set, adding the real-PostgreSQL B1 reconnect, service store, and B2 live-coordination fixtures.
 - Statement/function coverage were last measured with a real PostgreSQL database attached (87.87%/86.88%); this update was authored without one available and did not reverify those percentages.
 - `pnpm audit --audit-level high` reports no known vulnerabilities.
 - Final correctness, TypeScript, and security reviews found no remaining critical or high findings.
