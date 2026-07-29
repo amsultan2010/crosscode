@@ -938,15 +938,15 @@ Complete the deterministic analysis and materialization path before adding any a
 
 **Acceptance test:** a deterministic three-worktree fixture preserves all independent changes; same-file/same-symbol and delete-vs-modify cases leave files untouched and provide a recovery/proposal record.
 
-### Milestone D — validation and publish workflow — PARTIAL
+### Milestone D — validation and publish workflow — DONE
 
 Implement team configuration parsing and publishing only after the integration pipeline is reliable.
 
 - [x] Parse committed `.crosscode/config.yaml` and run only trusted configured commands.
-- [x] Record command, exit code, duration, bounded/redacted output, and exact tested tree. Runner identity is still missing.
-- [ ] Require passing applicable validation for the exact accepted tree before publish.
-- [ ] Implement `publish --branch <branch>` with explicit confirmation or explicit noninteractive `--yes` policy. It must create ordinary commits only from accepted state, never stage unrelated user work, force-push, reset, rebase, or alter remotes.
-- [ ] Add a dry-run publish plan explaining the commit tree and changed paths before any branch/ref update.
+- [x] Record command, exit code, duration, bounded/redacted output, exact tested tree, and runner identity (`runnerId`).
+- [x] Require passing applicable validation for the exact accepted tree before publish.
+- [x] Implement `publish --branch <branch>` with explicit confirmation or explicit noninteractive `--yes` policy. It must create ordinary commits only from accepted state, never stage unrelated user work, force-push, reset, rebase, or alter remotes.
+- [x] Add a dry-run publish plan explaining the commit tree and changed paths before any branch/ref update.
 
 **Acceptance test:** accepted work in a fixture is validated and published as a normal commit on a test remote; unstaged unrelated files and the active branch remain unchanged.
 
