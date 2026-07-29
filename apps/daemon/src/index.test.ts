@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { CoordinationService } from "../../service/src/index.js";
@@ -401,6 +401,125 @@ describe("local daemon coordination", () => {
     await expect(daemon.observeGitTransition()).resolves.toMatchObject({ kind: "git-operation", paused: true });
     await daemon.reanalyzePendingOperations();
     await expect(daemon.status()).resolves.toMatchObject({ materializationPaused: false });
+  });
+
+  it("detects an actual git rebase in progress, pauses and checkpoints without corrupting the conflicted file, and resumes only after re-analysis", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    await exec("git", ["-C", receiverRoot, "switch", "-c", "feature"]);
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+    await writeFile(join(senderRoot, "unrelated.txt"), "shared work\n");
+    const remote = await sender.capture("unrelated shared work", service);
+    await receiver.sync(service);
+    expect(receiver.operations.get(remote.id)?.status).toBe("proposed");
+
+    // Diverge feature (checked out in the receiver) and main so rebasing feature onto
+    // main produces a real conflict that leaves an actual rebase in progress on disk.
+    await writeFile(join(receiverRoot, "a.txt"), "feature-line\n");
+    await exec("git", ["-C", receiverRoot, "commit", "-aqm", "feature edits a.txt"]);
+    await exec("git", ["-C", receiverRoot, "switch", "main"]);
+    await writeFile(join(receiverRoot, "a.txt"), "main-line\n");
+    await exec("git", ["-C", receiverRoot, "commit", "-aqm", "main moves a.txt"]);
+    await exec("git", ["-C", receiverRoot, "switch", "feature"]);
+    await expect(exec("git", ["-C", receiverRoot, "rebase", "main"])).rejects.toThrow();
+
+    expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toContain("<<<<<<<");
+    const checkpointsBefore = receiver.checkpoints.length;
+    // A real rebase detaches HEAD onto the "onto" commit, so `discoverRepository` reports
+    // no current branch; the daemon's transition kind precedence classifies that as a
+    // branch change first, and `discoverRepository`'s own rebase-merge/rebase-apply
+    // detection is what makes the underlying operation "rebase" (asserted via status() below).
+    await expect(receiver.observeGitTransition()).resolves.toMatchObject({ kind: "branch-switch", paused: true });
+    expect(receiver.checkpoints.length).toBe(checkpointsBefore + 1);
+    await expect(receiver.status()).resolves.toMatchObject({ operation: "rebase" });
+    // The conflict markers Git itself produced are untouched -- Crosscode paused instead of writing over them.
+    expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toContain("<<<<<<<");
+    await expect(receiver.accept(remote.id)).rejects.toThrow("paused");
+
+    await writeFile(join(receiverRoot, "a.txt"), "resolved-line\n");
+    await exec("git", ["-C", receiverRoot, "add", "a.txt"]);
+    await exec("git", ["-C", receiverRoot, "-c", "core.editor=true", "rebase", "--continue"]);
+
+    await expect(receiver.observeGitTransition()).resolves.toMatchObject({ kind: "branch-switch", paused: true });
+    await receiver.reanalyzePendingOperations();
+    await expect(receiver.status()).resolves.toMatchObject({ materializationPaused: false });
+    await expect(receiver.accept(remote.id)).resolves.toMatchObject({ status: "accepted" });
+    expect(await readFile(join(receiverRoot, "unrelated.txt"), "utf8")).toBe("shared work\n");
+    expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe("resolved-line\n");
+  });
+
+  it("creates a real second worktree with `git worktree add` and keeps each daemon's identity and state isolated from the other", async () => {
+    const root = await repo();
+    const worktreePath = await mkdtemp(join(tmpdir(), "crosscode-worktree-"));
+    directories.push(worktreePath);
+    const original = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "original", actorId: "a" });
+    const originalRoot = (await original.status()).root;
+    await writeFile(join(root, "original-only.txt"), "original work\n");
+    const originalOperation = await original.capture("original worktree edit");
+
+    await exec("git", ["-C", root, "worktree", "add", "-q", "-b", "sibling-branch", worktreePath]);
+
+    // Adding a sibling worktree must not perturb the original daemon's own Git identity.
+    await expect(original.observeGitTransition()).resolves.toMatchObject({ kind: "unchanged" });
+    await expect(original.status()).resolves.toMatchObject({ root: originalRoot, branch: "main" });
+
+    const sibling = await LocalDaemon.open(worktreePath, { workspaceId: "w", replicaId: "sibling", actorId: "b" });
+    const siblingStatus = await sibling.status();
+    expect(siblingStatus.branch).toBe("sibling-branch");
+    expect(siblingStatus.root).not.toBe(originalRoot);
+    expect(sibling.operations.size).toBe(0);
+    expect(sibling.checkpoints).toEqual([]);
+
+    await writeFile(join(worktreePath, "sibling-only.txt"), "sibling work\n");
+    await sibling.capture("sibling worktree edit");
+
+    // Each worktree keeps its own crosscode state.sqlite (git-path resolves per-worktree
+    // for paths that are not one of Git's shared "common" files), so neither daemon's
+    // operations, checkpoints, or Git identity leak into the other's.
+    expect(original.operations.has(originalOperation.id)).toBe(true);
+    expect(original.operations.size).toBe(1);
+    expect(sibling.operations.size).toBe(1);
+    await expect(original.status()).resolves.toMatchObject({ root: originalRoot, branch: "main" });
+  });
+
+  it("detects and safely reconciles a real named `git pull` that moves HEAD via a local file-based remote", async () => {
+    const localRoot = await repo();
+    const bareRemote = join(await mkdtemp(join(tmpdir(), "crosscode-bare-")), "origin.git");
+    directories.push(dirname(bareRemote));
+    await exec("git", ["init", "-q", "--bare", "-b", "main", bareRemote]);
+    await exec("git", ["-C", localRoot, "remote", "add", "origin", bareRemote]);
+    await exec("git", ["-C", localRoot, "push", "-q", "origin", "main"]);
+
+    const upstreamClone = await mkdtemp(join(tmpdir(), "crosscode-upstream-"));
+    directories.push(upstreamClone);
+    await exec("git", ["clone", "-q", "-b", "main", bareRemote, upstreamClone]);
+    await exec("git", ["-C", upstreamClone, "config", "user.email", "test@example.com"]);
+    await exec("git", ["-C", upstreamClone, "config", "user.name", "Test"]);
+    await writeFile(join(upstreamClone, "a.txt"), "pulled-from-remote\n");
+    await exec("git", ["-C", upstreamClone, "commit", "-aqm", "advance upstream"]);
+    await exec("git", ["-C", upstreamClone, "push", "-q", "origin", "main"]);
+
+    const senderRoot = await repo(); const service = new CoordinationService();
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(localRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+    await writeFile(join(senderRoot, "unrelated.txt"), "shared work\n");
+    const remote = await sender.capture("unrelated shared work", service);
+    await receiver.sync(service);
+    expect(receiver.operations.get(remote.id)?.status).toBe("proposed");
+
+    const headBefore = await exec("git", ["-C", localRoot, "rev-parse", "HEAD"]).then(({ stdout }) => stdout.trim());
+    await exec("git", ["-C", localRoot, "pull", "-q", "origin", "main"]);
+    const headAfter = await exec("git", ["-C", localRoot, "rev-parse", "HEAD"]).then(({ stdout }) => stdout.trim());
+    expect(headAfter).not.toBe(headBefore);
+    expect(await readFile(join(localRoot, "a.txt"), "utf8")).toBe("pulled-from-remote\n");
+
+    await expect(receiver.observeGitTransition()).resolves.toMatchObject({ kind: "head-changed", paused: true });
+    await expect(receiver.accept(remote.id)).rejects.toThrow("paused");
+    await receiver.reanalyzePendingOperations();
+    await expect(receiver.status()).resolves.toMatchObject({ materializationPaused: false });
+    await expect(receiver.accept(remote.id)).resolves.toMatchObject({ status: "accepted" });
+    expect(await readFile(join(localRoot, "unrelated.txt"), "utf8")).toBe("shared work\n");
+    expect(await readFile(join(localRoot, "a.txt"), "utf8")).toBe("pulled-from-remote\n");
   });
 
   it("computes real hunk overlap for a conflicting pending change instead of a hardcoded false", async () => {
