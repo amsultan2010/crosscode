@@ -16,6 +16,14 @@ export type StoredOperation = RemoteOperation & {
   event: EventEnvelope;
 };
 
+export type PresenceSummary = {
+  replicaId: string;
+  actorId: string;
+  status: "online" | "offline";
+  lastSeenAt: string | null;
+  cursor: number | null;
+};
+
 type IdentityRow = {
   member_id: string;
   actor_id: string;
@@ -394,23 +402,23 @@ export class PgStore {
     return { items, nextCursor: items.at(-1)?.updatedAt ?? after };
   }
 
-  async recordSessionStart(workspaceId: string, replicaId: string): Promise<void> {
+  async recordSessionStart(workspaceId: string, replicaId: string, cursor: number): Promise<void> {
     await this.pool.query(
-      "INSERT INTO sessions (id, workspace_id, replica_id) VALUES ($1, $2, $3)",
-      [randomUUID(), workspaceId, replicaId]
+      "INSERT INTO sessions (id, workspace_id, replica_id, summary) VALUES ($1, $2, $3, $4::jsonb)",
+      [randomUUID(), workspaceId, replicaId, JSON.stringify({ cursor })]
     );
   }
 
-  async recordSessionEnd(workspaceId: string, replicaId: string): Promise<void> {
+  async recordSessionEnd(workspaceId: string, replicaId: string, cursor: number): Promise<void> {
     await this.pool.query(
-      `UPDATE sessions SET ended_at = now()
+      `UPDATE sessions SET ended_at = now(), summary = summary || $3::jsonb
         WHERE id = (
           SELECT id FROM sessions
            WHERE workspace_id = $1 AND replica_id = $2 AND ended_at IS NULL
            ORDER BY started_at DESC
            LIMIT 1
         )`,
-      [workspaceId, replicaId]
+      [workspaceId, replicaId, JSON.stringify({ cursor })]
     );
   }
 
@@ -425,6 +433,30 @@ export class PgStore {
       [workspaceId]
     );
     return result.rows.map((row) => ({ replicaId: row.replica_id, actorId: row.actor_id, startedAt: new Date(row.started_at).toISOString() }));
+  }
+
+  async listPresence(workspaceId: string): Promise<PresenceSummary[]> {
+    const result = await this.pool.query<{
+      replica_id: string; actor_id: string; started_at: Date | null; ended_at: Date | null; summary: { cursor?: number } | null;
+    }>(
+      `SELECT DISTINCT ON (r.id) r.id AS replica_id, m.actor_id, s.started_at, s.ended_at, s.summary
+         FROM replicas r
+         JOIN members m ON m.id = r.member_id
+         LEFT JOIN sessions s ON s.workspace_id = r.workspace_id AND s.replica_id = r.id
+        WHERE r.workspace_id = $1
+        ORDER BY r.id, s.started_at DESC NULLS LAST`,
+      [workspaceId]
+    );
+    return result.rows.map((row) => {
+      const lastSeenAt = row.ended_at ?? row.started_at;
+      return {
+        replicaId: row.replica_id,
+        actorId: row.actor_id,
+        status: row.started_at !== null && row.ended_at === null ? "online" : "offline",
+        lastSeenAt: lastSeenAt ? new Date(lastSeenAt).toISOString() : null,
+        cursor: typeof row.summary?.cursor === "number" ? row.summary.cursor : null
+      };
+    });
   }
 
   private async transaction<T>(body: (client: PoolClient) => Promise<T>): Promise<T> {

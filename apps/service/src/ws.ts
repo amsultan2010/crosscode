@@ -119,7 +119,7 @@ function handleConnection(
         const cursor = await options.store.getCursor(identity.workspaceId);
         send(socket, wsSubscribeAckSchema.parse({ type: "subscribed", cursor }));
         broadcastPresence(connectionsByWorkspace, identity.workspaceId, identity.replicaId, identity.actorId, "online");
-        await options.store.recordSessionStart(identity.workspaceId, identity.replicaId);
+        await options.store.recordSessionStart(identity.workspaceId, identity.replicaId, cursor);
       } catch {
         send(socket, wsErrorMessageSchema.parse({ type: "error", message: "Subscription rejected" }));
         socket.close(1008, "Subscription rejected");
@@ -139,7 +139,10 @@ function handleConnection(
       registry.delete(connection.replicaId);
       if (registry.size === 0) connectionsByWorkspace.delete(connection.workspaceId);
       broadcastPresence(connectionsByWorkspace, connection.workspaceId, connection.replicaId, connection.actorId, "offline");
-      void options.store.recordSessionEnd(connection.workspaceId, connection.replicaId);
+      void (async () => {
+        const cursor = await options.store.getCursor(connection!.workspaceId);
+        await options.store.recordSessionEnd(connection!.workspaceId, connection!.replicaId, cursor);
+      })();
     }
   });
 }
