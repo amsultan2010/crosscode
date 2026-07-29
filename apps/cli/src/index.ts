@@ -60,6 +60,7 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
   if (command === "proposals" && args[1] === "list") return { value: (await client.operations()).filter((operation) => operation.status === "proposed") };
   if (command === "proposals" && args[1] === "inspect") return { value: await client.analyze(args[2] ?? "") };
   if (command === "proposals" && args[1] === "diff") return { value: await client.diff(args[2] ?? "") };
+  if (command === "proposals" && args[1] === "artifacts") return { value: await client.artifacts(args[2] ?? "") };
   if (command === "accept") return { value: await client.accept(args[1] ?? "") };
   if (command === "reject") return { value: await client.reject(args[1] ?? "") };
   if (command === "validate") {

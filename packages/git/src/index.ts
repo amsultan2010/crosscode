@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
+export * from "./typescript-graph.js";
+
 const exec = promisify(execFile);
 async function git(root: string, args: string[]): Promise<string> { return (await exec("git", ["-C", root, ...args])).stdout.trim(); }
 async function gitBuffer(root: string, args: string[]): Promise<Buffer> {
