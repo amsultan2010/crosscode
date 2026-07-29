@@ -550,4 +550,13 @@ describe("local daemon coordination", () => {
     expect("changedPaths" in result && result.changedPaths).toEqual([{ path: "a.txt", kind: "modify" }]);
     expect((await exec("git", ["-C", root, "rev-parse", "refs/heads/main"])).stdout.trim()).toBe(initialHead);
   });
+
+  it("records the runner identity that performed a validation", async () => {
+    const root = await repo();
+    const daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor-42" });
+
+    const [validation] = await daemon.validate("fast", ["true"]);
+
+    expect(validation!.runnerId).toBe("actor-42");
+  });
 });

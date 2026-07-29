@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Docs — Crosscode</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <nav>
+      <a class="brand" href="/">Crosscode</a>
+      <a href="/docs/index.html">Docs</a>
+      <a href="/docs/install.html">Install &amp; quickstart</a>
+      <a href="/docs/cli.html">CLI reference</a>
+      <a href="/docs/limitations.html">Limitations</a>
+    </nav>
+  </header>
+
+  <main class="wide">
+    <h1>Documentation</h1>
+    <p class="subtitle">
+      Crosscode is a local-first coordination layer for developers and coding agents
+      working in separate checkouts of the same Git repository. It is a daemon and
+      service you run yourself &mdash; not a hosted product.
+    </p>
+
+    <div class="card-grid">
+      <div class="card">
+        <h3><a href="/docs/architecture.html">Architecture</a></h3>
+        <p>The daemon, the coordination service, and how transactions and proposals move between them.</p>
+      </div>
+      <div class="card">
+        <h3><a href="/docs/install.html">Install &amp; quickstart</a></h3>
+        <p>Prerequisites, running the PostgreSQL service, enrolling replicas, and the normal day-to-day workflow.</p>
+      </div>
+      <div class="card">
+        <h3><a href="/docs/cli.html">CLI reference</a></h3>
+        <p>The scriptable <code>crosscode</code> command surface, including <code>--json</code> output.</p>
+      </div>
+      <div class="card">
+        <h3><a href="/docs/safety.html">Safety model</a></h3>
+        <p>The rules that govern when Crosscode is allowed to touch your working tree.</p>
+      </div>
+      <div class="card">
+        <h3><a href="/docs/mcp-clients.html">MCP client setup</a></h3>
+        <p>Connecting Claude Code, Codex CLI, and OpenCode to the local <code>crosscode-mcp</code> server.</p>
+      </div>
+      <div class="card">
+        <h3><a href="/docs/limitations.html">Current limitations</a></h3>
+        <p>What is not implemented yet, taken directly from the project README.</p>
+      </div>
+    </div>
+
+    <h2>What Crosscode is</h2>
+    <p>
+      Crosscode watches ordinary filesystem and Git activity in a checkout, records
+      stable edits as durable transactions, exchanges those transactions through an
+      authenticated coordination service, and presents remote work as proposals. A
+      remote proposal is never written into a checkout until that replica explicitly
+      accepts it.
+    </p>
+    <p>
+      Git remains the durable history and publishing layer. Crosscode does not
+      replace your editor, agent, Git host, branches, worktrees, staging area, or
+      normal commits.
+    </p>
+
+    <h2>What works today</h2>
+    <ul>
+      <li>One durable daemon per Git checkout/worktree</li>
+      <li>Settled filesystem-edit capture with stable before/after hashes</li>
+      <li>SQLite append-only local events, projections, and an offline outbox</li>
+      <li>Hidden Git checkpoints without moving HEAD or changing the real index</li>
+      <li>Detection of branches, commits, resets, index changes, merges, rebases, cherry-picks, and reverts</li>
+      <li>PostgreSQL-backed coordination-service operations and audit records</li>
+      <li>One-time replica enrollment and short-lived authenticated access credentials</li>
+      <li>Idempotent operation upload with ordered, cursor-based reconnect downloads</li>
+      <li>Explicit proposal inspection, acceptance, and rejection</li>
+      <li>Crash-safe application that preserves newer developer edits</li>
+      <li>Trusted committed validation profiles</li>
+      <li>HTTP-backed CLI and daemon-backed MCP-shaped tool mapping</li>
+    </ul>
+    <p>
+      WebSocket presence, the VS Code extension, publishing, and AI semantic review
+      are not implemented yet &mdash; see <a href="/docs/limitations.html">current limitations</a>.
+    </p>
+  </main>
+
+  <footer class="site-footer">
+    Crosscode &mdash; local-first Git coordination.
+  </footer>
+</body>
+</html>
