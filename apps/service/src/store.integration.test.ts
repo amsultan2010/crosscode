@@ -42,12 +42,30 @@ describe.skipIf(!databaseUrl)("PostgreSQL service store", () => {
       const intentPage = await store.listIntents(provisioned.workspaceId, EPOCH_CURSOR, 100);
       expect(intentPage.items.map((item) => item.intent.id)).toContain(intentId);
 
-      await store.recordSessionStart(provisioned.workspaceId, enrolled.claims.replicaId);
+      await store.recordSessionStart(provisioned.workspaceId, enrolled.claims.replicaId, 3);
       const active = await store.listActiveSessions(provisioned.workspaceId);
       expect(active.map((session) => session.replicaId)).toContain(enrolled.claims.replicaId);
-      await store.recordSessionEnd(provisioned.workspaceId, enrolled.claims.replicaId);
+      const presenceWhileOnline = await store.listPresence(provisioned.workspaceId);
+      expect(presenceWhileOnline).toContainEqual(
+        expect.objectContaining({ replicaId: enrolled.claims.replicaId, status: "online", cursor: 3 })
+      );
+
+      await store.recordSessionEnd(provisioned.workspaceId, enrolled.claims.replicaId, 5);
       const afterEnd = await store.listActiveSessions(provisioned.workspaceId);
       expect(afterEnd.map((session) => session.replicaId)).not.toContain(enrolled.claims.replicaId);
+
+      // A durable summary (last-known cursor, replica identity, disconnect time) must remain
+      // queryable through a freshly constructed store, standing in for a service restart: the
+      // data lives in the sessions table, not in any in-process gateway state.
+      const restarted = new PgStore(databaseUrl!);
+      try {
+        const presenceAfterRestart = await restarted.listPresence(provisioned.workspaceId);
+        expect(presenceAfterRestart).toContainEqual(
+          expect.objectContaining({ replicaId: enrolled.claims.replicaId, status: "offline", cursor: 5 })
+        );
+      } finally {
+        await restarted.close();
+      }
     } finally {
       if (workspaceId) {
         await store.pool.query("DELETE FROM audit_events WHERE workspace_id = $1", [workspaceId]);
