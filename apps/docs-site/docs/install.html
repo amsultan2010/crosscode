@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Install &amp; quickstart — Crosscode</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <nav>
+      <a class="brand" href="/">Crosscode</a>
+      <a href="/docs/index.html">Docs</a>
+      <a href="/docs/install.html">Install &amp; quickstart</a>
+      <a href="/docs/cli.html">CLI reference</a>
+      <a href="/docs/limitations.html">Limitations</a>
+    </nav>
+  </header>
+
+  <main>
+    <h1>Install &amp; quickstart</h1>
+    <p class="subtitle">
+      Crosscode is run entirely on your own machines. There is no hosted
+      coordination service &mdash; you run PostgreSQL and the service yourself.
+    </p>
+
+    <h2>Prerequisites</h2>
+    <ul>
+      <li>Node.js 22 or newer</li>
+      <li>pnpm 11</li>
+      <li>Git</li>
+      <li>PostgreSQL 17, or Docker Desktop/another Docker-compatible runtime</li>
+    </ul>
+
+    <h2>Install dependencies</h2>
+    <pre><code>pnpm install
+pnpm build
+pnpm test</code></pre>
+
+    <h2>Run the PostgreSQL coordination service</h2>
+    <p>The included Compose configuration binds PostgreSQL to local port <code>5432</code>.</p>
+    <pre><code>export POSTGRES_PASSWORD="$(openssl rand -base64 32)"
+docker compose -f infra/docker-compose.yml up -d postgres
+
+docker compose -f infra/docker-compose.yml exec -T postgres \
+  psql -U crosscode -d crosscode \
+  -c "CREATE ROLE crosscode_runtime LOGIN PASSWORD 'crosscode-runtime-local-only';"
+
+export MIGRATION_DATABASE_URL="postgresql://crosscode:${POSTGRES_PASSWORD}@127.0.0.1:5432/crosscode"
+export CROSSCODE_RUNTIME_DB_ROLE="crosscode_runtime"
+export DATABASE_URL="postgresql://crosscode_runtime:crosscode-runtime-local-only@127.0.0.1:5432/crosscode"
+export CROSSCODE_JWT_SECRET="$(openssl rand -base64 48)"
+pnpm service:migrate
+pnpm service</code></pre>
+
+    <p>
+      The service defaults to <code>http://127.0.0.1:8788</code>. Plain HTTP is
+      allowed only on loopback. To bind to another interface, configure both
+      <code>CROSSCODE_TLS_KEY</code> and <code>CROSSCODE_TLS_CERT</code>; startup
+      refuses non-loopback plaintext HTTP.
+    </p>
+
+    <table>
+      <thead>
+        <tr><th>Variable</th><th>Purpose</th><th>Default</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>DATABASE_URL</code></td><td>PostgreSQL connection string</td><td>required</td></tr>
+        <tr><td><code>CROSSCODE_JWT_SECRET</code></td><td>HS256 signing secret, at least 32 bytes</td><td>required</td></tr>
+        <tr><td><code>CROSSCODE_SERVICE_HOST</code></td><td>Listen address</td><td><code>127.0.0.1</code></td></tr>
+        <tr><td><code>CROSSCODE_SERVICE_PORT</code></td><td>Listen port</td><td><code>8788</code></td></tr>
+        <tr><td><code>CROSSCODE_TLS_KEY</code></td><td>TLS private-key path</td><td>unset</td></tr>
+        <tr><td><code>CROSSCODE_TLS_CERT</code></td><td>TLS certificate path</td><td>unset</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      Run <code>pnpm service:migrate</code> with a migration-owner connection
+      before starting a new service version. The checked-in migration is at
+      <code>apps/service/migrations/001_initial.sql</code>.
+    </p>
+
+    <h2>Create a workspace and enroll replicas</h2>
+    <p>
+      Provisioning is an administrator-side command that writes a one-time
+      enrollment record directly to PostgreSQL. The raw enrollment token is
+      printed once and is never stored by the service.
+    </p>
+    <pre><code>export MIGRATION_DATABASE_URL="postgresql://crosscode:${POSTGRES_PASSWORD}@127.0.0.1:5432/crosscode"
+OWNER_ENROLLMENT_JSON="$(pnpm --silent service:provision create my-workspace alice)"
+echo "${OWNER_ENROLLMENT_JSON}"</code></pre>
+
+    <p>The JSON contains <code>workspaceId</code> and <code>enrollmentToken</code>. In Alice's checkout:</p>
+    <pre><code>pnpm crosscode -- init --json
+export CROSSCODE_ENROLLMENT_TOKEN="&lt;owner enrollmentToken&gt;"
+pnpm crosscode -- join --service http://127.0.0.1:8788 --json
+pnpm daemon</code></pre>
+
+    <p>Provision another member in the same workspace:</p>
+    <pre><code>MEMBER_ENROLLMENT_JSON="$(pnpm --silent service:provision join &lt;workspaceId&gt; bob member)"
+echo "${MEMBER_ENROLLMENT_JSON}"</code></pre>
+
+    <p>
+      Then run the same <code>init</code>, <code>CROSSCODE_ENROLLMENT_TOKEN</code>,
+      <code>join</code>, and <code>daemon</code> commands in Bob's separate
+      checkout. Enrollment tokens are one-time and expire after 15 minutes. Do not
+      put them in shell history, committed files, chat, or logs.
+    </p>
+    <p>
+      To create a read-only service member, use <code>viewer</code> instead of
+      <code>member</code>. Viewers may download operations but cannot upload them.
+    </p>
+
+    <h2>Normal workflow</h2>
+    <p>With the daemon running:</p>
+    <pre><code># Repository, daemon, outbox, cursor, and service health
+pnpm crosscode -- status --json
+
+# Declare local work
+pnpm crosscode -- task create "Implement checkout API" --path server/routes/checkout --json
+pnpm crosscode -- claim path server/routes/checkout --task &lt;task-id&gt; --json
+
+# Create or inspect safety checkpoints
+pnpm crosscode -- checkpoint --message "before integration" --json
+pnpm crosscode -- checkpoint inspect &lt;checkpoint-ref&gt; --json
+
+# Review remote work
+pnpm crosscode -- proposals list --json
+pnpm crosscode -- proposals inspect &lt;operation-id&gt; --json
+
+# Materialize only after an explicit decision
+pnpm crosscode -- accept &lt;operation-id&gt; --json
+pnpm crosscode -- reject &lt;operation-id&gt; --json
+
+# Run commands from a committed validation profile
+pnpm crosscode -- validate --profile fast --json</code></pre>
+
+    <p>
+      The daemon continues capturing work while the service is unavailable.
+      Pending outbound events survive daemon restarts. When connectivity
+      returns, the daemon retries the same immutable event IDs, records
+      acknowledgements, downloads operations after its saved cursor, and stores
+      remote operations as proposals without changing files.
+    </p>
+
+    <h2>Team validation configuration</h2>
+    <p>Validation commands and exclusions come only from committed <code>.crosscode/config.yaml</code> at <code>HEAD</code>:</p>
+    <pre><code>version: 1
+validation:
+  profiles:
+    fast:
+      commands:
+        - pnpm build
+        - pnpm test
+excludedPaths:
+  - private/**
+  - '**/*.pem'</code></pre>
+    <p>
+      Arbitrary validation commands are not accepted through HTTP or CLI
+      arguments. A validation result records its command, exit code, duration,
+      bounded/redacted output, and exact checkpoint tree. If the tree changes
+      while validation runs, the result is invalidated.
+    </p>
+
+    <h2>Development and verification</h2>
+    <pre><code>pnpm build
+pnpm test
+pnpm audit --audit-level high</code></pre>
+    <p>
+      The current suite covers protocol boundaries, authenticated daemon HTTP,
+      Git checkpoints, filesystem capture, SQLite restart recovery, outbox
+      identity, stale-base refusal, exclusions, binary safety, crash rollback,
+      Git transitions, MCP-to-daemon mapping, and real daemon child-process
+      restart behavior.
+    </p>
+  </main>
+
+  <footer class="site-footer">
+    Crosscode &mdash; local-first Git coordination.
+  </footer>
+</body>
+</html>
