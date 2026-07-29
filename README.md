@@ -4,6 +4,10 @@ Crosscode is a local-first coordination layer for developers and coding agents w
 
 Git remains the durable history and publishing layer. Crosscode does not replace your editor, agent, Git host, branches, worktrees, staging area, or normal commits.
 
+## Fastest way to try it
+
+Paste the prompt in [`docs/install-prompt.md`](./docs/install-prompt.md) into any MCP-capable coding agent (Claude Code, Codex CLI, OpenCode, Cursor, etc.). The agent clones this repository, installs dependencies, and registers the Crosscode MCP server for your project itself — no manual `init`/daemon step. The daemon starts itself, in the background, the first time the agent calls a Crosscode tool.
+
 ## What works today
 
 - One durable daemon per Git checkout/worktree
@@ -17,9 +21,13 @@ Git remains the durable history and publishing layer. Crosscode does not replace
 - Explicit proposal inspection, acceptance, and rejection
 - Crash-safe application that preserves newer developer edits
 - Trusted committed validation profiles
-- HTTP-backed CLI and daemon-backed MCP-shaped tool mapping
+- HTTP-backed CLI and a standards-compliant MCP server (`apps/mcp-server`) that auto-bootstraps the daemon on first connection
+- Live WebSocket presence, task, claim, handoff, and intent fan-out, with a durable poll fallback
+- `publish --branch` with a dry-run plan, publishing accepted work as ordinary commits to a real remote
+- A VS Code/Cursor extension for status, tasks, claims, proposals, and diff review (no sync authority)
+- A bounded, non-authoritative AI semantic reviewer for ambiguous conflicts, gated behind explicit workspace policy and human approval
 
-WebSocket presence, the VS Code extension, publishing, and AI semantic review are not implemented yet.
+See [BUILD_INSTRUCTIONS.md](./BUILD_INSTRUCTIONS.md) for the authoritative, milestone-by-milestone status of what's implemented and tested.
 
 ## Safety model
 
@@ -219,6 +227,7 @@ For the implementation plan and current milestone ledger, see [BUILD_INSTRUCTION
 - Replica secrets use the protected Git-directory configuration fallback; OS-keychain integration is still planned.
 - Transactions are text-only. Binary files are rejected for sharing, although checkpoint restore preserves their exact bytes.
 - Renames are represented as explicit delete/add changes.
-- Hunk-level, interface-impact, and semantic-conflict analysis is incomplete.
-- MCP transport is not yet fully standards-compliant.
-- There is no safe publish command or editor extension yet.
+- Dependency-impact analysis for `.ts`/`.tsx` is a syntactic AST walk, not a type-checker-backed analysis (see BUILD_INSTRUCTIONS.md Milestone C for exact scope).
+- There is no hosted/managed coordination service yet — you run PostgreSQL and the service yourself.
+- Team-workspace enrollment (multi-person/multi-agent sync) requires a running coordination service and a manually issued enrollment token; there is no self-serve signup or billing yet.
+- Not published to npm or a VS Code/Cursor marketplace yet; everything runs from a cloned checkout via `pnpm install` and `tsx` (see `docs/install-prompt.md`).

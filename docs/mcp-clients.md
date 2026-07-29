@@ -2,13 +2,18 @@
 
 `apps/mcp-server` is a standards-compliant Model Context Protocol server built on
 `@modelcontextprotocol/sdk`. It speaks MCP over stdio and proxies tool calls to the
-local Crosscode daemon for the current worktree (see `crosscode daemon` /
-`pnpm daemon`). Start the daemon for the worktree before connecting a client — the
-MCP server reads the daemon's local connection descriptor
-(`.git/crosscode/daemon.json`) and fails to start if no daemon is running.
+local Crosscode daemon for the current worktree.
 
-The server is invoked as `crosscode-mcp` (see `apps/mcp-server/package.json`'s `bin`
-entry) and takes no arguments; it discovers the repository from its working
+You do not need to start the daemon yourself. On first connection, the MCP server
+calls `ensureDaemonRunning` (`apps/mcp-server/src/bootstrap.ts`): if no daemon is
+already listening for the worktree, it writes a local replica identity if one
+doesn't exist yet (or enrolls against `CROSSCODE_SERVICE_URL`/
+`CROSSCODE_ENROLLMENT_TOKEN` when those are set in the server's `env`), spawns the
+daemon as a detached background process, and waits for it to come up before serving
+any tool calls. The daemon keeps running in the background after the MCP client
+disconnects, so it survives individual agent sessions.
+
+The server takes no arguments; it discovers the repository from its working
 directory, so each client must launch it with `cwd` set to the worktree root.
 
 ## Claude Code
@@ -65,15 +70,22 @@ Add a server entry to `opencode.json` (project or global config):
 
 ## Running from source
 
-Before `crosscode-mcp` is published/linked as a binary, any of the above can run
-it directly from the repo with `tsx`, keeping `cwd` at the worktree root:
+Crosscode is not published to npm yet, so every client above runs it directly from
+a cloned checkout of this repository with `tsx`, using the `tsx` binary installed
+inside that checkout (so no global install is required) and `cwd` set to the
+worktree you want Crosscode to manage:
 
 ```json
 {
-  "command": "tsx",
-  "args": ["/absolute/path/to/crosscode/apps/mcp-server/src/main.ts"]
+  "command": "/absolute/path/to/crosscode/node_modules/.bin/tsx",
+  "args": ["/absolute/path/to/crosscode/apps/mcp-server/src/main.ts"],
+  "cwd": "/absolute/path/to/your/project"
 }
 ```
+
+`/absolute/path/to/crosscode` is wherever you cloned this repository (after
+`pnpm install`); `/absolute/path/to/your/project` is the Git repository you want
+Crosscode to watch. This is exactly what `docs/install-prompt.md` generates.
 
 ## Available tools
 
