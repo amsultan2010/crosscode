@@ -7,7 +7,7 @@ import {
   type Handoff, type HandoffRequestedEvent, type HandoffRespondedEvent, type Intent, type IntentPublishedEvent,
   type Task, type TaskCreatedEvent, type TaskUpdatedEvent, type Validation
 } from "@crosscode/protocol";
-import type { StoredOperation } from "./types.js";
+import type { SemanticReviewRecord, StoredOperation } from "./types.js";
 
 export type GitState = { head?: string; headReflog?: string; branch?: string; worktree: string; indexTree?: string; operation?: "merge" | "rebase" | "cherry-pick" | "revert" };
 export type CheckpointRecord = { ref: string; commit: string; tree: string; message: string; createdAt: string };
@@ -148,6 +148,10 @@ export class DaemonStateStore {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS semantic_review (
+        id TEXT PRIMARY KEY,
+        payload TEXT NOT NULL
+      ) STRICT;
       CREATE TABLE IF NOT EXISTS conflict_artifact (
         id TEXT PRIMARY KEY,
         operation_id TEXT NOT NULL,
@@ -232,6 +236,15 @@ export class DaemonStateStore {
   recordConflictArtifact(record: ConflictArtifactRecord): void {
     this.database.prepare("INSERT INTO conflict_artifact (id, operation_id, path, classification, base_content, local_content, proposed_content, dependents, merged_candidate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(record.id, record.operationId, record.path, record.classification, record.baseContent ?? null, record.localContent ?? null, record.proposedContent ?? null, record.dependents ? JSON.stringify(record.dependents) : null, record.mergedCandidate ?? null, record.createdAt);
+  }
+
+  upsertSemanticReview(record: SemanticReviewRecord): void {
+    this.database.prepare("INSERT INTO semantic_review (id, payload) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload")
+      .run(record.id, JSON.stringify(record));
+  }
+
+  listSemanticReviews(): SemanticReviewRecord[] {
+    return parseRows<SemanticReviewRecord>(this.database.prepare("SELECT payload FROM semantic_review ORDER BY id").all() as Array<{ payload: string }>);
   }
 
   close(): void {

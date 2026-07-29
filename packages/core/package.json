@@ -3,5 +3,5 @@
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
-  "dependencies": { "@crosscode/protocol": "workspace:*" }
+  "dependencies": { "@crosscode/protocol": "workspace:*", "zod": "^3.25.76" }
 }

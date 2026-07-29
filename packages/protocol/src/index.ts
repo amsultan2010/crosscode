@@ -449,6 +449,17 @@ export const wsSubscribeAckSchema = z.object({
 }).strict();
 export type WsSubscribeAck = z.infer<typeof wsSubscribeAckSchema>;
 
+export const semanticReviewRequestBodySchema = z.object({
+  path: z.string().min(1).max(2_000),
+  providerId: z.string().min(1).max(200)
+}).strict();
+export type SemanticReviewRequestBody = z.infer<typeof semanticReviewRequestBodySchema>;
+
+export const acceptOperationRequestSchema = z.object({
+  reviewApprovals: z.record(z.string().min(1).max(2_000), z.string().min(1)).optional()
+}).strict().optional();
+export type AcceptOperationRequest = z.infer<typeof acceptOperationRequestSchema>;
+
 export const wsErrorMessageSchema = z.object({
   type: z.literal("error"),
   message: z.string().min(1)
