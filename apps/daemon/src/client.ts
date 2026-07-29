@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import type { CaptureKind, Claim, Handoff, Intent, Task, Validation } from "@crosscode/protocol";
 import { daemonConnectionSchema, type DaemonConnection } from "@crosscode/protocol";
-import type { CheckpointRecord } from "./state.js";
+import type { CheckpointRecord, ConflictArtifactRecord } from "./state.js";
 import type { SemanticReviewRecord, StoredOperation } from "./types.js";
 import { daemonConnectionPath } from "./runtime.js";
 
@@ -53,6 +53,7 @@ export class DaemonClient {
   operations(): Promise<StoredOperation[]> { return this.request("GET", "/v1/operations"); }
   analyze(id: string): Promise<{ operation: StoredOperation; analysis: string }> { return this.request("GET", `/v1/operations/${encodeURIComponent(id)}/analysis`); }
   diff(id: string): Promise<Array<{ path: string; base?: string; local?: string; proposed?: string; classification: string; risk: string; requiresApproval: boolean; dependents?: string[]; mergedCandidate?: string }>> { return this.request("GET", `/v1/operations/${encodeURIComponent(id)}/diff`); }
+  artifacts(id: string): Promise<ConflictArtifactRecord[]> { return this.request("GET", `/v1/operations/${encodeURIComponent(id)}/artifacts`); }
   accept(id: string, options?: { reviewApprovals?: Record<string, string> }): Promise<StoredOperation> { return this.request("POST", `/v1/operations/${encodeURIComponent(id)}/accept`, options ?? {}); }
   reject(id: string): Promise<StoredOperation> { return this.request("POST", `/v1/operations/${encodeURIComponent(id)}/reject`, {}); }
   requestSemanticReview(operationId: string, path: string, providerId: string): Promise<SemanticReviewRecord> { return this.request("POST", `/v1/operations/${encodeURIComponent(operationId)}/reviews`, { path, providerId }); }
