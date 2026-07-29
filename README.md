@@ -60,7 +60,7 @@ The daemon binds only to loopback and publishes a mode-`0600` connection descrip
 
 ## Prerequisites
 
-- Node.js 22 or newer
+- Node.js 24 or newer
 - pnpm 11
 - Git
 - PostgreSQL 17, or Docker Desktop/another Docker-compatible runtime
