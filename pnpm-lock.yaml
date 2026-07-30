@@ -174,11 +174,7 @@ importers:
         specifier: ^3.24.3
         version: 3.25.76
 
-  packages/test-fixtures:
-    dependencies:
-      '@crosscode/daemon':
-        specifier: workspace:*
-        version: link:../../apps/daemon
+  packages/test-fixtures: {}
 
 packages:
 

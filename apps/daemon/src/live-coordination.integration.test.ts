@@ -3,10 +3,11 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PresenceUpdate } from "@crosscode/protocol";
-import { createTempRepo, cleanupTempRepos, spawnDaemon, stopDaemon, stopAllDaemons, waitFor, type ManagedDaemon } from "@crosscode/test-fixtures";
+import { createTempRepo, cleanupTempRepos, waitFor } from "@crosscode/test-fixtures";
 import { createServiceServer, PgStore } from "../../service/src/index.js";
 import { CoordinationServiceClient } from "./service-client.js";
 import { writeDaemonConfig } from "./runtime.js";
+import { spawnDaemon, stopDaemon, stopAllDaemons, type ManagedDaemon } from "./test-helpers.js";
 import type { StoredOperation } from "./types.js";
 
 const databaseUrl = process.env.CROSSCODE_TEST_DATABASE_URL;
