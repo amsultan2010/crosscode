@@ -512,6 +512,30 @@ export class PgStore {
       [randomUUID(), workspaceId, memberId, replicaId, action, JSON.stringify(details)]
     );
   }
+
+  async pruneAuditEvents(olderThanDays: number): Promise<number> {
+    assertPositiveInteger(olderThanDays, "olderThanDays");
+    const result = await this.pool.query(
+      `DELETE FROM audit_events WHERE created_at < now() - ($1 || ' days')::interval RETURNING id`,
+      [olderThanDays]
+    );
+    return result.rowCount ?? result.rows.length;
+  }
+
+  async pruneEndedSessions(olderThanDays: number): Promise<number> {
+    assertPositiveInteger(olderThanDays, "olderThanDays");
+    const result = await this.pool.query(
+      `DELETE FROM sessions WHERE ended_at IS NOT NULL AND ended_at < now() - ($1 || ' days')::interval RETURNING id`,
+      [olderThanDays]
+    );
+    return result.rowCount ?? result.rows.length;
+  }
+}
+
+function assertPositiveInteger(value: number, name: string): void {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
 }
 
 export function safePoolConfig(connectionString: string): PoolConfig {
