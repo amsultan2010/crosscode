@@ -714,7 +714,20 @@ export class LocalDaemon {
         dependents = [...new Set([...direct, ...transitive])].sort();
       }
     }
-    let analysis = analyzeOperation({ path: change.path, previousPath: change.previousPath, baseMatches: change.kind === "add" || change.kind === "rename" ? currentBuffer === undefined : baseMatches, overlaps, kind: change.kind, conflictingKind: activeConflicting?.kind, semanticOverlap, dependents });
+    /**
+     * A rename's baseMatches must require BOTH that the destination is still free (like "add")
+     * AND that the source path's current local content still matches the beforeHash the proposal
+     * was built from (like "modify"/"delete") -- otherwise a rename could silently delete source
+     * content that has since diverged locally, bypassing the stale-base protection every other
+     * change kind gets. Checking only the destination would let a rename overwrite/discard a
+     * locally-edited source file without ever flagging it.
+     */
+    let renameBaseMatches = currentBuffer === undefined;
+    if (renameBaseMatches && change.kind === "rename") {
+      const previousBuffer = await this.readWorkingBuffer(change.previousPath!);
+      renameBaseMatches = previousBuffer !== undefined && contentHash(previousBuffer) === change.beforeHash;
+    }
+    let analysis = analyzeOperation({ path: change.path, previousPath: change.previousPath, baseMatches: change.kind === "add" ? currentBuffer === undefined : change.kind === "rename" ? renameBaseMatches : baseMatches, overlaps, kind: change.kind, conflictingKind: activeConflicting?.kind, semanticOverlap, dependents });
     let mergedCandidate: string | undefined;
     if (analysis.classification === "stale-base" && change.kind === "modify" && current !== undefined && change.afterContent !== undefined && change.afterEncoding !== "base64" && beforeText !== undefined) {
       const merge = await threeWayMerge(beforeText, current, change.afterContent);

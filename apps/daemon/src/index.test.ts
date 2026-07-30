@@ -231,6 +231,23 @@ describe("local daemon coordination", () => {
     await expect(stat(join(receiverRoot, "a.txt"))).rejects.toThrow();
   });
 
+  it("refuses a rename as stale-base when the source path's local content has diverged, preserving the local edit", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+    await exec("git", ["-C", senderRoot, "mv", "a.txt", "b.txt"]);
+    const operation = await sender.capture("rename file", service);
+
+    await writeFile(join(receiverRoot, "a.txt"), "receiver's own uncommitted edit\n");
+    await receiver.sync(service);
+
+    const proposal = (await receiver.diffProposal(operation.id))[0]!;
+    expect(proposal.classification).toBe("stale-base");
+    await expect(receiver.accept(operation.id)).rejects.toThrow("stale");
+    expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe("receiver's own uncommitted edit\n");
+    await expect(stat(join(receiverRoot, "b.txt"))).rejects.toThrow();
+  });
+
   it("requires approval for a rename that conflicts with a pending change on the OLD path", async () => {
     const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
     const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
