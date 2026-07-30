@@ -9,7 +9,8 @@ import {
   type RemoteHandoff,
   type RemoteIntent,
   type RemoteOperation,
-  type RemoteTask
+  type RemoteTask,
+  type RemoteValidation
 } from "@crosscode/protocol";
 import { fetchAccessToken } from "./service-client.js";
 
@@ -20,6 +21,7 @@ export type LiveSyncCallbacks = {
   onClaim?: (claim: RemoteClaim) => void;
   onHandoff?: (handoff: RemoteHandoff) => void;
   onIntent?: (intent: RemoteIntent) => void;
+  onValidation?: (validation: RemoteValidation) => void;
 };
 
 export type LiveSyncOptions = {
@@ -97,7 +99,8 @@ export class LiveSyncClient {
       else if (message.data.type === "task") this.callbacks.onTask?.(message.data.task);
       else if (message.data.type === "claim") this.callbacks.onClaim?.(message.data.claim);
       else if (message.data.type === "handoff") this.callbacks.onHandoff?.(message.data.handoff);
-      else this.callbacks.onIntent?.(message.data.intent);
+      else if (message.data.type === "intent") this.callbacks.onIntent?.(message.data.intent);
+      else this.callbacks.onValidation?.(message.data.validation);
     });
     socket.on("close", () => {
       if (this.socket === socket) this.socket = undefined;

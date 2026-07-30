@@ -17,6 +17,8 @@ import {
   taskIngestRequestSchema,
   taskIngestReceiptSchema,
   timeCursorQuerySchema,
+  validationIngestRequestSchema,
+  validationIngestReceiptSchema,
   EPOCH_CURSOR,
   type RemoteOperation
 } from "@crosscode/protocol";
@@ -239,6 +241,31 @@ async function handleRequest(
     return;
   }
 
+  if (method === "POST" && url.pathname === "/v1/validations") {
+    if (identity.role === "viewer") throw new HttpError(403, "Viewer membership is read-only");
+    const body = validationIngestRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
+    if (
+      body.event.workspaceId !== identity.workspaceId ||
+      body.event.replicaId !== identity.replicaId ||
+      body.event.actorId !== identity.actorId
+    ) throw new HttpError(403, "Event principal does not match authenticated membership");
+    const validation = await options.store.recordValidation(identity, body.event);
+    gateway.broadcastValidation(identity.workspaceId, validation, identity.replicaId);
+    send(response, 200, validationIngestReceiptSchema.parse({
+      eventId: validation.eventId,
+      validationId: validation.validation.id,
+      createdAt: validation.createdAt
+    }));
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v1/validations") {
+    const query = timeCursorQuerySchema.parse({ after: url.searchParams.get("after") ?? EPOCH_CURSOR });
+    const page = await options.store.listValidations(identity.workspaceId, query.after, 200);
+    send(response, 200, { validations: page.items, nextCursor: page.nextCursor });
+    return;
+  }
+
   if (method === "GET" && url.pathname === "/v1/presence") {
     const sessions = await options.store.listPresence(identity.workspaceId);
     send(response, 200, { sessions });
@@ -371,6 +398,8 @@ function rateLimitRoute(method: string, pathname: string): string {
     "GET /v1/handoffs",
     "POST /v1/intents",
     "GET /v1/intents",
+    "POST /v1/validations",
+    "GET /v1/validations",
     "GET /v1/presence"
   ]).has(route) ? route : "unknown";
 }

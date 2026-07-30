@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import type {
   ChangeTransaction, Claim, ClaimCreatedEvent, ClaimReleasedEvent, EventEnvelope, Handoff, HandoffRequestedEvent,
   HandoffRespondedEvent, Intent, IntentPublishedEvent, RemoteClaim, RemoteHandoff, RemoteIntent, RemoteOperation,
-  RemoteTask, Task, TaskCreatedEvent, TaskUpdatedEvent, TransactionCreatedEvent
+  RemoteTask, RemoteValidation, Task, TaskCreatedEvent, TaskUpdatedEvent, TransactionCreatedEvent, Validation, ValidationCompletedEvent
 } from "@crosscode/protocol";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
 import { hashCanonicalPayload, hashCredential, hashEnrollmentToken, randomCredential, verifyCredential } from "./crypto.js";
@@ -46,6 +46,8 @@ export class PgStore {
     await this.pool.query(sql);
     const handoffsIntentsSql = await readFile(new URL("../migrations/002_handoffs_intents.sql", import.meta.url), "utf8");
     await this.pool.query(handoffsIntentsSql);
+    const validationsCursorSql = await readFile(new URL("../migrations/003_validations_cursor.sql", import.meta.url), "utf8");
+    await this.pool.query(validationsCursorSql);
   }
 
   async close(): Promise<void> {
@@ -402,6 +404,32 @@ export class PgStore {
     return { items, nextCursor: items.at(-1)?.updatedAt ?? after };
   }
 
+  async recordValidation(identity: AccessClaims, event: ValidationCompletedEvent): Promise<RemoteValidation> {
+    const validation = event.payload;
+    const result = await this.pool.query<ValidationRow>(
+      `INSERT INTO validations (id, workspace_id, event_id, replica_id, payload, created_at)
+       VALUES ($1, $2, $3, $4, $5::jsonb, now())
+       ON CONFLICT (workspace_id, id) DO UPDATE
+         SET event_id = excluded.event_id, replica_id = excluded.replica_id, payload = excluded.payload
+       RETURNING id, workspace_id, event_id, replica_id, payload, created_at`,
+      [validation.id, identity.workspaceId, event.id, identity.replicaId, JSON.stringify(validation)]
+    );
+    return mapValidation(result.rows[0]!);
+  }
+
+  async listValidations(workspaceId: string, after: string, limit: number): Promise<{ items: RemoteValidation[]; nextCursor: string }> {
+    const result = await this.pool.query<ValidationRow>(
+      `SELECT id, workspace_id, event_id, replica_id, payload, created_at
+         FROM validations
+        WHERE workspace_id = $1 AND created_at > $2
+        ORDER BY created_at ASC
+        LIMIT $3`,
+      [workspaceId, after, limit]
+    );
+    const items = result.rows.map(mapValidation);
+    return { items, nextCursor: items.at(-1)?.createdAt ?? after };
+  }
+
   async recordSessionStart(workspaceId: string, replicaId: string, cursor: number): Promise<void> {
     await this.pool.query(
       "INSERT INTO sessions (id, workspace_id, replica_id, summary) VALUES ($1, $2, $3, $4::jsonb)",
@@ -609,6 +637,25 @@ function mapIntent(row: IntentRow): RemoteIntent {
     senderReplicaId: row.replica_id,
     intent: row.payload,
     updatedAt: new Date(row.updated_at).toISOString()
+  };
+}
+
+type ValidationRow = {
+  id: string;
+  workspace_id: string;
+  event_id: string;
+  replica_id: string;
+  payload: Validation;
+  created_at: Date;
+};
+
+function mapValidation(row: ValidationRow): RemoteValidation {
+  return {
+    eventId: row.event_id,
+    workspaceId: row.workspace_id,
+    senderReplicaId: row.replica_id,
+    validation: row.payload,
+    createdAt: new Date(row.created_at).toISOString()
   };
 }
 

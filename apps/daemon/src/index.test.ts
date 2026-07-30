@@ -337,7 +337,9 @@ describe("local daemon coordination", () => {
       uploadHandoff: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", handoff: record.event.payload, updatedAt: new Date().toISOString() }),
       listHandoffs: async (after) => ({ handoffs: [], nextCursor: after }),
       uploadIntent: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", intent: record.event.payload, updatedAt: new Date().toISOString() }),
-      listIntents: async (after) => ({ intents: [], nextCursor: after })
+      listIntents: async (after) => ({ intents: [], nextCursor: after }),
+      uploadValidation: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", validation: record.event.payload, createdAt: new Date().toISOString() }),
+      listValidations: async (after) => ({ validations: [], nextCursor: after })
     });
 
     expect(result).toEqual({ uploaded: 1, downloaded: 1, cursor: 2 });
@@ -346,7 +348,7 @@ describe("local daemon coordination", () => {
     expect(await readFile(join(root, "a.txt"), "utf8")).toBe("offline\n");
   });
 
-  it("enqueues outbound handoff and intent events and synchronizes them with the coordination service", async () => {
+  it("enqueues outbound handoff, intent, and validation events and synchronizes them with the coordination service", async () => {
     const root = await repo();
     const daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
     await writeFile(join(root, "a.txt"), "changed\n");
@@ -359,10 +361,15 @@ describe("local daemon coordination", () => {
     const intent = await daemon.publishIntent({ text: "Rename foo to bar", taskId: "task-1" });
     expect([...daemon.intentOutbound.values()].some((record) => record.event.payload.id === intent.id)).toBe(true);
 
+    const [validation] = await daemon.validate("fast", ["true"]);
+    expect([...daemon.validationOutbound.values()].some((record) => record.event.payload.id === validation!.id)).toBe(true);
+
     const remoteHandoffRecord = { eventId: "remote-handoff-event", workspaceId: "w", senderReplicaId: "other", handoff: { id: "remote-handoff", operationId: "operation-x", requestedBy: "other-actor", status: "pending" as const, createdAt: new Date().toISOString() }, updatedAt: new Date().toISOString() };
     const remoteIntentRecord = { eventId: "remote-intent-event", workspaceId: "w", senderReplicaId: "other", intent: { id: "remote-intent", actorId: "other-actor", text: "Remote intent", createdAt: new Date().toISOString() }, updatedAt: new Date().toISOString() };
+    const remoteValidationRecord = { eventId: "remote-validation-event", workspaceId: "w", senderReplicaId: "other", validation: { id: "remote-validation", profile: "fast", command: "true", exitCode: 0, durationMs: 1, output: "", runnerId: "other-actor", createdAt: new Date().toISOString() }, createdAt: new Date().toISOString() };
     const uploadedHandoffs: string[] = [];
     const uploadedIntents: string[] = [];
+    const uploadedValidations: string[] = [];
     const result = await daemon.syncRemote({
       upload: async (record) => ({ id: record.transaction.id, workspaceId: "w", senderReplicaId: "replica", transaction: record.transaction, sequence: 1, createdAt: new Date().toISOString() }),
       list: async () => ({ operations: [], nextCursor: 0 }),
@@ -373,13 +380,18 @@ describe("local daemon coordination", () => {
       uploadHandoff: async (record) => { uploadedHandoffs.push(record.event.payload.id); return { eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", handoff: record.event.payload, updatedAt: new Date().toISOString() }; },
       listHandoffs: async () => ({ handoffs: [remoteHandoffRecord], nextCursor: remoteHandoffRecord.updatedAt }),
       uploadIntent: async (record) => { uploadedIntents.push(record.event.payload.id); return { eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", intent: record.event.payload, updatedAt: new Date().toISOString() }; },
-      listIntents: async () => ({ intents: [remoteIntentRecord], nextCursor: remoteIntentRecord.updatedAt })
+      listIntents: async () => ({ intents: [remoteIntentRecord], nextCursor: remoteIntentRecord.updatedAt }),
+      uploadValidation: async (record) => { uploadedValidations.push(record.event.payload.id); return { eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", validation: record.event.payload, createdAt: new Date().toISOString() }; },
+      listValidations: async () => ({ validations: [remoteValidationRecord], nextCursor: remoteValidationRecord.createdAt })
     });
 
     expect(uploadedHandoffs).toEqual([responded.id]);
     expect(uploadedIntents).toEqual([intent.id]);
+    expect(uploadedValidations).toEqual([validation!.id]);
     expect(daemon.handoffs.get("remote-handoff")).toEqual(remoteHandoffRecord.handoff);
     expect(daemon.intents.get("remote-intent")).toEqual(remoteIntentRecord.intent);
+    expect(daemon.remoteValidations.get("remote-validation")).toEqual(remoteValidationRecord);
+    expect((await daemon.status()).remoteValidations).toEqual([remoteValidationRecord]);
     expect(result.uploaded).toBe(1);
   });
 
