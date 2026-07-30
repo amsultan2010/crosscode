@@ -23,8 +23,7 @@ projections, an offline outbox, and the download cursor. It creates safety
 checkpoints under `refs/crosscode/checkpoints/<replica-id>/...` before any
 materialization and never moves `HEAD` or changes the real index. It binds only to
 loopback and exposes a mode-`0600` connection descriptor under the worktree's Git
-directory; the same descriptor is what `apps/mcp-server`, `apps/cli`, and
-`apps/vscode-extension` connect to.
+directory; the same descriptor is what `apps/mcp-server` and `apps/cli` connect to.
 
 ## Coordination service (`apps/service`)
 
@@ -38,13 +37,16 @@ replica is offline. The service enforces workspace membership and role on every
 request; it does not execute anything a replica sends it beyond storing and
 relaying it.
 
-## Thin clients (`apps/cli`, `apps/mcp-server`, `apps/vscode-extension`)
+## Thin clients (`apps/cli`, `apps/mcp-server`)
 
-The CLI, the MCP server, and the VS Code/Cursor extension hold no sync state of
-their own. They talk to the local daemon's HTTP API and render or forward its
-state: status, tasks, claims, proposal inspection, accept/reject, checkpoints, and
-validation runs. `apps/mcp-server` additionally bootstraps the daemon on first
-connection if one isn't already running for the worktree.
+The CLI and the MCP server hold no sync state of their own. They talk to the local
+daemon's HTTP API and render or forward its state: status, tasks, claims, proposal
+inspection, accept/reject, checkpoints, and validation runs. `apps/mcp-server`
+additionally bootstraps the daemon on first connection if one isn't already running
+for the worktree. These two, plus the daemon itself, are the entire supported
+product surface: editors and agents (including VS Code and Cursor) integrate via
+MCP (`docs/mcp-clients.md`). A previously-built VS Code/Cursor extension remains
+in-tree at `apps/vscode-extension` but is frozen and unsupported by decision.
 
 ## Safety invariants
 

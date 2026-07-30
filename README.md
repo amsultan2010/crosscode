@@ -24,7 +24,7 @@ Paste the prompt in [`docs/install-prompt.md`](./docs/install-prompt.md) into an
 - HTTP-backed CLI and a standards-compliant MCP server (`apps/mcp-server`) that auto-bootstraps the daemon on first connection
 - Live WebSocket presence, task, claim, handoff, and intent fan-out, with a durable poll fallback
 - `publish --branch` with a dry-run plan, publishing accepted work as ordinary commits to a real remote
-- A VS Code/Cursor extension for status, tasks, claims, proposals, and diff review (no sync authority)
+- Editor/agent integration exclusively through the MCP server — the supported product surface is the daemon + MCP server (plus the CLI as the daemon's local tool). A previously-built VS Code/Cursor extension exists in-tree (`apps/vscode-extension`) but is frozen and unsupported by decision; VS Code and Cursor users connect via MCP instead (`docs/mcp-clients.md`)
 - A bounded, non-authoritative AI semantic reviewer for ambiguous conflicts, gated behind explicit workspace policy and human approval
 
 See [BUILD_INSTRUCTIONS.md](./BUILD_INSTRUCTIONS.md) for the authoritative, milestone-by-milestone status of what's implemented and tested.
@@ -229,4 +229,4 @@ For the implementation plan and current milestone ledger, see [BUILD_INSTRUCTION
 - Dependency-impact analysis for `.ts`/`.tsx` is a syntactic AST walk, not a type-checker-backed analysis (see BUILD_INSTRUCTIONS.md Milestone C for exact scope).
 - There is no hosted/managed coordination service yet — you run PostgreSQL and the service yourself.
 - Team-workspace enrollment (multi-person/multi-agent sync) requires a running coordination service and a manually issued enrollment token; there is no self-serve signup or billing yet.
-- Not published to npm or a VS Code/Cursor marketplace yet; everything runs from a cloned checkout via `pnpm install` and `tsx` (see `docs/install-prompt.md`).
+- Deliberately not published to npm or any editor marketplace — the supported surface is the daemon + MCP server, run from a cloned checkout via `pnpm install` and `tsx` (see `docs/install-prompt.md`). The in-tree VS Code/Cursor extension is frozen and unsupported by decision.

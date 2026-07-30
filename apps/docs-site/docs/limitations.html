@@ -54,13 +54,13 @@
 
       <ul>
         <li>Production PostgreSQL role grants and retention policies still need environment-specific deployment hardening.</li>
-        <li>Replica secrets use the protected Git-directory configuration fallback; OS-keychain integration is still planned.</li>
-        <li>Transactions are text-only. Binary files are rejected for sharing, although checkpoint restore preserves their exact bytes.</li>
-        <li>Renames are represented as explicit delete/add changes.</li>
+        <li>Replica secrets are stored in the OS keychain when available (macOS Keychain, Linux Secret Service); otherwise, including on Windows, the protected Git-directory configuration file is used.</li>
+        <li>Binary files are shared base64-encoded with byte-exact materialization; any conflict involving a binary file requires human approval, since deterministic hunk/merge analysis is text-only.</li>
+        <li>Renames are tracked as first-class rename changes; a rename conflicting with pending work on either path, or touching a critical path under either name, always requires approval.</li>
         <li>Dependency-impact analysis for <code>.ts</code>/<code>.tsx</code> is a syntactic AST walk, not a type-checker-backed analysis.</li>
         <li>There is no hosted or managed coordination service yet. You run PostgreSQL and the service yourself.</li>
         <li>Team-workspace enrollment requires a running coordination service and a manually issued enrollment token; there is no self-serve signup or billing yet.</li>
-        <li>Not published to npm or a VS Code/Cursor marketplace yet; everything runs from a cloned checkout.</li>
+        <li>Deliberately not published to npm or any editor marketplace — the supported surface is the daemon + MCP server, run from a cloned checkout. Editors like VS Code and Cursor connect via MCP; there is no supported editor extension.</li>
       </ul>
 
       <div class="callout">
