@@ -4,7 +4,9 @@
 
 Last updated: 2026-07-30 (Milestones A-E complete; the post-E backend-completion pass — `policy.autoApplyRisk` enforcement, shared/service-side validation status reporting, a discriminated `LocalEvent` union, `packages/test-fixtures`, and `docs/protocol.md`/`docs/security.md`/a revised `docs/architecture.md` — is complete; a subsequent hardening pass is also complete: OS-keychain replica-secret storage, opt-in admin retention pruning, additional MCP client docs (Gemini CLI, Cursor), binary file sharing, and true git-rename tracking).
 
-Crosscode now has a tested local safety core and a working multi-replica coordination path: real daemons exchange live proposals, tasks, claims, handoffs, and validation results through an authenticated PostgreSQL-backed service, deterministically classify conflicts, optionally auto-apply low-risk proposals under an explicit committed policy, gate publish on validation, and are reachable from MCP clients and a VS Code extension. The daemon remains the sole local authority; the CLI, MCP entry point, and extension all communicate through its authenticated loopback API. What remains genuinely open: a real (non-mock) AI review provider, and an interactive human walkthrough of the VS Code extension (the one item in this list that requires a human, not more automation). Two items are explicitly scoped out of the current hardening pass rather than left ambiguous: a single combined fixture driving an unwrapped editor + MCP client + VS Code extension together (each is already proven individually), and npm/VS Code Marketplace publishing (needs the maintainer's own publisher credentials, and the team's stated focus is the daemon+MCP surface, not packaging). A Google-Docs-style live web dashboard with browser accounts remains a separately-scoped future track and is intentionally not part of this repository yet; see section 1's non-goals for the current release boundary.
+**Scope decision (2026-07-30): the product surface is the daemon + MCP server only.** The VS Code/Cursor extension and npm/VS Code Marketplace publishing are NOT part of the product going forward — this is a deliberate decision, not a deferral. Editors and agents integrate with Crosscode exclusively through the MCP server (`apps/mcp-server`, see `docs/mcp-clients.md`) and the daemon's CLI (`apps/cli`, the daemon's local admin/setup tool). The existing `apps/vscode-extension` code remains in the repository as-is (built, tested, functional) but is frozen and unsupported; it receives no further work, and no extension-related item counts as outstanding anywhere in this document. Distribution stays clone-and-run via `tsx` (`docs/install-prompt.md`); nothing is published to npm or any marketplace. Sections below that specify or track extension work (14, Phase 5, Milestone E, parts of 13/22) are retained as historical record of what was built, superseded by this decision.
+
+Crosscode now has a tested local safety core and a working multi-replica coordination path: real daemons exchange live proposals, tasks, claims, handoffs, and validation results through an authenticated PostgreSQL-backed service, deterministically classify conflicts, optionally auto-apply low-risk proposals under an explicit committed policy, gate publish on validation, and are reachable from any MCP client. The daemon remains the sole local authority; the CLI and MCP entry point communicate through its authenticated loopback API. What remains genuinely open: a real (non-mock) AI review provider. A Google-Docs-style live web dashboard with browser accounts remains a separately-scoped future track and is intentionally not part of this repository yet; see section 1's non-goals for the current release boundary.
 
 ### Completed
 
@@ -51,13 +53,12 @@ Current verification baseline:
 
 ### Not implemented
 
-- A manual, human click-through of the VS Code/Cursor extension inside an interactive VS Code window (it is built, packaged, unit-tested, and now automatically verified end-to-end inside a real, headless VS Code extension host per the Phase 5 note below, but no human has clicked through it interactively in this environment). This is the one remaining item that requires a human, not more automated work.
 - A real external AI provider behind the semantic-review interface (only a mock reviewer test double exists; see Phase 6).
 
-### Explicitly deferred (not ambiguous, not silently dropped)
+### Out of scope by decision (see the scope decision at the top of this section)
 
-- A single combined fixture driving an unwrapped editor, an MCP client, and the VS Code extension together in one workspace (each integration is proven individually; see Milestone E). Deferred as a testing nicety, not a blocking capability, since every piece is already proven separately.
-- Publishing to npm / the VS Code Marketplace (needs the maintainer's own publisher credentials and account access; the team's stated focus for this hardening pass is the daemon+MCP surface, not packaging).
+- The VS Code/Cursor extension as a supported product surface. The code in `apps/vscode-extension` stays in-tree, built and tested, but frozen; the former outstanding items tied to it (a human interactive walkthrough, a combined editor+MCP+extension fixture) are closed as moot, not pending.
+- Publishing to npm or the VS Code Marketplace. Distribution is clone-and-run via `tsx`.
 - A Google-Docs-style live web dashboard with browser accounts tied to MCP-authenticated agents (a separately-scoped future track; see section 1's non-goals).
 
 ### Known foundation debt
@@ -66,7 +67,7 @@ None outstanding.
 
 ### Recommended next gate
 
-Milestones A through E are all COMPLETE, each confirmed by real fixtures rather than description: durable local daemon (A), authenticated HTTP/WebSocket sync including live task/claim/handoff/intent/validation fan-out and durable session summaries confirmed against a real PostgreSQL database (B), deterministic conflict/risk classification including an AST-based TypeScript dependency graph and a direct conflict-artifact read route (C), validation-gated publish (D), and standards-compliant MCP plus an automatically-verified VS Code extension (E). The post-E backend-completion pass and the full hardening pass (OS keychain, retention, MCP docs, binary file sharing, true rename tracking) are also complete. What remains, in priority order: (1) a real external AI-provider `SemanticReviewer` implementation behind the existing provider-neutral interface, once a provider and credentials are chosen (Phase 6); (2) an actual human interactive walkthrough of the VS Code extension, to close the one remaining section 22 item that isn't a fixture; (3) whenever prioritized, the explicitly-deferred items above (combined fixture, npm/Marketplace publishing) and the separately-scoped web dashboard track.
+Milestones A through E are all COMPLETE, each confirmed by real fixtures rather than description: durable local daemon (A), authenticated HTTP/WebSocket sync including live task/claim/handoff/intent/validation fan-out and durable session summaries confirmed against a real PostgreSQL database (B), deterministic conflict/risk classification including an AST-based TypeScript dependency graph and a direct conflict-artifact read route (C), validation-gated publish (D), and a standards-compliant MCP server (E; the extension built under E is now frozen per the scope decision above). The post-E backend-completion pass and the full hardening pass (OS keychain, retention, MCP docs, binary file sharing, true rename tracking) are also complete. The single remaining engineering item is a real external AI-provider `SemanticReviewer` implementation behind the existing provider-neutral interface, once a provider and credentials are chosen (Phase 6). The web dashboard remains a separately-scoped future track.
 
 ## 1. Product definition
 
@@ -626,6 +627,8 @@ For remote agents that only create commits or push branches, ingest their Git ac
 
 ## 14. VS Code and Cursor extension
 
+> **Superseded by the section 0 scope decision (2026-07-30):** the extension is no longer part of the product surface — daemon + MCP only. This section is retained as the historical spec for what was built; `apps/vscode-extension` is frozen and unsupported. Editor users (including VS Code/Cursor) integrate via the MCP server instead (`docs/mcp-clients.md`).
+
 Build one VS Code-compatible extension after daemon/CLI sync works.
 
 The extension must contain no synchronization authority. It is a local UX client of the daemon.
@@ -841,7 +844,7 @@ Implement in order. Do not begin later phases until the preceding acceptance cri
 
 **Exit criteria: met.** An MCP-capable client can claim a task, declare intent, query overlap, and create a checkpoint; the same workspace still works with an unwrapped generic editor.
 
-### Phase 5 — VS Code/Cursor extension — MVP BUILT AND AUTOMATICALLY VERIFIED IN A REAL VS CODE INSTANCE
+### Phase 5 — VS Code/Cursor extension — BUILT AND VERIFIED, NOW FROZEN (out of scope per the section 0 scope decision)
 
 - `apps/vscode-extension` implements the five MVP views/actions from section 14: a status view (daemon/repo/service/outbox health, the same fields as `crosscode status --json`), a tasks/claims view with create-task, claim-path, and release-claim commands, a proposals view with per-file diffs opened through the normal `vscode.diff` editor and modal-confirmed accept/reject (with extra warning copy for high/critical risk operations), a `FileDecorationProvider` badging claimed (`C`) and proposed (`P`) paths in the Explorer, and a validation view that runs a named committed profile on demand and lists pass/fail results.
 - It contains no sync authority: every state-changing action calls an existing (or, for claim-release/task-update, newly exposed) method on `@crosscode/daemon`'s `DaemonClient` HTTP wrapper — it never writes files, never re-implements accept/reject, and degrades to a "disconnected" status when the daemon is unreachable rather than acting on stale/cached data.
