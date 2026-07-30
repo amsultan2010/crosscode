@@ -96,7 +96,7 @@ export function containsSecretMaterial(content: string): boolean {
   return secretContentPattern.test(content);
 }
 
-export type RedactionRecord = { path: string; reason: "excluded-path" | "secret-path" | "secret-content" | "configured-exclusion"; hash: string };
+export type RedactionRecord = { path: string; reason: "excluded-path" | "secret-path" | "secret-content" | "configured-exclusion" | "binary-content"; hash: string };
 
 export type SemanticReviewBundleInput = {
   workspaceId: string;
@@ -104,7 +104,7 @@ export type SemanticReviewBundleInput = {
   risk: "medium" | "high" | "critical";
   intents: string[];
   validations: Array<{ command: string; exitCode: number; tree?: string }>;
-  files: Array<{ path: string; base?: string; local?: string; proposed?: string }>;
+  files: Array<{ path: string; base?: string; local?: string; proposed?: string; binary?: boolean }>;
   excludedPaths?: string[];
 };
 
@@ -124,6 +124,7 @@ export function buildSemanticReviewBundle(input: SemanticReviewBundleInput): { r
   for (const file of input.files) {
     if (redactPath(file.path)) { redactions.push({ path: file.path, reason: "secret-path", hash: hashOf(file.path) }); continue; }
     if (matchesExclusion(file.path, excluded)) { redactions.push({ path: file.path, reason: "configured-exclusion", hash: hashOf(file.path) }); continue; }
+    if (file.binary) { redactions.push({ path: file.path, reason: "binary-content", hash: hashOf(file.path) }); continue; }
     const sanitized: { path: string; base?: string; local?: string; proposed?: string } = { path: file.path };
     (["base", "local", "proposed"] as const).forEach((variant) => {
       const value = file[variant];
