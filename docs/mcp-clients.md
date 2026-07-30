@@ -68,6 +68,38 @@ Add a server entry to `opencode.json` (project or global config):
 }
 ```
 
+## Gemini CLI
+
+Add a server entry to `.gemini/settings.json` (project) or `~/.gemini/settings.json`
+(user):
+
+```json
+{
+  "mcpServers": {
+    "crosscode": {
+      "command": "crosscode-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+## Cursor
+
+Add a server entry to `.cursor/mcp.json` at the worktree root (project-scoped) or
+`~/.cursor/mcp.json` (available in every project):
+
+```json
+{
+  "mcpServers": {
+    "crosscode": {
+      "command": "crosscode-mcp",
+      "args": []
+    }
+  }
+}
+```
+
 ## Running from source
 
 Crosscode is not published to npm yet, so every client above runs it directly from
@@ -86,6 +118,11 @@ worktree you want Crosscode to manage:
 `/absolute/path/to/crosscode` is wherever you cloned this repository (after
 `pnpm install`); `/absolute/path/to/your/project` is the Git repository you want
 Crosscode to watch. This is exactly what `docs/install-prompt.md` generates.
+
+All configs above are transcribed from each client's own published MCP
+documentation and config schema (stdio server registration under an
+`mcpServers`/`mcp_servers` block); none of them have been launched end-to-end
+against a running Crosscode daemon in this environment.
 
 ## Available tools
 
