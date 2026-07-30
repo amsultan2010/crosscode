@@ -1,50 +1,21 @@
-import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTempRepo, cleanupTempRepos, spawnDaemon, stopDaemon, stopAllDaemons, waitFor } from "@crosscode/test-fixtures";
 import { createServiceServer, PgStore } from "../../service/src/index.js";
 import { CoordinationServiceClient } from "./service-client.js";
-import { runDaemonProcess, writeDaemonConfig, type ManagedDaemon } from "./runtime.js";
+import { writeDaemonConfig } from "./runtime.js";
 
-const exec = promisify(execFile);
 const databaseUrl = process.env.CROSSCODE_TEST_DATABASE_URL;
-const directories: string[] = [];
-const daemons = new Set<ManagedDaemon>();
 
-async function waitFor<T>(read: () => T | Promise<T>, accept: (value: T) => boolean, timeoutMs: number): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
-  let value: T;
-  for (;;) {
-    value = await read();
-    if (accept(value)) return value;
-    if (Date.now() >= deadline) throw new Error("Timed out waiting for condition");
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 30));
-  }
-}
-
-async function repository(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "crosscode-handoff-intent-"));
-  directories.push(directory);
-  await exec("git", ["init", "-q", "-b", "main", directory]);
-  await exec("git", ["-C", directory, "config", "user.email", "test@example.com"]);
-  await exec("git", ["-C", directory, "config", "user.name", "Test"]);
-  await writeFile(join(directory, "seed.txt"), "seed\n");
-  await exec("git", ["-C", directory, "add", "."]);
-  await exec("git", ["-C", directory, "commit", "-qm", "initial"]);
-  return directory;
-}
-
-async function stopDaemon(daemon: ManagedDaemon): Promise<void> {
-  if (!daemons.delete(daemon)) return;
-  await daemon.stop();
+function repository(): Promise<string> {
+  return createTempRepo({ prefix: "crosscode-handoff-intent-" });
 }
 
 afterEach(async () => {
-  await Promise.all([...daemons].map((daemon) => stopDaemon(daemon)));
-  await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  await stopAllDaemons();
+  await cleanupTempRepos();
 });
 
 describe.skipIf(!databaseUrl)("PostgreSQL live handoff and intent coordination", () => {
@@ -69,10 +40,8 @@ describe.skipIf(!databaseUrl)("PostgreSQL live handoff and intent coordination",
       // arrived over the live WebSocket path, proving live fan-out rather than eventual poll consistency.
       const FAST_POLL_MS = 100;
       const SLOW_POLL_MS = 10_000;
-      const daemonA = await runDaemonProcess(rootA, { gitPollMs: 100, syncPollMs: FAST_POLL_MS });
-      daemons.add(daemonA);
-      let daemonB = await runDaemonProcess(rootB, { gitPollMs: 100, syncPollMs: SLOW_POLL_MS });
-      daemons.add(daemonB);
+      const daemonA = await spawnDaemon(rootA, { gitPollMs: 100, syncPollMs: FAST_POLL_MS });
+      let daemonB = await spawnDaemon(rootB, { gitPollMs: 100, syncPollMs: SLOW_POLL_MS });
 
       // (a) handoff live fan-out: A captures a transaction, requests a handoff, B sees it live.
       await writeFile(join(rootA, "shared.txt"), "from-a\n");
@@ -99,8 +68,7 @@ describe.skipIf(!databaseUrl)("PostgreSQL live handoff and intent coordination",
       // (c) WebSocket torn down: replace daemon B with one that has no live socket at all
       // (a persistent WS outage) but a fast poll, and confirm it still catches up losslessly.
       await stopDaemon(daemonB);
-      daemonB = await runDaemonProcess(rootB, { gitPollMs: 100, syncPollMs: 150, liveSync: false });
-      daemons.add(daemonB);
+      daemonB = await spawnDaemon(rootB, { gitPollMs: 100, syncPollMs: 150, liveSync: false });
 
       const postOutageHandoff = await daemonA.running.daemon.runExclusive(() => daemonA.running.daemon.requestHandoff({ operationId: captured!.id, note: "post-outage handoff" }));
       const postOutageIntent = await daemonA.running.daemon.runExclusive(() => daemonA.running.daemon.publishIntent({ text: "Post-outage intent" }));
@@ -115,7 +83,7 @@ describe.skipIf(!databaseUrl)("PostgreSQL live handoff and intent coordination",
       // Live daemons keep WebSocket connections open on the server; http.Server#close only
       // invokes its callback once every existing connection has ended, so they must be
       // stopped first or server.close() never resolves.
-      await Promise.all([...daemons].map((daemon) => stopDaemon(daemon)));
+      await stopAllDaemons();
       await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
       await store.pool.query("DELETE FROM audit_events WHERE workspace_id = $1", [owner.workspaceId]);
       await store.pool.query("DELETE FROM workspaces WHERE id = $1", [owner.workspaceId]);

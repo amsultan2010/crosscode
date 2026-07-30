@@ -13,6 +13,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@crosscode/test-fixtures": "workspace:*",
     "@types/ws": "^8.18.1"
   }
 }
