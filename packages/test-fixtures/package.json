@@ -1,0 +1,6 @@
+{
+  "name": "@crosscode/test-fixtures",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts"
+}

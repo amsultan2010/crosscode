@@ -66,6 +66,9 @@ importers:
         specifier: ^3.25.76
         version: 3.25.76
     devDependencies:
+      '@crosscode/test-fixtures':
+        specifier: workspace:*
+        version: link:../../packages/test-fixtures
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
@@ -170,6 +173,8 @@ importers:
       zod:
         specifier: ^3.24.3
         version: 3.25.76
+
+  packages/test-fixtures: {}
 
 packages:
 
