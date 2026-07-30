@@ -94,7 +94,7 @@ export const localEventSchema = z.discriminatedUnion("type", [
     id: z.string(), operationId: z.string(), path: z.string(), providerId: z.string(), classification: z.string(),
     requiresHumanApproval: z.boolean(),
     redactions: z.array(z.object({
-      path: z.string(), reason: z.enum(["excluded-path", "secret-path", "secret-content", "configured-exclusion"]), hash: z.string()
+      path: z.string(), reason: z.enum(["excluded-path", "secret-path", "secret-content", "configured-exclusion", "binary-content"]), hash: z.string()
     }).strict())
   }).strict()),
   event("semantic_review.resolved", z.object({ id: z.string(), decision: z.enum(["accepted", "rejected"]) }).strict()),

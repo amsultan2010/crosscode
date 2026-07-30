@@ -20,7 +20,7 @@ export type Claim = z.infer<typeof claimSchema>;
 export const changeTransactionSchema = z.object({
   id: z.string().min(1), taskId: z.string().optional(), intent: z.string().optional(),
   base: z.object({ headCommit: z.string().optional(), files: z.array(z.object({ path: z.string(), blobHash: z.string().optional(), contentHash: z.string() })) }),
-  changes: z.array(z.object({ path: z.string().min(1), kind: z.enum(["add", "modify", "delete", "rename"]), beforeHash: z.string().optional(), afterHash: z.string().optional(), unifiedPatch: z.string().optional(), afterContent: z.string().optional() })).min(1),
+  changes: z.array(z.object({ path: z.string().min(1), kind: z.enum(["add", "modify", "delete", "rename"]), beforeHash: z.string().optional(), afterHash: z.string().optional(), unifiedPatch: z.string().optional(), afterContent: z.string().optional(), afterEncoding: z.enum(["utf8", "base64"]).optional() })).min(1),
   provenance: z.object({ source: z.enum(["filesystem", "cli-wrapper", "mcp", "hook", "extension"]), confidence: z.enum(["known", "inferred", "unknown"]) }),
   safety: z.object({ risk: riskSchema, requiresApproval: z.boolean() }),
   kind: captureKindSchema.optional()
