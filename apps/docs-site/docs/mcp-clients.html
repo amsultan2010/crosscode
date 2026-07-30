@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MCP client setup — Crosscode</title>
+  <title>MCP client setup · Crosscode</title>
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
@@ -17,31 +17,62 @@
     </nav>
   </header>
 
-  <main>
-    <h1>MCP client configuration</h1>
+  <main class="docs-layout wide">
+    <nav class="docs-sidebar" aria-label="Docs navigation">
+      <div>
+        <div class="docs-sidebar-label">Start here</div>
+        <div class="docs-sidebar-links">
+          <a href="/docs/index.html">Overview</a>
+        </div>
+      </div>
+      <div>
+        <div class="docs-sidebar-label">Architecture &amp; safety</div>
+        <div class="docs-sidebar-links">
+          <a href="/docs/architecture.html">Architecture</a>
+          <a href="/docs/safety.html">Safety model</a>
+        </div>
+      </div>
+      <div>
+        <div class="docs-sidebar-label">Setup &amp; operation</div>
+        <div class="docs-sidebar-links">
+          <a href="/docs/install.html">Install &amp; quickstart</a>
+          <a href="/docs/mcp-clients.html" class="active" aria-current="page">MCP client setup</a>
+        </div>
+      </div>
+      <div>
+        <div class="docs-sidebar-label">Reference</div>
+        <div class="docs-sidebar-links">
+          <a href="/docs/cli.html">CLI reference</a>
+          <a href="/docs/limitations.html">Limitations</a>
+        </div>
+      </div>
+    </nav>
 
-    <p>
-      <code>apps/mcp-server</code> is a standards-compliant Model Context
-      Protocol server built on <code>@modelcontextprotocol/sdk</code>. It speaks
-      MCP over stdio and proxies tool calls to the local Crosscode daemon for
-      the current worktree (see <code>crosscode daemon</code> /
-      <code>pnpm daemon</code>). Start the daemon for the worktree before
-      connecting a client &mdash; the MCP server reads the daemon's local
-      connection descriptor (<code>.git/crosscode/daemon.json</code>) and fails
-      to start if no daemon is running.
-    </p>
+    <div class="docs-content">
+      <h1>MCP client configuration</h1>
 
-    <p>
-      The server is invoked as <code>crosscode-mcp</code> (see
-      <code>apps/mcp-server/package.json</code>'s <code>bin</code> entry) and
-      takes no arguments; it discovers the repository from its working
-      directory, so each client must launch it with <code>cwd</code> set to the
-      worktree root.
-    </p>
+      <p>
+        <code>apps/mcp-server</code> is a standards-compliant Model Context
+        Protocol server built on <code>@modelcontextprotocol/sdk</code>. It speaks
+        MCP over stdio and proxies tool calls to the local Crosscode daemon for
+        the current worktree (see <code>crosscode daemon</code> /
+        <code>pnpm daemon</code>). Start the daemon for the worktree before
+        connecting a client. The MCP server reads the daemon's local
+        connection descriptor (<code>.git/crosscode/daemon.json</code>) and fails
+        to start if no daemon is running.
+      </p>
 
-    <h2>Claude Code</h2>
-    <p>Add a project- or user-scoped server entry, for example in <code>.mcp.json</code> at the worktree root:</p>
-    <pre><code>{
+      <p>
+        The server is invoked as <code>crosscode-mcp</code> (see
+        <code>apps/mcp-server/package.json</code>'s <code>bin</code> entry) and
+        takes no arguments; it discovers the repository from its working
+        directory, so each client must launch it with <code>cwd</code> set to the
+        worktree root.
+      </p>
+
+      <h2>Claude Code</h2>
+      <p>Add a project- or user-scoped server entry, for example in <code>.mcp.json</code> at the worktree root:</p>
+      <pre><code>{
   "mcpServers": {
     "crosscode": {
       "command": "crosscode-mcp",
@@ -49,24 +80,24 @@
     }
   }
 }</code></pre>
-    <p>Or register it with the CLI from the worktree root:</p>
-    <pre><code>claude mcp add crosscode -- crosscode-mcp</code></pre>
+      <p>Or register it with the CLI from the worktree root:</p>
+      <pre><code>claude mcp add crosscode -- crosscode-mcp</code></pre>
 
-    <h2>Codex CLI</h2>
-    <p>Add a server entry to <code>~/.codex/config.toml</code>:</p>
-    <pre><code>[mcp_servers.crosscode]
+      <h2>Codex CLI</h2>
+      <p>Add a server entry to <code>~/.codex/config.toml</code>:</p>
+      <pre><code>[mcp_servers.crosscode]
 command = "crosscode-mcp"
 args = []</code></pre>
-    <p>
-      Codex CLI spawns MCP servers with the working directory of the Codex
-      session, so run Codex from the worktree root (or the directory it
-      operates in) so the server can find the local daemon connection
-      descriptor.
-    </p>
+      <p>
+        Codex CLI spawns MCP servers with the working directory of the Codex
+        session, so run Codex from the worktree root (or the directory it
+        operates in) so the server can find the local daemon connection
+        descriptor.
+      </p>
 
-    <h2>OpenCode</h2>
-    <p>Add a server entry to <code>opencode.json</code> (project or global config):</p>
-    <pre><code>{
+      <h2>OpenCode</h2>
+      <p>Add a server entry to <code>opencode.json</code> (project or global config):</p>
+      <pre><code>{
   "mcp": {
     "crosscode": {
       "type": "local",
@@ -76,35 +107,40 @@ args = []</code></pre>
   }
 }</code></pre>
 
-    <h2>Running from source</h2>
-    <p>
-      Before <code>crosscode-mcp</code> is published/linked as a binary, any of
-      the above can run it directly from the repo with <code>tsx</code>,
-      keeping <code>cwd</code> at the worktree root:
-    </p>
-    <pre><code>{
+      <h2>Running from source</h2>
+      <p>
+        Before <code>crosscode-mcp</code> is published or linked as a binary, any of
+        the above can run it directly from the repo with <code>tsx</code>,
+        keeping <code>cwd</code> at the worktree root:
+      </p>
+      <pre><code>{
   "command": "tsx",
   "args": ["/absolute/path/to/crosscode/apps/mcp-server/src/main.ts"]
 }</code></pre>
 
-    <h2>Available tools</h2>
-    <p>
-      <code>get_workspace_state</code>, <code>list_tasks</code>,
-      <code>claim_task</code>, <code>claim_scope</code>,
-      <code>publish_intent</code>, <code>check_change_scope</code>,
-      <code>submit_change_summary</code>, <code>list_remote_proposals</code>,
-      <code>request_handoff</code>, <code>announce_interface_change</code>,
-      <code>request_validation</code>, <code>create_checkpoint</code> &mdash;
-      see <code>BUILD_INSTRUCTIONS.md</code> section 13 for the capability this
-      tool surface implements. Tool input schemas are generated from the Zod
-      request schemas in <code>packages/protocol</code>, so
-      <code>tools/list</code> always reflects the daemon's actual request
-      validation.
-    </p>
+      <h2>Available tools</h2>
+      <p>
+        <code>get_workspace_state</code>, <code>list_tasks</code>,
+        <code>claim_task</code>, <code>claim_scope</code>,
+        <code>publish_intent</code>, <code>check_change_scope</code>,
+        <code>submit_change_summary</code>, <code>list_remote_proposals</code>,
+        <code>request_handoff</code>, <code>announce_interface_change</code>,
+        <code>request_validation</code>, and <code>create_checkpoint</code>
+        make up the tool surface. See <code>BUILD_INSTRUCTIONS.md</code> section 13
+        for the capability this tool surface implements. Tool input schemas are
+        generated from the Zod request schemas in <code>packages/protocol</code>,
+        so <code>tools/list</code> always reflects the daemon's actual request
+        validation.
+      </p>
+
+      <div class="docs-next">
+        <a href="/docs/cli.html">Next: CLI reference →</a>
+      </div>
+    </div>
   </main>
 
   <footer class="site-footer">
-    Crosscode &mdash; local-first Git coordination.
+    Crosscode: local-first Git coordination.
   </footer>
 </body>
 </html>

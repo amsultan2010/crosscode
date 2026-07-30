@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Crosscode — coordinate a Git repo across people and agents</title>
+  <title>Crosscode: coordinate a Git repo across people and agents</title>
   <meta name="description" content="Crosscode is a local-first coordination layer for developers and coding agents working in separate checkouts of the same Git repository. One prompt sets it up." />
   <link rel="stylesheet" href="/src/style.css" />
 </head>
@@ -11,49 +11,114 @@
   <header class="site-header">
     <nav>
       <a class="brand" href="/">Crosscode</a>
-      <a href="#install">Install</a>
+      <a href="#benefits">Why Crosscode</a>
       <a href="#how-it-works">How it works</a>
       <a href="#safety">Safety model</a>
       <a href="/docs/index.html">Docs</a>
-      <a href="/docs/cli.html">CLI reference</a>
+      <button class="nav-copy-btn" data-copy-target="install-prompt-text" type="button">Copy install prompt</button>
     </nav>
   </header>
 
   <main class="landing">
     <section class="hero">
+      <div class="inner hero-grid">
+        <div class="hero-copy reveal">
+          <span class="eyebrow">Pre-1.0 &middot; Open source &middot; MCP-native</span>
+          <h1>Let your coding agents share a repo without stepping on each other.</h1>
+          <p class="subtitle">
+            Crosscode is a local-first daemon that watches Git and your filesystem,
+            captures every agent's and teammate's work as it settles, and syncs
+            it through a coordination service. Nothing lands in your working tree
+            uninvited: every remote change arrives as a proposal you review
+            and accept yourself.
+          </p>
+          <div class="cta-row">
+            <a class="cta" href="#install">Install with one prompt</a>
+            <a class="cta secondary" href="/docs/index.html">Browse the docs</a>
+          </div>
+          <p class="hero-microcopy">No CLI install. No editor plugin. Paste one prompt into any MCP-capable agent.</p>
+        </div>
+
+        <div class="hero-visual reveal">
+          <div class="terminal">
+            <div class="terminal-bar">
+              <span></span><span></span><span></span>
+              <span class="terminal-title">claude &middot; crosscode MCP</span>
+            </div>
+            <pre><code><span class="muted">&gt; get_workspace_state()</span>
+
+<span class="accent">✓</span> daemon: running <span class="muted">(auto-started)</span>
+<span class="accent">✓</span> checkout: ~/dev/api-service
+<span class="accent">✓</span> peers online: 2 <span class="muted">(alicja, codex-agent-3)</span>
+
+<span class="muted">incoming proposals</span>
+  <span class="accent">•</span> alicja &middot; refactor: extract payment retry logic
+    <span class="muted">3 files &middot; not yet applied &middot; awaiting your review</span>
+
+<span class="muted">&gt; </span><span class="cursor">▌</span></code></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="benefits" class="alt">
       <div class="inner">
-        <span class="eyebrow">Pre-1.0 &middot; Open source</span>
-        <h1>Coordinate a Git repo across people and agents, without leaving Git.</h1>
-        <p class="subtitle">
-          Crosscode is a local-first coordination layer for developers and coding
-          agents working in separate checkouts of the same repository. It watches
-          your filesystem and Git activity, captures stable edits, and shows
-          everyone else's work as reviewable proposals &mdash; never auto-applied.
-        </p>
-        <div class="cta-row">
-          <a class="cta" href="#install">Install with one prompt</a>
-          <a class="cta secondary" href="/docs/index.html">Browse the docs</a>
+        <div class="section-heading reveal">
+          <h2>Why teams running multiple agents reach for Crosscode</h2>
+          <p>Once more than one agent (or person) touches a repo at the same time, coordination stops being optional.</p>
+        </div>
+
+        <div class="benefit-grid stagger">
+          <div class="benefit reveal">
+            <div class="benefit-num">01</div>
+            <h3>Stop losing work to collisions</h3>
+            <p>
+              Two agents editing the same files in separate checkouts used to mean
+              silent overwrites or manual diffing. Crosscode captures every settled
+              edit as a durable transaction the moment it happens, so nothing gets
+              clobbered.
+            </p>
+          </div>
+          <div class="benefit reveal">
+            <div class="benefit-num">02</div>
+            <h3>Never auto-apply someone else's diff</h3>
+            <p>
+              Remote work, whether from a teammate or another agent, always
+              shows up as a reviewable proposal. Your working tree stays yours
+              until you explicitly accept a change.
+            </p>
+          </div>
+          <div class="benefit reveal">
+            <div class="benefit-num">03</div>
+            <h3>Give your agent real situational awareness</h3>
+            <p>
+              Your coding agent can ask "who else is working on this repo right
+              now, and on what?" and get a real answer: live presence,
+              tasks, claims, and handoffs, over the same MCP connection it already
+              uses.
+            </p>
+          </div>
         </div>
       </div>
     </section>
 
     <section id="install">
       <div class="inner">
-        <div class="section-heading">
+        <div class="section-heading reveal">
           <h2>Set up in one paste</h2>
           <p>
-            Copy this prompt and paste it into your coding agent's chat &mdash;
-            Claude Code, Codex CLI, OpenCode, Cursor, or any other MCP-capable
-            agent. It clones the repo, installs dependencies, and wires up the
-            MCP config itself. The daemon bootstraps automatically on the first
-            tool call &mdash; no manual <code>init</code> or daemon start.
+            Copy this prompt into your coding agent's chat: Claude Code,
+            Codex CLI, OpenCode, Cursor, or any other MCP-capable agent. It clones
+            Crosscode, installs dependencies, and wires up the MCP config itself.
+            The daemon bootstraps on the first tool call, so there's no manual
+            <code>init</code> and no daemon to start by hand.
           </p>
         </div>
 
-        <div class="install-panel">
+        <div class="install-panel reveal">
           <div class="code-toolbar">
             <span>Paste into your coding agent</span>
-            <button class="copy-btn" id="copy-install-prompt" type="button">Copy prompt</button>
+            <button class="copy-btn" data-copy-target="install-prompt-text" type="button">Copy prompt</button>
           </div>
           <pre><code id="install-prompt-text">Set up Crosscode for this project. Crosscode is a local-first safety daemon that
 watches Git and filesystem activity and exposes itself to me as an MCP server, so
@@ -107,7 +172,7 @@ other checkouts of this same repository. Do the following:
         </div>
 
         <p class="install-steps">
-          Works with any MCP-capable coding agent &mdash; no CLI install and no editor
+          Works with any MCP-capable coding agent. No CLI install and no editor
           plugin required to get started. See the <a href="/docs/mcp-clients.html">MCP client setup</a>
           guide for per-agent notes, or the <a href="/docs/install.html">full install &amp; quickstart</a>
           guide for what happens after the first tool call.
@@ -115,40 +180,40 @@ other checkouts of this same repository. Do the following:
       </div>
     </section>
 
-    <section id="how-it-works">
+    <section id="how-it-works" class="alt">
       <div class="inner">
-        <div class="section-heading">
+        <div class="section-heading reveal">
           <h2>How it works</h2>
           <p>One daemon per checkout, talking through MCP and a shared coordination service.</p>
         </div>
 
-        <ol class="flow-steps">
-          <li>
+        <ol class="flow-steps stagger">
+          <li class="reveal">
             <h3>A daemon watches your checkout</h3>
             <p>
               One background daemon runs per Git checkout/worktree. It watches
               filesystem and Git activity and captures settled edits as durable
-              transactions &mdash; without moving HEAD or touching your branch.
+              transactions without moving HEAD or touching your branch.
             </p>
           </li>
-          <li>
+          <li class="reveal">
             <h3>Your agent talks to it over MCP</h3>
             <p>
               The daemon exposes itself as a standards-compliant MCP server.
               Claude Code, Codex CLI, OpenCode, Cursor, or any other MCP-capable
-              agent can call its tools directly &mdash; no CLI or editor plugin
-              required to get value.
+              agent can call its tools directly. No CLI or editor plugin
+              required.
             </p>
           </li>
-          <li>
+          <li class="reveal">
             <h3>Work syncs through a coordination service</h3>
             <p>
               Transactions sync through an authenticated coordination service
-              backed by PostgreSQL, so other checkouts &mdash; other people, other
-              agents &mdash; see the same history.
+              backed by PostgreSQL, so other checkouts, whether other people or
+              other agents, see the same history.
             </p>
           </li>
-          <li>
+          <li class="reveal">
             <h3>Remote work arrives as a proposal</h3>
             <p>
               Nothing from another checkout is written to your files
@@ -158,64 +223,64 @@ other checkouts of this same repository. Do the following:
           </li>
         </ol>
 
-        <div class="feature-grid" style="margin-top: 2.5rem;">
-          <div class="feature">
-            <div class="icon">🪝</div>
+        <div class="feature-grid stagger" style="margin-top: 2.5rem;">
+          <div class="feature reveal">
+            <div class="icon">GIT HOOK</div>
             <h3>Hidden Git checkpoints</h3>
             <p>Safety snapshots live under <code>refs/crosscode/checkpoints/...</code> and never pollute your branch history.</p>
           </div>
-          <div class="feature">
-            <div class="icon">🔌</div>
+          <div class="feature reveal">
+            <div class="icon">MCP</div>
             <h3>MCP-first</h3>
-            <p>Works with any MCP-capable coding agent &mdash; Claude Code, Codex CLI, OpenCode, Cursor, and more.</p>
+            <p>Works with any MCP-capable coding agent: Claude Code, Codex CLI, OpenCode, Cursor, and more.</p>
           </div>
-          <div class="feature">
-            <div class="icon">📡</div>
+          <div class="feature reveal">
+            <div class="icon">LIVE</div>
             <h3>Live presence &amp; handoffs</h3>
             <p>WebSocket-backed presence, tasks, claims, and handoffs, with a durable poll fallback when offline.</p>
           </div>
-          <div class="feature">
-            <div class="icon">🖥️</div>
+          <div class="feature reveal">
+            <div class="icon">EDITOR</div>
             <h3>VS Code / Cursor extension</h3>
-            <p>See status, tasks, claims, proposals, and diffs in your editor &mdash; the extension has no sync authority of its own.</p>
+            <p>See status, tasks, claims, proposals, and diffs in your editor. The extension has no sync authority of its own.</p>
           </div>
         </div>
       </div>
     </section>
 
-    <section id="safety">
+    <section id="safety" class="alt">
       <div class="inner">
-        <div class="section-heading">
+        <div class="section-heading reveal">
           <h2>The safety model</h2>
           <p>Four rules govern everything Crosscode is allowed to do to your working tree.</p>
         </div>
 
-        <ol class="safety-rules">
-          <li><p>The local filesystem is always authoritative for local work.</p></li>
-          <li><p>Remote operations arrive as proposals and are never automatically applied.</p></li>
-          <li><p>Every materialization re-checks the local base and creates a checkpoint first.</p></li>
-          <li><p>Excluded paths, secrets, symlink traversal, malformed payloads, and unsupported binaries are rejected.</p></li>
+        <ol class="safety-rules stagger">
+          <li class="reveal"><p>The local filesystem is always authoritative for local work.</p></li>
+          <li class="reveal"><p>Remote operations arrive as proposals and are never automatically applied.</p></li>
+          <li class="reveal"><p>Every materialization re-checks the local base and creates a checkpoint first.</p></li>
+          <li class="reveal"><p>Excluded paths, secrets, symlink traversal, malformed payloads, and unsupported binaries are rejected.</p></li>
         </ol>
 
         <p class="install-steps" style="text-align: center; margin-top: 1.75rem;">
-          If Crosscode is stopped or removed, the repository remains an ordinary
-          Git repository. Full detail on the <a href="/docs/safety.html">safety model page</a>.
+          If Crosscode stops running or gets removed, the repository is still an
+          ordinary Git repository. See the <a href="/docs/safety.html">safety model page</a> for the full list.
         </p>
       </div>
     </section>
 
     <section>
       <div class="inner">
-        <div class="section-heading">
+        <div class="section-heading reveal">
           <h2>What's here today vs. coming soon</h2>
-          <p>Functionality-first and pre-1.0, but the core loop is real and working.</p>
+          <p>Pre-1.0, but the daemon-to-coordination-service loop works today.</p>
         </div>
 
-        <div class="today-grid">
-          <div class="today-card">
+        <div class="today-grid stagger">
+          <div class="today-card reveal">
             <h3>Today <span class="badge live">Live</span></h3>
             <ul>
-              <li>Open source, self-hosted &mdash; clone it and run it yourself</li>
+              <li>Open source and self-hosted: clone it and run it yourself</li>
               <li>Per-checkout daemon with durable transaction capture</li>
               <li>Standards-compliant MCP server that auto-bootstraps the daemon</li>
               <li>Self-hosted coordination service (PostgreSQL + included Docker Compose)</li>
@@ -223,10 +288,10 @@ other checkouts of this same repository. Do the following:
               <li><code>publish --branch</code> for accepted work, and a VS Code/Cursor extension</li>
             </ul>
           </div>
-          <div class="today-card">
+          <div class="today-card reveal">
             <h3>Coming soon <span class="badge soon">Planned</span></h3>
             <ul>
-              <li>Hosted, managed coordination service &mdash; no self-hosted PostgreSQL required</li>
+              <li>Hosted, managed coordination service: no self-hosted PostgreSQL required</li>
               <li>Self-serve team workspaces with a paid hosted tier and billing</li>
               <li>npm / VS Code &amp; Cursor marketplace distribution</li>
               <li>OS-keychain storage for replica secrets</li>
@@ -236,8 +301,40 @@ other checkouts of this same repository. Do the following:
       </div>
     </section>
 
-    <section class="landing-footer-cta">
+    <section id="faq" class="alt">
       <div class="inner">
+        <div class="section-heading reveal">
+          <h2>Questions people ask before installing</h2>
+          <p>If yours isn't here, the <a href="/docs/index.html">docs</a> go deeper.</p>
+        </div>
+
+        <div class="faq-list stagger">
+          <details class="faq-item reveal">
+            <summary>Do I need a hosted account to try it?</summary>
+            <p>No. Clone the repo and run the included Docker Compose coordination service yourself. A hosted, managed service is planned but not required today.</p>
+          </details>
+          <details class="faq-item reveal">
+            <summary>Which coding agents does this work with?</summary>
+            <p>Any MCP-capable agent: Claude Code, Codex CLI, OpenCode, and Cursor are used today. It's a standard MCP server, so anything that can add a local stdio MCP server can use it.</p>
+          </details>
+          <details class="faq-item reveal">
+            <summary>Can it rewrite my branch history or force-push anything?</summary>
+            <p>No. Crosscode never moves HEAD, rewrites history, or applies a remote change without your explicit approval. See the <a href="/docs/safety.html">safety model</a> for the exact rules it follows.</p>
+          </details>
+          <details class="faq-item reveal">
+            <summary>What happens if I stop running it?</summary>
+            <p>Your repository is an ordinary Git repository the whole time. Stop or remove Crosscode and nothing about your checkout changes. There's no lock-in format to migrate away from.</p>
+          </details>
+          <details class="faq-item reveal">
+            <summary>Does it work without any coding agent, just for people?</summary>
+            <p>Yes. The CLI and VS Code/Cursor extension work for human-only teams too, though the proposal-review workflow matters most once agents are in the mix.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <section class="landing-footer-cta">
+      <div class="inner reveal">
         <h2 style="margin-top:0;">Try it in your own repo</h2>
         <p class="subtitle" style="margin-bottom: 1.5rem;">One prompt, one paste, no manual setup.</p>
         <a class="cta" href="#install">Get the install prompt</a>
@@ -246,7 +343,7 @@ other checkouts of this same repository. Do the following:
   </main>
 
   <footer class="site-footer">
-    <p>Crosscode &mdash; local-first Git coordination. Pre-1.0 and fully open source.</p>
+    <p>Crosscode: local-first Git coordination. Pre-1.0 and fully open source.</p>
     <p>
       <a href="/docs/index.html">Docs</a> &middot;
       <a href="/docs/architecture.html">Architecture</a> &middot;
