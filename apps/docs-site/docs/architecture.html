@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Architecture — Crosscode</title>
+  <title>Architecture · Crosscode</title>
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
@@ -17,10 +17,41 @@
     </nav>
   </header>
 
-  <main>
-    <h1>Architecture</h1>
+  <main class="docs-layout wide">
+    <nav class="docs-sidebar" aria-label="Docs navigation">
+      <div>
+        <div class="docs-sidebar-label">Start here</div>
+        <div class="docs-sidebar-links">
+          <a href="/docs/index.html">Overview</a>
+        </div>
+      </div>
+      <div>
+        <div class="docs-sidebar-label">Architecture &amp; safety</div>
+        <div class="docs-sidebar-links">
+          <a href="/docs/architecture.html" class="active" aria-current="page">Architecture</a>
+          <a href="/docs/safety.html">Safety model</a>
+        </div>
+      </div>
+      <div>
+        <div class="docs-sidebar-label">Setup &amp; operation</div>
+        <div class="docs-sidebar-links">
+          <a href="/docs/install.html">Install &amp; quickstart</a>
+          <a href="/docs/mcp-clients.html">MCP client setup</a>
+        </div>
+      </div>
+      <div>
+        <div class="docs-sidebar-label">Reference</div>
+        <div class="docs-sidebar-links">
+          <a href="/docs/cli.html">CLI reference</a>
+          <a href="/docs/limitations.html">Limitations</a>
+        </div>
+      </div>
+    </nav>
 
-    <pre><code>editor / agent / CLI
+    <div class="docs-content">
+      <h1>Architecture</h1>
+
+      <pre><code>editor / agent / CLI
         |
         v
 per-worktree daemon --- SQLite events + outbox
@@ -32,63 +63,68 @@ coordination service --- PostgreSQL operations + audit log
         v
 other daemons receive reviewable proposals</code></pre>
 
-    <p>
-      The daemon binds only to loopback and publishes a mode-<code>0600</code>
-      connection descriptor under the worktree Git directory. Service access
-      tokens remain in daemon memory; the longer-lived replica secret is stored
-      only in the mode-<code>0600</code> local daemon configuration outside
-      versioned files.
-    </p>
+      <p>
+        The daemon binds only to loopback and publishes a mode-<code>0600</code>
+        connection descriptor under the worktree Git directory. Service access
+        tokens remain in daemon memory; the longer-lived replica secret is stored
+        only in the mode-<code>0600</code> local daemon configuration outside
+        versioned files.
+      </p>
 
-    <h2>Local daemon</h2>
-    <p>
-      Each checkout runs a <code>LocalDaemon</code>. It observes Git state,
-      captures settled working-tree changes as immutable transactions, writes
-      checkpoint refs under <code>refs/crosscode/checkpoints/</code>, and keeps
-      incoming work as a proposal until it is accepted locally.
-    </p>
+      <h2>Local daemon</h2>
+      <p>
+        Each checkout runs a <code>LocalDaemon</code>. It observes Git state,
+        captures settled working-tree changes as immutable transactions, writes
+        checkpoint refs under <code>refs/crosscode/checkpoints/</code>, and keeps
+        incoming work as a proposal until it is accepted locally.
+      </p>
 
-    <h2>Coordination service</h2>
-    <p>
-      The coordination service is intentionally a small append-only operation
-      sequencer. A transaction is accepted only when the recipient's current
-      content hash matches the sender's base hash. Otherwise it is marked
-      conflicted and no local file is changed. Sensitive paths (<code>.env</code>,
-      keys, auth, migrations, lockfiles, and deploy files) are blocked from
-      automatic materialization.
-    </p>
+      <h2>Coordination service</h2>
+      <p>
+        The coordination service is intentionally a small append-only operation
+        sequencer. A transaction is accepted only when the recipient's current
+        content hash matches the sender's base hash. Otherwise it is marked
+        conflicted and no local file is changed. Sensitive paths (<code>.env</code>,
+        keys, auth, migrations, lockfiles, and deploy files) are blocked from
+        automatic materialization.
+      </p>
 
-    <h2>Local metadata</h2>
-    <p>
-      Local metadata is kept below <code>.git/crosscode/</code>; it is never
-      added to the repository worktree. Git remains sufficient to restore all
-      source code:
-    </p>
-    <pre><code>&lt;git-dir&gt;/crosscode/config.json   # replica identity, service URL, replica secret (0600)
+      <h2>Local metadata</h2>
+      <p>
+        Local metadata is kept below <code>.git/crosscode/</code>; it is never
+        added to the repository worktree. Git remains sufficient to restore all
+        source code:
+      </p>
+      <pre><code>&lt;git-dir&gt;/crosscode/config.json   # replica identity, service URL, replica secret (0600)
 &lt;git-dir&gt;/crosscode/daemon.json   # ephemeral loopback descriptor and secret (0600)
 &lt;git-dir&gt;/crosscode/state.sqlite  # events, projections, cursor, outbox (0600)
 &lt;git-dir&gt;/crosscode/daemon.lock   # one-daemon ownership</code></pre>
 
-    <p>
-      Safety snapshots use refs of the form
-      <code>refs/crosscode/checkpoints/&lt;replica-id&gt;/&lt;timestamp&gt;-&lt;uuid&gt;</code>
-      and do not pollute normal branch history. Crosscode never stages, unstages,
-      commits, pushes, force-pushes, resets, rebases, or changes remotes
-      automatically.
-    </p>
+      <p>
+        Safety snapshots use refs of the form
+        <code>refs/crosscode/checkpoints/&lt;replica-id&gt;/&lt;timestamp&gt;-&lt;uuid&gt;</code>
+        and do not pollute normal branch history. Crosscode never stages, unstages,
+        commits, pushes, force-pushes, resets, rebases, or changes remotes
+        automatically.
+      </p>
 
-    <h2>Repository layout</h2>
-    <ul>
-      <li><code>apps/daemon</code> &mdash; the per-worktree daemon</li>
-      <li><code>apps/cli</code> &mdash; the <code>crosscode</code> command-line client</li>
-      <li><code>apps/service</code> &mdash; the shared PostgreSQL-backed coordination service</li>
-      <li><code>apps/mcp-server</code> &mdash; the MCP server that proxies tool calls to the local daemon</li>
-      <li><code>packages/core</code>, <code>packages/git</code>, <code>packages/protocol</code> &mdash; shared logic, Git integration, and schemas</li>
-    </ul>
+      <h2>Repository layout</h2>
+      <ul>
+        <li><code>apps/daemon</code>: the per-worktree daemon</li>
+        <li><code>apps/cli</code>: the <code>crosscode</code> command-line client</li>
+        <li><code>apps/service</code>: the shared PostgreSQL-backed coordination service</li>
+        <li><code>apps/mcp-server</code>: the MCP server that proxies tool calls to the local daemon</li>
+        <li><code>packages/core</code>, <code>packages/git</code>, <code>packages/protocol</code>: shared logic, Git integration, and schemas</li>
+      </ul>
+
+      <div class="docs-next">
+        <a href="/docs/safety.html">Next: Safety model →</a>
+      </div>
+    </div>
   </main>
 
   <footer class="site-footer">
-    Crosscode &mdash; local-first Git coordination.
+    Crosscode: local-first Git coordination.
   </footer>
 </body>
 </html>

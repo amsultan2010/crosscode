@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Current limitations — Crosscode</title>
+  <title>Current limitations · Crosscode</title>
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
@@ -17,30 +17,62 @@
     </nav>
   </header>
 
-  <main>
-    <h1>Current limitations</h1>
-    <p class="subtitle">Taken directly from this repository's README.md.</p>
+  <main class="docs-layout wide">
+    <nav class="docs-sidebar" aria-label="Docs navigation">
+      <div>
+        <div class="docs-sidebar-label">Start here</div>
+        <div class="docs-sidebar-links">
+          <a href="/docs/index.html">Overview</a>
+        </div>
+      </div>
+      <div>
+        <div class="docs-sidebar-label">Architecture &amp; safety</div>
+        <div class="docs-sidebar-links">
+          <a href="/docs/architecture.html">Architecture</a>
+          <a href="/docs/safety.html">Safety model</a>
+        </div>
+      </div>
+      <div>
+        <div class="docs-sidebar-label">Setup &amp; operation</div>
+        <div class="docs-sidebar-links">
+          <a href="/docs/install.html">Install &amp; quickstart</a>
+          <a href="/docs/mcp-clients.html">MCP client setup</a>
+        </div>
+      </div>
+      <div>
+        <div class="docs-sidebar-label">Reference</div>
+        <div class="docs-sidebar-links">
+          <a href="/docs/cli.html">CLI reference</a>
+          <a href="/docs/limitations.html" class="active" aria-current="page">Limitations</a>
+        </div>
+      </div>
+    </nav>
 
-    <ul>
-      <li>Production PostgreSQL role grants and retention policies still need environment-specific deployment hardening.</li>
-      <li>Replica secrets use the protected Git-directory configuration fallback; OS-keychain integration is still planned.</li>
-      <li>Transactions are text-only. Binary files are rejected for sharing, although checkpoint restore preserves their exact bytes.</li>
-      <li>Renames are represented as explicit delete/add changes.</li>
-      <li>Dependency-impact analysis for <code>.ts</code>/<code>.tsx</code> is a syntactic AST walk, not a type-checker-backed analysis.</li>
-      <li>There is no hosted/managed coordination service yet &mdash; you run PostgreSQL and the service yourself.</li>
-      <li>Team-workspace enrollment requires a running coordination service and a manually issued enrollment token; there is no self-serve signup or billing yet.</li>
-      <li>Not published to npm or a VS Code/Cursor marketplace yet; everything runs from a cloned checkout.</li>
-    </ul>
+    <div class="docs-content">
+      <h1>Current limitations</h1>
+      <p class="subtitle">Taken directly from this repository's README.md.</p>
 
-    <div class="callout">
-      This is a functionality-first, pre-1.0 project. Do not treat anything on
-      this page, or absent from the <a href="/docs/index.html">what works
-      today</a> list, as available.
+      <ul>
+        <li>Production PostgreSQL role grants and retention policies still need environment-specific deployment hardening.</li>
+        <li>Replica secrets use the protected Git-directory configuration fallback; OS-keychain integration is still planned.</li>
+        <li>Transactions are text-only. Binary files are rejected for sharing, although checkpoint restore preserves their exact bytes.</li>
+        <li>Renames are represented as explicit delete/add changes.</li>
+        <li>Dependency-impact analysis for <code>.ts</code>/<code>.tsx</code> is a syntactic AST walk, not a type-checker-backed analysis.</li>
+        <li>There is no hosted or managed coordination service yet. You run PostgreSQL and the service yourself.</li>
+        <li>Team-workspace enrollment requires a running coordination service and a manually issued enrollment token; there is no self-serve signup or billing yet.</li>
+        <li>Not published to npm or a VS Code/Cursor marketplace yet; everything runs from a cloned checkout.</li>
+      </ul>
+
+      <div class="callout">
+        This is a functionality-first, pre-1.0 project. Do not treat anything on
+        this page, or absent from the <a href="/docs/index.html">what works
+        today</a> list, as available.
+      </div>
     </div>
   </main>
 
   <footer class="site-footer">
-    Crosscode &mdash; local-first Git coordination.
+    Crosscode: local-first Git coordination.
   </footer>
 </body>
 </html>
