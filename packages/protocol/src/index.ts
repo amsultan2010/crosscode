@@ -435,7 +435,7 @@ export const daemonServiceConfigSchema = z.object({
       && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
     );
   }, "Service URL must use HTTPS or loopback HTTP"),
-  replicaSecret: z.string().min(1)
+  replicaSecret: z.string().min(1).optional()
 }).strict();
 export type DaemonServiceConfig = z.infer<typeof daemonServiceConfigSchema>;
 

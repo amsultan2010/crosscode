@@ -7,6 +7,11 @@ import { daemonConfigSchema, daemonConnectionSchema, type DaemonConfig, type Dae
 import { startDaemon, type RunningDaemon } from "./index.js";
 import { CoordinationServiceClient } from "./service-client.js";
 import { LiveSyncClient } from "./ws-client.js";
+import { keychainAvailable, readSecret, storeSecret } from "./keychain.js";
+
+function keychainAccount(config: Pick<DaemonConfig, "workspaceId" | "replicaId">): string {
+  return `${config.workspaceId}:${config.replicaId}`;
+}
 
 export async function daemonConfigPath(directory: string): Promise<string> {
   const repository = await discoverRepository(directory);
@@ -19,7 +24,11 @@ export async function daemonConnectionPath(directory: string): Promise<string> {
 }
 
 export async function readDaemonConfig(directory: string): Promise<DaemonConfig> {
-  return daemonConfigSchema.parse(JSON.parse(await readFile(await daemonConfigPath(directory), "utf8")));
+  const config = daemonConfigSchema.parse(JSON.parse(await readFile(await daemonConfigPath(directory), "utf8")));
+  if (!config.service || config.service.replicaSecret) return config;
+  const secret = await readSecret(keychainAccount(config));
+  if (!secret) throw new Error("Replica secret was not found in the config file or the OS keychain; re-run `crosscode join`");
+  return { ...config, service: { ...config.service, replicaSecret: secret } };
 }
 
 export async function writeDaemonConfig(directory: string, config: DaemonConfig): Promise<void> {
@@ -28,8 +37,13 @@ export async function writeDaemonConfig(directory: string, config: DaemonConfig)
   await chmod(dirname(path), 0o700);
   const existing = await lstat(path).catch((error: NodeJS.ErrnoException) => error.code === "ENOENT" ? undefined : Promise.reject(error));
   if (existing?.isSymbolicLink()) throw new Error("Crosscode configuration must not be a symbolic link");
+  let toWrite = daemonConfigSchema.parse(config);
+  if (toWrite.service?.replicaSecret && await keychainAvailable()) {
+    const stored = await storeSecret(keychainAccount(toWrite), toWrite.service.replicaSecret);
+    if (stored) toWrite = { ...toWrite, service: { ...toWrite.service, replicaSecret: undefined } };
+  }
   const temporary = join(dirname(path), `.config.${randomUUID()}.json`);
-  await writeFile(temporary, JSON.stringify(daemonConfigSchema.parse(config)), { mode: 0o600 });
+  await writeFile(temporary, JSON.stringify(toWrite), { mode: 0o600 });
   await rename(temporary, path);
   await chmod(path, 0o600);
 }
