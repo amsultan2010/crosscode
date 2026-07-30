@@ -8,10 +8,10 @@ import {
   type Task, type TaskCreatedEvent, type TaskUpdatedEvent, type Validation, type ValidationCompletedEvent
 } from "@crosscode/protocol";
 import type { SemanticReviewRecord, StoredOperation } from "./types.js";
+import { localEventSchema, type LocalEvent } from "./local-event.js";
 
 export type GitState = { head?: string; headReflog?: string; branch?: string; worktree: string; indexTree?: string; operation?: "merge" | "rebase" | "cherry-pick" | "revert" };
 export type CheckpointRecord = { ref: string; commit: string; tree: string; message: string; createdAt: string };
-export type LocalEvent = { type: string; payload: unknown };
 export type OutboundRecord = { event: EventEnvelope; transaction: ChangeTransaction; acknowledgedServerSequence?: number };
 export type ConflictArtifactRecord = { id: string; operationId: string; path: string; classification: string; baseContent?: string; localContent?: string; proposedContent?: string; dependents?: string[]; mergedCandidate?: string; createdAt: string };
 export type TaskOutboundRecord = { event: TaskCreatedEvent | TaskUpdatedEvent; acknowledgedAt?: string };
@@ -212,9 +212,10 @@ export class DaemonStateStore {
   }
 
   record(snapshot: Omit<DaemonSnapshot, "eventSequence">, event: LocalEvent): number {
+    const validated = localEventSchema.parse(event);
     this.database.exec("BEGIN IMMEDIATE");
     try {
-      const inserted = this.database.prepare("INSERT INTO local_events (type, created_at, payload) VALUES (?, ?, ?)").run(event.type, new Date().toISOString(), JSON.stringify(event.payload));
+      const inserted = this.database.prepare("INSERT INTO local_events (type, created_at, payload) VALUES (?, ?, ?)").run(validated.type, new Date().toISOString(), JSON.stringify(validated.payload));
       this.replaceProjection("task_projection", "id", snapshot.tasks.map((task) => [task.id, task]));
       this.replaceProjection("claim_projection", "id", snapshot.claims.map((claim) => [claim.id, claim]));
       this.replaceProjection("operation_projection", "id", snapshot.operations.map((operation) => [operation.id, operation]));
