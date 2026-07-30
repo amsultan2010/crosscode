@@ -188,17 +188,106 @@ describe("local daemon coordination", () => {
     expect(second.transaction.changes).toMatchObject([{ path: "b.txt", kind: "add" }]);
   });
 
-  it("captures a Git rename as a safe delete and add transaction", async () => {
+  it("captures a Git rename as a rename transaction and materializes the move without losing content", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+    await exec("git", ["-C", senderRoot, "mv", "a.txt", "b.txt"]);
+
+    const operation = await sender.capture("rename file", service);
+
+    expect(operation.transaction.changes).toEqual([
+      expect.objectContaining({ path: "b.txt", kind: "rename", previousPath: "a.txt", afterContent: "one\n", afterHash: contentHash("one\n") })
+    ]);
+
+    await receiver.sync(service);
+    await receiver.accept(operation.id);
+    expect(await readFile(join(receiverRoot, "b.txt"), "utf8")).toBe("one\n");
+    await expect(stat(join(receiverRoot, "a.txt"))).rejects.toThrow();
+  });
+
+  it("captures a Git rename with a content edit in the same commit as a rename (not a delete+add)", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const original = "line1\nline2\nline3\nline4\nline5\n";
+    for (const root of [senderRoot, receiverRoot]) {
+      await writeFile(join(root, "a.txt"), original);
+      await exec("git", ["-C", root, "commit", "-aqm", "seed multi-line content"]);
+    }
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+
+    await exec("git", ["-C", senderRoot, "mv", "a.txt", "b.txt"]);
+    const edited = "line1\nline2\nEDITED\nline4\nline5\n";
+    await writeFile(join(senderRoot, "b.txt"), edited);
+
+    const operation = await sender.capture("rename and edit", service);
+    expect(operation.transaction.changes).toEqual([
+      expect.objectContaining({ path: "b.txt", kind: "rename", previousPath: "a.txt", afterContent: edited, afterHash: contentHash(edited), beforeHash: contentHash(original) })
+    ]);
+
+    await receiver.sync(service);
+    await receiver.accept(operation.id);
+    expect(await readFile(join(receiverRoot, "b.txt"), "utf8")).toBe(edited);
+    await expect(stat(join(receiverRoot, "a.txt"))).rejects.toThrow();
+  });
+
+  it("requires approval for a rename that conflicts with a pending change on the OLD path", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+    await exec("git", ["-C", senderRoot, "mv", "a.txt", "b.txt"]);
+    const operation = await sender.capture("rename file", service);
+    await receiver.sync(service);
+
+    const pendingOnOldPath = { path: "a.txt", kind: "modify" as const, beforeHash: contentHash("one\n"), afterHash: contentHash("locally-edited\n"), afterContent: "locally-edited\n" };
+    const pendingLocal = { id: "fake-local-op", workspaceId: "w", senderReplicaId: "receiver", transaction: { id: "fake-local-op", base: { files: [] }, changes: [pendingOnOldPath], provenance: { source: "filesystem" as const, confidence: "known" as const }, safety: { risk: "low" as const, requiresApproval: false } }, sequence: 1, createdAt: new Date().toISOString(), status: "local" as const };
+    receiver.operations.set(pendingLocal.id, pendingLocal);
+
+    await expect(receiver.accept(operation.id)).rejects.toThrow("requires local human approval");
+    expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe("one\n");
+    await expect(stat(join(receiverRoot, "b.txt"))).rejects.toThrow();
+  });
+
+  it("requires approval for a rename that conflicts with a pending change on the NEW path", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+    await exec("git", ["-C", senderRoot, "mv", "a.txt", "b.txt"]);
+    const operation = await sender.capture("rename file", service);
+    await receiver.sync(service);
+
+    const pendingOnNewPath = { path: "b.txt", kind: "add" as const, afterHash: contentHash("already-here\n"), afterContent: "already-here\n" };
+    const pendingLocal = { id: "fake-local-op", workspaceId: "w", senderReplicaId: "receiver", transaction: { id: "fake-local-op", base: { files: [] }, changes: [pendingOnNewPath], provenance: { source: "filesystem" as const, confidence: "known" as const }, safety: { risk: "low" as const, requiresApproval: false } }, sequence: 1, createdAt: new Date().toISOString(), status: "local" as const };
+    receiver.operations.set(pendingLocal.id, pendingLocal);
+
+    await expect(receiver.accept(operation.id)).rejects.toThrow("requires local human approval");
+    expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe("one\n");
+    await expect(stat(join(receiverRoot, "b.txt"))).rejects.toThrow();
+  });
+
+  it("classifies a rename INTO a critical-looking path as critical, requiring approval", async () => {
     const root = await repo();
+    await mkdir(join(root, "migrations"), { recursive: true });
     const daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
-    await exec("git", ["-C", root, "mv", "a.txt", "b.txt"]);
+    await exec("git", ["-C", root, "mv", "a.txt", "migrations/a.txt"]);
 
-    const operation = await daemon.capture("rename file");
+    const operation = await daemon.capture("move into migrations");
+    expect(operation.transaction.changes).toEqual([expect.objectContaining({ kind: "rename", path: "migrations/a.txt", previousPath: "a.txt" })]);
+    expect(operation.transaction.safety).toEqual({ risk: "critical", requiresApproval: true });
+  });
 
-    expect(operation.transaction.changes).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: "a.txt", kind: "delete" }),
-      expect.objectContaining({ path: "b.txt", kind: "add", afterContent: "one\n" })
-    ]));
+  it("classifies a rename FROM a critical-looking path as critical, requiring approval", async () => {
+    const root = await repo();
+    await mkdir(join(root, "auth"), { recursive: true });
+    await writeFile(join(root, "auth", "config.txt"), "cfg\n");
+    await exec("git", ["-C", root, "add", "auth/config.txt"]);
+    await exec("git", ["-C", root, "commit", "-qm", "add auth file"]);
+    const daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
+    await exec("git", ["-C", root, "mv", "auth/config.txt", "plain.txt"]);
+
+    const operation = await daemon.capture("move out of auth");
+    expect(operation.transaction.changes).toEqual([expect.objectContaining({ kind: "rename", path: "plain.txt", previousPath: "auth/config.txt" })]);
+    expect(operation.transaction.safety).toEqual({ risk: "critical", requiresApproval: true });
   });
 
   it("rejects symlink traversal and honors committed configured exclusions", async () => {

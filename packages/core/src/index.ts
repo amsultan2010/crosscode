@@ -68,9 +68,10 @@ export function riskForClassification(classification: Classification): Risk {
     default: return "high";
   }
 }
-export function analyzeOperation(input: { path: string; baseMatches: boolean; overlaps: boolean; kind?: "add" | "modify" | "delete" | "rename"; conflictingKind?: "add" | "modify" | "delete" | "rename"; semanticOverlap?: boolean; dependents?: string[] }): OperationAnalysis {
+export function analyzeOperation(input: { path: string; previousPath?: string; baseMatches: boolean; overlaps: boolean; kind?: "add" | "modify" | "delete" | "rename"; conflictingKind?: "add" | "modify" | "delete" | "rename"; semanticOverlap?: boolean; dependents?: string[] }): OperationAnalysis {
   const decide = (): { classification: Classification; requiresApproval: boolean; deletedSide?: "incoming" | "local" } => {
     if (riskForPath(input.path) === "critical") return { classification: "critical", requiresApproval: true };
+    if (input.kind === "rename" && input.previousPath !== undefined && riskForPath(input.previousPath) === "critical") return { classification: "critical", requiresApproval: true };
     if (!input.baseMatches) return { classification: "stale-base", requiresApproval: true };
     if (input.overlaps && (input.kind === "delete" || input.conflictingKind === "delete") && input.kind !== input.conflictingKind) {
       return { classification: "delete-vs-modify", requiresApproval: true, deletedSide: input.kind === "delete" ? "incoming" : "local" };
@@ -82,4 +83,4 @@ export function analyzeOperation(input: { path: string; baseMatches: boolean; ov
   const decision = decide();
   return { ...decision, risk: riskForClassification(decision.classification), ...(input.dependents !== undefined ? { dependents: input.dependents } : {}) };
 }
-export function transactionRisk(transaction: Pick<ChangeTransaction, "changes">): "low" | "critical" { return transaction.changes.some((change) => riskForPath(change.path) === "critical") ? "critical" : "low"; }
+export function transactionRisk(transaction: Pick<ChangeTransaction, "changes">): "low" | "critical" { return transaction.changes.some((change) => riskForPath(change.path) === "critical" || (change.kind === "rename" && change.previousPath !== undefined && riskForPath(change.previousPath) === "critical")) ? "critical" : "low"; }
