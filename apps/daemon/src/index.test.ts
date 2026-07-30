@@ -23,6 +23,37 @@ describe("local daemon coordination", () => {
     await receiver.accept(operation.id); expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe("two\n");
   });
 
+  it("auto-applies an independent proposal without an explicit accept when policy.autoApplyRisk allows it", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo();
+    await mkdir(join(receiverRoot, ".crosscode"), { recursive: true });
+    await writeFile(join(receiverRoot, ".crosscode", "config.yaml"), "version: 1\nvalidation:\n  profiles: {}\npolicy:\n  autoApplyRisk: low\n");
+    await exec("git", ["-C", receiverRoot, "add", ".crosscode/config.yaml"]); await exec("git", ["-C", receiverRoot, "commit", "-qm", "config"]);
+    const service = new CoordinationService();
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" }); const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+    await writeFile(join(senderRoot, "b.txt"), "new\n"); const operation = await sender.capture("add file", service);
+    await receiver.sync(service);
+    expect(await readFile(join(receiverRoot, "b.txt"), "utf8")).toBe("new\n");
+    const statePath = join(receiverRoot, ".git", "crosscode", "state.sqlite");
+    const database = new DatabaseSync(statePath, { readOnly: true });
+    const rows = database.prepare("SELECT type FROM local_events WHERE type = 'transaction.auto_applied'").all();
+    database.close();
+    expect(rows).toHaveLength(1);
+  });
+
+  it("never auto-applies a proposal that still requires approval, even with a permissive autoApplyRisk", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo();
+    await mkdir(join(receiverRoot, ".crosscode"), { recursive: true });
+    await writeFile(join(receiverRoot, ".crosscode", "config.yaml"), "version: 1\nvalidation:\n  profiles: {}\npolicy:\n  autoApplyRisk: critical\n");
+    await exec("git", ["-C", receiverRoot, "add", ".crosscode/config.yaml"]); await exec("git", ["-C", receiverRoot, "commit", "-qm", "config"]);
+    const service = new CoordinationService();
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" }); const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+    await writeFile(join(senderRoot, "a.txt"), "sender\n"); const operation = await sender.capture("change", service);
+    await writeFile(join(receiverRoot, "a.txt"), "receiver\n"); await receiver.sync(service);
+    expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe("receiver\n");
+    const proposal = (await receiver.diffProposal(operation.id))[0]!;
+    expect(proposal.classification).toBe("stale-base");
+  });
+
   it("refuses stale-base proposals without overwriting local work", async () => {
     const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
     const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" }); const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });

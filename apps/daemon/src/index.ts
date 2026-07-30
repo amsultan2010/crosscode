@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import chokidar, { type FSWatcher } from "chokidar";
 import {
   analyzeOperation, applyRiskSafetyGate, authorizeSemanticReview, buildSemanticReviewBundle, changedExportedSymbols, contentHash, exportedSymbolNames, hunksOverlap,
-  isReviewEligible, looksLikeInterfaceChange, pathOverlaps, redactPath, transactionRisk, validateSemanticReview,
+  isReviewEligible, looksLikeInterfaceChange, pathOverlaps, redactPath, riskRank, transactionRisk, validateSemanticReview,
   type OperationAnalysis, type SemanticReviewer
 } from "@crosscode/core";
 import { createCheckpoint, discoverRepository, findAstDependentFiles, findSymbolReferences, inspectCheckpoint, publishCommit, readRevisionFile, restoreCheckpointFile, safeRepositoryPath, snapshotWorktreeTree, threeWayMerge, unifiedDiff } from "@crosscode/git";
@@ -51,7 +51,7 @@ import {
   type Validation
 } from "@crosscode/protocol";
 import type { CoordinationService } from "../../service/src/index.js";
-import { configuredAiReviewPolicy, configuredExcludedPaths, matchesConfiguredExclusion, validationCommands } from "./config.js";
+import { configuredAiReviewPolicy, configuredAutoApplyRisk, configuredExcludedPaths, matchesConfiguredExclusion, validationCommands } from "./config.js";
 import { DaemonStateStore, type CheckpointRecord, type ClaimOutboundRecord, type ConflictArtifactRecord, type GitState, type HandoffOutboundRecord, type IntentOutboundRecord, type OutboundRecord, type TaskOutboundRecord } from "./state.js";
 import type { SemanticReviewRecord, StoredOperation } from "./types.js";
 
@@ -365,6 +365,7 @@ export class LocalDaemon {
         throw error;
       }
     }
+    await this.autoApplyEligibleProposals(insertedIds);
     this.serviceStatus = { configured: true, online: true, lastSyncAt: now() };
     return { uploaded, downloaded, cursor: this.remoteCursor };
   }
@@ -467,7 +468,9 @@ export class LocalDaemon {
       this.operations.set(stored.id, stored);
       return stored;
     });
-    await this.persist("transaction.proposed", { proposals, remoteCursor: this.remoteCursor }); return proposals;
+    await this.persist("transaction.proposed", { proposals, remoteCursor: this.remoteCursor });
+    await this.autoApplyEligibleProposals(proposals.map((proposal) => proposal.id));
+    return proposals;
   }
   async accept(id: string, options: { reviewApprovals?: Record<string, string> } = {}): Promise<StoredOperation> {
     const reviewApprovals = options.reviewApprovals ?? {};
@@ -575,6 +578,29 @@ export class LocalDaemon {
   }
   private async assertApplicable(operation: StoredOperation, reviewApprovals: Record<string, string> = {}): Promise<void> {
     for (const change of operation.transaction.changes) await this.assertChangeApplicable(operation, change, reviewApprovals);
+  }
+
+  /**
+   * Speculatively accepts newly-arrived proposals through the ordinary accept() path when a
+   * committed .crosscode/config.yaml explicitly configures policy.autoApplyRisk. accept()'s own
+   * assertApplicable/assertChangeApplicable gates are the only thing deciding eligibility here --
+   * this never bypasses them. A proposal that still requires approval throws inside accept()
+   * before any checkpoint/materialization mutation, so it is left exactly as an ordinary pending
+   * proposal. Absence of a configured policy (undefined) preserves today's always-explicit-accept
+   * behavior unchanged.
+   */
+  private async autoApplyEligibleProposals(ids: string[]): Promise<void> {
+    if (!ids.length) return;
+    const threshold = await configuredAutoApplyRisk(this.root).catch(() => undefined);
+    if (!threshold) return;
+    for (const id of ids) {
+      const operation = this.operations.get(id);
+      if (!operation || operation.status !== "proposed" || riskRank(operation.transaction.safety.risk) > riskRank(threshold)) continue;
+      try {
+        await this.accept(id);
+        await this.persist("transaction.auto_applied", { id, autoApplyRisk: threshold });
+      } catch { /* not eligible for auto-apply under the current classification; left as a normal proposal */ }
+    }
   }
 
   /**
