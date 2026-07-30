@@ -15,6 +15,7 @@
     "mcp": "tsx apps/mcp-server/src/main.ts",
     "service": "tsx apps/service/src/main.ts",
     "service:migrate": "tsx apps/service/src/migrate.ts",
+    "service:prune": "tsx apps/service/src/prune.ts",
     "service:provision": "tsx apps/service/src/provision-admin.ts",
     "docs:dev": "pnpm --filter @crosscode/docs-site dev",
     "docs:build": "pnpm --filter @crosscode/docs-site build",

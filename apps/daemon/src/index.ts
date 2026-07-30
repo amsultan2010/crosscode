@@ -61,17 +61,25 @@ import type { SemanticReviewRecord, StoredOperation } from "./types.js";
 const exec = promisify(execFile);
 const now = () => new Date().toISOString();
 const git = async (root: string, args: string[]) => (await exec("git", ["-C", root, ...args])).stdout.trim();
-function decodeText(content: Buffer, path: string): string {
+function isBinaryContent(content: Buffer): boolean {
   const text = content.toString("utf8");
-  if (content.includes(0) || !Buffer.from(text, "utf8").equals(content)) throw new Error(`Binary files are not supported: ${path}`);
-  return text;
+  return content.includes(0) || !Buffer.from(text, "utf8").equals(content);
+}
+function decodeText(content: Buffer, path: string): string {
+  if (isBinaryContent(content)) throw new Error(`Binary files are not supported: ${path}`);
+  return content.toString("utf8");
+}
+function safeDecodeText(content: Buffer): string | undefined {
+  return isBinaryContent(content) ? undefined : content.toString("utf8");
 }
 function assertText(content: string, path: string): void {
   if (content.includes("\0") || Buffer.from(content, "utf8").toString("utf8") !== content) throw new Error(`Binary or invalid text content is not supported: ${path}`);
 }
 function assertChangeIntegrity(change: ChangeTransaction["changes"][number]): void {
   if (change.kind !== "delete") {
-    if (change.afterContent === undefined || change.afterHash !== contentHash(change.afterContent)) throw new Error(`Transaction content hash is invalid: ${change.path}`);
+    if (change.afterContent === undefined) throw new Error(`Transaction content hash is invalid: ${change.path}`);
+    const actual = change.afterEncoding === "base64" ? contentHash(Buffer.from(change.afterContent, "base64")) : contentHash(change.afterContent);
+    if (change.afterHash !== actual) throw new Error(`Transaction content hash is invalid: ${change.path}`);
   }
 }
 function changesOverlap(left: ChangeTransaction["changes"][number], right: ChangeTransaction["changes"][number]): boolean {
@@ -207,7 +215,7 @@ export class LocalDaemon {
   async restoreCheckpointFile(ref: string, path: string): Promise<void> {
     await this.eligiblePath(path);
     await this.checkpoint(`Before restoring ${path}`); await this.restoreEligibleCheckpointFile(ref, path);
-    const content = await this.readWorkingText(path); this.capturedHashes.set(path, content === undefined ? null : contentHash(content)); await this.persist("checkpoint.restored", { ref, path });
+    const content = await this.readWorkingBuffer(path); this.capturedHashes.set(path, content === undefined ? null : contentHash(content)); await this.persist("checkpoint.restored", { ref, path });
   }
   async observeGitTransition(): Promise<{ kind: "unchanged" | "branch-switch" | "head-changed" | "index-changed" | "git-operation" | "reset"; paused: boolean }> {
     const repository = await discoverRepository(this.root); const current = { head: repository.head, headReflog: repository.headReflog, branch: repository.branch, worktree: repository.worktree, indexTree: repository.indexTree, operation: repository.operation };
@@ -222,7 +230,7 @@ export class LocalDaemon {
     const updated = await Promise.all([...this.operations.values()].map(async (operation) => {
       if (operation.status !== "proposed") return operation;
       for (const change of operation.transaction.changes) {
-        const current = await this.readWorkingText(change.path);
+        const current = await this.readWorkingBuffer(change.path);
         const matches = change.kind === "add" ? current === undefined : (current === undefined ? undefined : contentHash(current)) === change.beforeHash;
         if (!matches) return { ...operation, status: "conflicted" as const };
       }
@@ -234,9 +242,10 @@ export class LocalDaemon {
     const operation = this.operations.get(id); if (!operation || operation.status !== "proposed") throw new Error("Proposal was not found");
     let compatible = false;
     for (const change of operation.transaction.changes) {
-      const current = await this.readWorkingText(change.path);
-      const baseMatches = change.kind === "add" ? current === undefined : (current === undefined ? undefined : contentHash(current)) === change.beforeHash;
+      const currentBuffer = await this.readWorkingBuffer(change.path);
+      const baseMatches = change.kind === "add" ? currentBuffer === undefined : (currentBuffer === undefined ? undefined : contentHash(currentBuffer)) === change.beforeHash;
       if (baseMatches) continue;
+      const current = currentBuffer === undefined ? undefined : safeDecodeText(currentBuffer);
       if (change.kind !== "modify" || current === undefined || change.afterContent === undefined) return "stale-base";
       const baseBytes = await readRevisionFile(this.root, "HEAD", change.path).catch(() => undefined);
       if (baseBytes === undefined) return "stale-base";
@@ -284,17 +293,29 @@ export class LocalDaemon {
   }
 
   async capture(intent: string, service?: CoordinationService, kind: CaptureKind = "intent"): Promise<StoredOperation> {
-    let snapshot: { repository: Awaited<ReturnType<typeof discoverRepository>>; checkpoint: Awaited<ReturnType<LocalDaemon["checkpoint"]>>; changes: Array<{ path: string; kind: "add" | "modify" | "delete"; beforeHash?: string; afterHash?: string; afterContent?: string; unifiedPatch?: string }> } | undefined;
+    let snapshot: { repository: Awaited<ReturnType<typeof discoverRepository>>; checkpoint: Awaited<ReturnType<LocalDaemon["checkpoint"]>>; changes: Array<{ path: string; kind: "add" | "modify" | "delete" | "rename"; previousPath?: string; beforeHash?: string; afterHash?: string; afterContent?: string; afterEncoding?: "base64"; unifiedPatch?: string }> } | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const repository = await discoverRepository(this.root); const names = await this.changedPaths();
       if (!names.length) throw new Error("No eligible working-tree changes to capture");
-      const changes = await Promise.all(names.map(async ({ path, kind }) => {
+      const changes = await Promise.all(names.map(async ({ path, kind, previousPath }) => {
         await this.eligiblePath(path);
-        const beforeBytes = kind === "add" ? undefined : await readRevisionFile(this.root, "HEAD", path).catch(() => undefined);
-        const before = beforeBytes === undefined ? undefined : decodeText(beforeBytes, path);
-        const after = kind === "delete" ? undefined : await this.readWorkingText(path);
-        const unifiedPatch = await unifiedDiff(before, after);
-        return { path, kind, beforeHash: before === undefined ? undefined : contentHash(before), afterHash: after === undefined ? undefined : contentHash(after), afterContent: after, unifiedPatch };
+        const beforeBytes = kind === "add" ? undefined : await readRevisionFile(this.root, "HEAD", kind === "rename" ? previousPath! : path).catch(() => undefined);
+        const afterBytes = kind === "delete" ? undefined : await this.readWorkingBuffer(path);
+        const binary = (beforeBytes !== undefined && isBinaryContent(beforeBytes)) || (afterBytes !== undefined && isBinaryContent(afterBytes));
+        if (!binary) {
+          const before = beforeBytes === undefined ? undefined : decodeText(beforeBytes, path);
+          const after = afterBytes === undefined ? undefined : decodeText(afterBytes, path);
+          const unifiedPatch = await unifiedDiff(before, after);
+          return { path, kind, previousPath, beforeHash: before === undefined ? undefined : contentHash(before), afterHash: after === undefined ? undefined : contentHash(after), afterContent: after, unifiedPatch };
+        }
+        return {
+          path, kind, previousPath,
+          beforeHash: beforeBytes === undefined ? undefined : contentHash(beforeBytes),
+          afterHash: afterBytes === undefined ? undefined : contentHash(afterBytes),
+          afterContent: afterBytes === undefined ? undefined : afterBytes.toString("base64"),
+          afterEncoding: afterBytes === undefined ? undefined : "base64" as const,
+          unifiedPatch: undefined
+        };
       }));
       if (!(await this.snapshotIsStable(repository, changes))) continue;
       const checkpoint = await this.checkpoint(`Crosscode: ${intent}`);
@@ -517,10 +538,10 @@ export class LocalDaemon {
         const absolute = await this.eligiblePath(change.path);
         if (change.kind === "delete") { prepared.push({ change, absolute }); continue; }
         if (change.afterContent === undefined) throw new Error(`Proposal does not contain materializable content: ${change.path}`);
-        assertText(change.afterContent, change.path);
+        if (change.afterEncoding !== "base64") assertText(change.afterContent, change.path);
         await mkdir(dirname(absolute), { recursive: true });
         const temporary = join(dirname(absolute), `.${basename(absolute)}.${randomUUID()}.crosscode`);
-        await writeFile(temporary, change.afterContent);
+        await writeFile(temporary, change.afterEncoding === "base64" ? Buffer.from(change.afterContent, "base64") : change.afterContent);
         prepared.push({ change, absolute, temporary });
       }
     } catch (error) {
@@ -538,7 +559,13 @@ export class LocalDaemon {
         await this.refuseChangedGitState();
         await this.assertChangeApplicable(operation, item.change, reviewApprovals);
         if (item.change.kind === "delete") await rm(item.absolute, { force: true });
-        else await rename(item.temporary!, item.absolute);
+        else {
+          await rename(item.temporary!, item.absolute);
+          if (item.change.kind === "rename") {
+            const oldAbsolute = await this.eligiblePath(item.change.previousPath!);
+            await rm(oldAbsolute, { force: true });
+          }
+        }
         applied.push(item);
       }
     } catch (error) {
@@ -549,7 +576,7 @@ export class LocalDaemon {
       await this.persist(rolledBack ? "transaction.apply_rolled_back" : "transaction.conflicted", { id, checkpoint: checkpoint.ref, recovery: rolledBack ? "live rollback" : "newer work preserved" });
       throw error;
     }
-    operation.transaction.changes.forEach((change) => this.capturedHashes.set(change.path, change.afterHash ?? null));
+    operation.transaction.changes.forEach((change) => { this.capturedHashes.set(change.path, change.afterHash ?? null); if (change.kind === "rename") this.capturedHashes.delete(change.previousPath!); });
     const accepted = { ...operation, status: "accepted" as const, materializationCheckpoint: checkpoint.ref }; this.operations.set(id, accepted); await this.persist("transaction.accepted", accepted); return accepted;
   }
   async reject(id: string): Promise<StoredOperation> { const operation = this.operations.get(id); if (!operation || operation.status !== "proposed") throw new Error("Proposal was not found"); const rejected = { ...operation, status: "rejected" as const }; this.operations.set(id, rejected); await this.persist("transaction.rejected", rejected); return rejected; }
@@ -595,20 +622,29 @@ export class LocalDaemon {
     await this.persist("publish.completed", { branch: result.branch, commit: result.commit, tree: result.tree });
     return result;
   }
-  private async changedPaths(): Promise<Array<{ path: string; kind: "add" | "modify" | "delete" }>> {
-    const [tracked, untracked, exclusions] = await Promise.all([git(this.root, ["diff", "--name-status", "-z", "--no-renames", "HEAD"]), git(this.root, ["ls-files", "-z", "--others", "--exclude-standard"]), configuredExcludedPaths(this.root)]);
+  private async changedPaths(): Promise<Array<{ path: string; kind: "add" | "modify" | "delete" | "rename"; previousPath?: string }>> {
+    const [tracked, untracked, exclusions] = await Promise.all([git(this.root, ["diff", "--name-status", "-z", "-M", "HEAD"]), git(this.root, ["ls-files", "-z", "--others", "--exclude-standard"]), configuredExcludedPaths(this.root)]);
     const trackedParts = tracked.split("\0").filter(Boolean);
-    const changed = Array.from({ length: Math.floor(trackedParts.length / 2) }, (_, index) => {
-      const status = trackedParts[index * 2]!;
-      const path = trackedParts[index * 2 + 1]!;
-      return { path, kind: status === "D" ? "delete" as const : status === "A" ? "add" as const : "modify" as const };
-    });
+    const changed: Array<{ path: string; kind: "add" | "modify" | "delete" | "rename"; previousPath?: string }> = [];
+    for (let index = 0; index < trackedParts.length;) {
+      const status = trackedParts[index]!;
+      if (status.startsWith("R")) {
+        const oldPath = trackedParts[index + 1]!;
+        const newPath = trackedParts[index + 2]!;
+        changed.push({ path: newPath, kind: "rename" as const, previousPath: oldPath });
+        index += 3;
+      } else {
+        const path = trackedParts[index + 1]!;
+        changed.push({ path, kind: status === "D" ? "delete" as const : status === "A" ? "add" as const : "modify" as const });
+        index += 2;
+      }
+    }
     const candidates = [...changed, ...untracked.split("\0").filter(Boolean).map((path) => ({ path, kind: "add" as const }))].filter((change) => !this.ignoredPath(change.path) && !matchesConfiguredExclusion(change.path, exclusions));
     return (await Promise.all(candidates.map(async (change) => {
-      const content = change.kind === "delete" ? undefined : await this.readWorkingText(change.path);
+      const content = change.kind === "delete" ? undefined : await this.readWorkingBuffer(change.path);
       const currentHash = content === undefined ? null : contentHash(content);
       return this.capturedHashes.get(change.path) === currentHash ? undefined : change;
-    }))).filter((change): change is { path: string; kind: "add" | "modify" | "delete" } => Boolean(change));
+    }))).filter((change): change is { path: string; kind: "add" | "modify" | "delete" | "rename"; previousPath?: string } => Boolean(change));
   }
   private async assertApplicable(operation: StoredOperation, reviewApprovals: Record<string, string> = {}): Promise<void> {
     for (const change of operation.transaction.changes) await this.assertChangeApplicable(operation, change, reviewApprovals);
@@ -655,11 +691,16 @@ export class LocalDaemon {
     return record.baseHash === baseHash && record.localHash === localHash && record.proposedHash === proposedHash;
   }
   private async analyzeChange(operationId: string, change: ChangeTransaction["changes"][number]): Promise<{ analysis: OperationAnalysis; beforeText?: string; current?: string; mergedCandidate?: string }> {
-    const current = await this.readWorkingText(change.path); const baseMatches = (current === undefined ? undefined : contentHash(current)) === change.beforeHash;
+    const currentBuffer = await this.readWorkingBuffer(change.path);
+    const current = currentBuffer === undefined ? undefined : safeDecodeText(currentBuffer);
+    const baseMatches = (currentBuffer === undefined ? undefined : contentHash(currentBuffer)) === change.beforeHash;
     const conflicting = this.findConflictingChange(operationId, change.path);
-    const overlaps = conflicting !== undefined && pathOverlaps(change.path, conflicting.path) && changesOverlap(change, conflicting);
+    const previousPathConflicting = change.kind === "rename" ? this.findConflictingChange(operationId, change.previousPath!) : undefined;
+    const overlaps = (conflicting !== undefined && pathOverlaps(change.path, conflicting.path) && changesOverlap(change, conflicting))
+      || (previousPathConflicting !== undefined && pathOverlaps(change.previousPath!, previousPathConflicting.path) && changesOverlap(change, previousPathConflicting));
+    const activeConflicting = conflicting ?? previousPathConflicting;
     const beforeBytes = await readRevisionFile(this.root, "HEAD", change.path).catch(() => undefined);
-    const beforeText = beforeBytes === undefined ? undefined : decodeText(beforeBytes, change.path);
+    const beforeText = beforeBytes === undefined ? undefined : safeDecodeText(beforeBytes);
     const semanticOverlap = looksLikeInterfaceChange(beforeText, change.afterContent, change.path);
     let dependents: string[] | undefined;
     if (semanticOverlap) {
@@ -673,9 +714,22 @@ export class LocalDaemon {
         dependents = [...new Set([...direct, ...transitive])].sort();
       }
     }
-    let analysis = analyzeOperation({ path: change.path, baseMatches: change.kind === "add" ? current === undefined : baseMatches, overlaps, kind: change.kind, conflictingKind: conflicting?.kind, semanticOverlap, dependents });
+    /**
+     * A rename's baseMatches must require BOTH that the destination is still free (like "add")
+     * AND that the source path's current local content still matches the beforeHash the proposal
+     * was built from (like "modify"/"delete") -- otherwise a rename could silently delete source
+     * content that has since diverged locally, bypassing the stale-base protection every other
+     * change kind gets. Checking only the destination would let a rename overwrite/discard a
+     * locally-edited source file without ever flagging it.
+     */
+    let renameBaseMatches = currentBuffer === undefined;
+    if (renameBaseMatches && change.kind === "rename") {
+      const previousBuffer = await this.readWorkingBuffer(change.previousPath!);
+      renameBaseMatches = previousBuffer !== undefined && contentHash(previousBuffer) === change.beforeHash;
+    }
+    let analysis = analyzeOperation({ path: change.path, previousPath: change.previousPath, baseMatches: change.kind === "add" ? currentBuffer === undefined : change.kind === "rename" ? renameBaseMatches : baseMatches, overlaps, kind: change.kind, conflictingKind: activeConflicting?.kind, semanticOverlap, dependents });
     let mergedCandidate: string | undefined;
-    if (analysis.classification === "stale-base" && change.kind === "modify" && current !== undefined && change.afterContent !== undefined && beforeText !== undefined) {
+    if (analysis.classification === "stale-base" && change.kind === "modify" && current !== undefined && change.afterContent !== undefined && change.afterEncoding !== "base64" && beforeText !== undefined) {
       const merge = await threeWayMerge(beforeText, current, change.afterContent);
       if (merge.clean) { analysis = { ...analysis, classification: "stale-base-resolved" }; mergedCandidate = merge.content; }
     }
@@ -684,7 +738,7 @@ export class LocalDaemon {
   private async assertChangeApplicable(operation: StoredOperation, change: ChangeTransaction["changes"][number], reviewApprovals: Record<string, string> = {}): Promise<void> {
     await this.eligiblePath(change.path);
     assertChangeIntegrity(change);
-    if (change.afterContent !== undefined) assertText(change.afterContent, change.path);
+    if (change.afterContent !== undefined && change.afterEncoding !== "base64") assertText(change.afterContent, change.path);
     const { analysis, beforeText, current, mergedCandidate } = await this.analyzeChange(operation.id, change);
     if (analysis.requiresApproval) {
       const stamped = { ...this.operations.get(operation.id)!, transaction: { ...operation.transaction, safety: { risk: analysis.risk, requiresApproval: true } } };
@@ -768,7 +822,7 @@ export class LocalDaemon {
       risk,
       intents: operation.transaction.intent ? [operation.transaction.intent] : [],
       validations: this.validations.slice(-5).map((validation) => ({ command: validation.command, exitCode: validation.exitCode, tree: validation.tree })),
-      files: [{ path, base: beforeText, local: current, proposed: change.afterContent }],
+      files: [{ path, base: beforeText, local: current, proposed: change.afterContent, binary: change.afterEncoding === "base64" }],
       excludedPaths
     });
     const raw = await this.options.reviewer.review(request);
@@ -812,7 +866,7 @@ export class LocalDaemon {
     for (const operation of this.operations.values()) {
       if (operation.status !== "applying") continue;
       const fullyApplied = (await Promise.all(operation.transaction.changes.map(async (change) => {
-        const current = await this.readWorkingText(change.path);
+        const current = await this.readWorkingBuffer(change.path);
         return change.kind === "delete" ? current === undefined : current !== undefined && contentHash(current) === change.afterHash;
       }))).every(Boolean);
       if (fullyApplied) {
@@ -840,37 +894,39 @@ export class LocalDaemon {
     }
   }
   private async rollbackMaterialization(operation: StoredOperation, checkpoint: string): Promise<boolean> {
+    const proposalHash = (change: ChangeTransaction["changes"][number]): string | undefined => {
+      if (change.kind === "delete" || change.afterContent === undefined) return undefined;
+      return contentHash(change.afterEncoding === "base64" ? Buffer.from(change.afterContent, "base64") : change.afterContent);
+    };
     const actions: ChangeTransaction["changes"] = [];
     for (const change of operation.transaction.changes) {
       await this.eligiblePath(change.path);
-      const current = await this.readWorkingText(change.path);
+      const current = await this.readWorkingBuffer(change.path);
       const checkpointBytes = await readRevisionFile(this.root, checkpoint, change.path).catch(() => undefined);
       if (change.kind !== "add" && checkpointBytes === undefined) return false;
-      const checkpointContent = checkpointBytes === undefined ? undefined : decodeText(checkpointBytes, change.path);
       const proposalContent = change.kind === "delete" ? undefined : change.afterContent;
       if (change.kind !== "delete" && proposalContent === undefined) return false;
       const currentHash = current === undefined ? undefined : contentHash(current);
-      const proposalMatches = currentHash === (proposalContent === undefined ? undefined : contentHash(proposalContent));
-      const checkpointMatches = currentHash === (checkpointContent === undefined ? undefined : contentHash(checkpointContent));
+      const proposalMatches = currentHash === proposalHash(change);
+      const checkpointMatches = currentHash === (checkpointBytes === undefined ? undefined : contentHash(checkpointBytes));
       if (!proposalMatches && !checkpointMatches) return false;
       if (proposalMatches && !checkpointMatches) actions.push(change);
     }
     for (const change of [...actions].reverse()) {
-      const current = await this.readWorkingText(change.path);
-      const proposalContent = change.kind === "delete" ? undefined : change.afterContent;
-      if ((current === undefined ? undefined : contentHash(current)) !== (proposalContent === undefined ? undefined : contentHash(proposalContent))) return false;
+      const current = await this.readWorkingBuffer(change.path);
+      if ((current === undefined ? undefined : contentHash(current)) !== proposalHash(change)) return false;
       if (change.kind === "add") await rm(await this.eligiblePath(change.path), { force: true });
       else await this.restoreEligibleCheckpointFile(checkpoint, change.path);
     }
     return true;
   }
-  private async snapshotIsStable(repository: Awaited<ReturnType<typeof discoverRepository>>, changes: Array<{ path: string; kind: "add" | "modify" | "delete"; afterHash?: string }>): Promise<boolean> {
+  private async snapshotIsStable(repository: Awaited<ReturnType<typeof discoverRepository>>, changes: Array<{ path: string; kind: "add" | "modify" | "delete" | "rename"; afterHash?: string }>): Promise<boolean> {
     const latest = await discoverRepository(this.root);
     if (latest.head !== repository.head || latest.headReflog !== repository.headReflog || latest.branch !== repository.branch || latest.worktree !== repository.worktree || latest.indexTree !== repository.indexTree || latest.operation !== repository.operation) return false;
     const current = await this.changedPaths();
     if (current.length !== changes.length || current.some((change) => !changes.some((snapshot) => snapshot.path === change.path && snapshot.kind === change.kind))) return false;
     return (await Promise.all(changes.map(async (change) => {
-      const content = change.kind === "delete" ? undefined : await this.readWorkingText(change.path);
+      const content = change.kind === "delete" ? undefined : await this.readWorkingBuffer(change.path);
       return (content === undefined ? undefined : contentHash(content)) === change.afterHash;
     }))).every(Boolean);
   }
@@ -885,6 +941,14 @@ export class LocalDaemon {
   private async readWorkingText(path: string): Promise<string | undefined> {
     const absolute = await safeRepositoryPath(this.root, path);
     try { return decodeText(await readFile(absolute), path); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  }
+  private async readWorkingBuffer(path: string): Promise<Buffer | undefined> {
+    const absolute = await safeRepositoryPath(this.root, path);
+    try { return await readFile(absolute); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
       throw error;

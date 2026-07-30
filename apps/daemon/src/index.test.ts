@@ -188,17 +188,123 @@ describe("local daemon coordination", () => {
     expect(second.transaction.changes).toMatchObject([{ path: "b.txt", kind: "add" }]);
   });
 
-  it("captures a Git rename as a safe delete and add transaction", async () => {
+  it("captures a Git rename as a rename transaction and materializes the move without losing content", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+    await exec("git", ["-C", senderRoot, "mv", "a.txt", "b.txt"]);
+
+    const operation = await sender.capture("rename file", service);
+
+    expect(operation.transaction.changes).toEqual([
+      expect.objectContaining({ path: "b.txt", kind: "rename", previousPath: "a.txt", afterContent: "one\n", afterHash: contentHash("one\n") })
+    ]);
+
+    await receiver.sync(service);
+    await receiver.accept(operation.id);
+    expect(await readFile(join(receiverRoot, "b.txt"), "utf8")).toBe("one\n");
+    await expect(stat(join(receiverRoot, "a.txt"))).rejects.toThrow();
+  });
+
+  it("captures a Git rename with a content edit in the same commit as a rename (not a delete+add)", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const original = "line1\nline2\nline3\nline4\nline5\n";
+    for (const root of [senderRoot, receiverRoot]) {
+      await writeFile(join(root, "a.txt"), original);
+      await exec("git", ["-C", root, "commit", "-aqm", "seed multi-line content"]);
+    }
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+
+    await exec("git", ["-C", senderRoot, "mv", "a.txt", "b.txt"]);
+    const edited = "line1\nline2\nEDITED\nline4\nline5\n";
+    await writeFile(join(senderRoot, "b.txt"), edited);
+
+    const operation = await sender.capture("rename and edit", service);
+    expect(operation.transaction.changes).toEqual([
+      expect.objectContaining({ path: "b.txt", kind: "rename", previousPath: "a.txt", afterContent: edited, afterHash: contentHash(edited), beforeHash: contentHash(original) })
+    ]);
+
+    await receiver.sync(service);
+    await receiver.accept(operation.id);
+    expect(await readFile(join(receiverRoot, "b.txt"), "utf8")).toBe(edited);
+    await expect(stat(join(receiverRoot, "a.txt"))).rejects.toThrow();
+  });
+
+  it("refuses a rename as stale-base when the source path's local content has diverged, preserving the local edit", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+    await exec("git", ["-C", senderRoot, "mv", "a.txt", "b.txt"]);
+    const operation = await sender.capture("rename file", service);
+
+    await writeFile(join(receiverRoot, "a.txt"), "receiver's own uncommitted edit\n");
+    await receiver.sync(service);
+
+    const proposal = (await receiver.diffProposal(operation.id))[0]!;
+    expect(proposal.classification).toBe("stale-base");
+    await expect(receiver.accept(operation.id)).rejects.toThrow("stale");
+    expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe("receiver's own uncommitted edit\n");
+    await expect(stat(join(receiverRoot, "b.txt"))).rejects.toThrow();
+  });
+
+  it("requires approval for a rename that conflicts with a pending change on the OLD path", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+    await exec("git", ["-C", senderRoot, "mv", "a.txt", "b.txt"]);
+    const operation = await sender.capture("rename file", service);
+    await receiver.sync(service);
+
+    const pendingOnOldPath = { path: "a.txt", kind: "modify" as const, beforeHash: contentHash("one\n"), afterHash: contentHash("locally-edited\n"), afterContent: "locally-edited\n" };
+    const pendingLocal = { id: "fake-local-op", workspaceId: "w", senderReplicaId: "receiver", transaction: { id: "fake-local-op", base: { files: [] }, changes: [pendingOnOldPath], provenance: { source: "filesystem" as const, confidence: "known" as const }, safety: { risk: "low" as const, requiresApproval: false } }, sequence: 1, createdAt: new Date().toISOString(), status: "local" as const };
+    receiver.operations.set(pendingLocal.id, pendingLocal);
+
+    await expect(receiver.accept(operation.id)).rejects.toThrow("requires local human approval");
+    expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe("one\n");
+    await expect(stat(join(receiverRoot, "b.txt"))).rejects.toThrow();
+  });
+
+  it("requires approval for a rename that conflicts with a pending change on the NEW path", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+    await exec("git", ["-C", senderRoot, "mv", "a.txt", "b.txt"]);
+    const operation = await sender.capture("rename file", service);
+    await receiver.sync(service);
+
+    const pendingOnNewPath = { path: "b.txt", kind: "add" as const, afterHash: contentHash("already-here\n"), afterContent: "already-here\n" };
+    const pendingLocal = { id: "fake-local-op", workspaceId: "w", senderReplicaId: "receiver", transaction: { id: "fake-local-op", base: { files: [] }, changes: [pendingOnNewPath], provenance: { source: "filesystem" as const, confidence: "known" as const }, safety: { risk: "low" as const, requiresApproval: false } }, sequence: 1, createdAt: new Date().toISOString(), status: "local" as const };
+    receiver.operations.set(pendingLocal.id, pendingLocal);
+
+    await expect(receiver.accept(operation.id)).rejects.toThrow("requires local human approval");
+    expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe("one\n");
+    await expect(stat(join(receiverRoot, "b.txt"))).rejects.toThrow();
+  });
+
+  it("classifies a rename INTO a critical-looking path as critical, requiring approval", async () => {
     const root = await repo();
+    await mkdir(join(root, "migrations"), { recursive: true });
     const daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
-    await exec("git", ["-C", root, "mv", "a.txt", "b.txt"]);
+    await exec("git", ["-C", root, "mv", "a.txt", "migrations/a.txt"]);
 
-    const operation = await daemon.capture("rename file");
+    const operation = await daemon.capture("move into migrations");
+    expect(operation.transaction.changes).toEqual([expect.objectContaining({ kind: "rename", path: "migrations/a.txt", previousPath: "a.txt" })]);
+    expect(operation.transaction.safety).toEqual({ risk: "critical", requiresApproval: true });
+  });
 
-    expect(operation.transaction.changes).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: "a.txt", kind: "delete" }),
-      expect.objectContaining({ path: "b.txt", kind: "add", afterContent: "one\n" })
-    ]));
+  it("classifies a rename FROM a critical-looking path as critical, requiring approval", async () => {
+    const root = await repo();
+    await mkdir(join(root, "auth"), { recursive: true });
+    await writeFile(join(root, "auth", "config.txt"), "cfg\n");
+    await exec("git", ["-C", root, "add", "auth/config.txt"]);
+    await exec("git", ["-C", root, "commit", "-qm", "add auth file"]);
+    const daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
+    await exec("git", ["-C", root, "mv", "auth/config.txt", "plain.txt"]);
+
+    const operation = await daemon.capture("move out of auth");
+    expect(operation.transaction.changes).toEqual([expect.objectContaining({ kind: "rename", path: "plain.txt", previousPath: "auth/config.txt" })]);
+    expect(operation.transaction.safety).toEqual({ risk: "critical", requiresApproval: true });
   });
 
   it("rejects symlink traversal and honors committed configured exclusions", async () => {
@@ -404,12 +510,23 @@ describe("local daemon coordination", () => {
     await expect(daemon.observeGitTransition()).resolves.toMatchObject({ kind: "reset", paused: true });
   });
 
-  it("rejects binary working-tree content instead of decoding it lossily", async () => {
+  it("captures binary working-tree content as base64 instead of throwing, alongside an unrelated text change", async () => {
     const root = await repo();
     const daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
-    await writeFile(join(root, "binary.dat"), Buffer.from([0xff, 0x00, 0xfe]));
+    await writeFile(join(root, "a.txt"), "two\n");
+    const binaryBytes = Buffer.from([0xff, 0x00, 0xfe]);
+    await writeFile(join(root, "binary.dat"), binaryBytes);
 
-    await expect(daemon.capture("binary edit")).rejects.toThrow(/binary/i);
+    const operation = await daemon.capture("binary edit alongside text edit");
+
+    const textChange = operation.transaction.changes.find((change) => change.path === "a.txt")!;
+    expect(textChange.afterContent).toBe("two\n");
+    expect(textChange.afterEncoding).toBeUndefined();
+    const binaryChange = operation.transaction.changes.find((change) => change.path === "binary.dat")!;
+    expect(binaryChange.afterEncoding).toBe("base64");
+    expect(Buffer.from(binaryChange.afterContent!, "base64")).toEqual(binaryBytes);
+    expect(binaryChange.afterHash).toBe(contentHash(binaryBytes));
+    expect(binaryChange.unifiedPatch).toBeUndefined();
   });
 
   it("pauses proposal application after a Git branch transition until proposals are re-analyzed", async () => {
@@ -748,5 +865,104 @@ describe("local daemon coordination", () => {
     const [validation] = await daemon.validate("fast", ["true"]);
 
     expect(validation!.runnerId).toBe("actor-42");
+  });
+
+  it("classifies an independent binary add as requiring no approval", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" }); const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+    const binaryBytes = Buffer.from(Array.from({ length: 256 }, (_, index) => index));
+    await writeFile(join(senderRoot, "logo.png"), binaryBytes);
+    const operation = await sender.capture("add binary asset", service);
+    await receiver.sync(service);
+
+    const proposal = (await receiver.diffProposal(operation.id))[0]!;
+    expect(proposal.classification).toBe("independent");
+    expect(proposal.requiresApproval).toBe(false);
+
+    await receiver.accept(operation.id);
+    expect(await readFile(join(receiverRoot, "logo.png"))).toEqual(binaryBytes);
+  });
+
+  it("escalates two binary changes conflicting on the same path to requiring approval instead of silently merging", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const originalBytes = Buffer.from(Array.from({ length: 256 }, (_, index) => index));
+    await writeFile(join(senderRoot, "asset.bin"), originalBytes); await exec("git", ["-C", senderRoot, "add", "asset.bin"]); await exec("git", ["-C", senderRoot, "commit", "-qm", "seed binary"]);
+    await writeFile(join(receiverRoot, "asset.bin"), originalBytes); await exec("git", ["-C", receiverRoot, "add", "asset.bin"]); await exec("git", ["-C", receiverRoot, "commit", "-qm", "seed binary"]);
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+
+    const senderBytes = Buffer.from(originalBytes); senderBytes[0] = 0xaa;
+    await writeFile(join(senderRoot, "asset.bin"), senderBytes);
+    const operation = await sender.capture("modify binary asset", service);
+    await receiver.sync(service);
+
+    const receiverBytes = Buffer.from(originalBytes); receiverBytes[1] = 0xbb;
+    const conflictingChange = { path: "asset.bin", kind: "modify" as const, beforeHash: contentHash(originalBytes), afterHash: contentHash(receiverBytes), afterContent: receiverBytes.toString("base64"), afterEncoding: "base64" as const };
+    const pendingLocal = { id: "fake-local-op", workspaceId: "w", senderReplicaId: "receiver", transaction: { id: "fake-local-op", base: { files: [] }, changes: [conflictingChange], provenance: { source: "filesystem" as const, confidence: "known" as const }, safety: { risk: "low" as const, requiresApproval: false } }, sequence: 1, createdAt: new Date().toISOString(), status: "local" as const };
+    receiver.operations.set(pendingLocal.id, pendingLocal);
+
+    await expect(receiver.accept(operation.id)).rejects.toThrow("requires local human approval");
+    expect(await readFile(join(receiverRoot, "asset.bin"))).toEqual(originalBytes);
+  });
+
+  it("classifies a binary stale-base conflict as stale-base and never auto-upgrades it to stale-base-resolved", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const originalBytes = Buffer.from(Array.from({ length: 256 }, (_, index) => index));
+    await writeFile(join(senderRoot, "asset.bin"), originalBytes); await exec("git", ["-C", senderRoot, "add", "asset.bin"]); await exec("git", ["-C", senderRoot, "commit", "-qm", "seed binary"]);
+    await writeFile(join(receiverRoot, "asset.bin"), originalBytes); await exec("git", ["-C", receiverRoot, "add", "asset.bin"]); await exec("git", ["-C", receiverRoot, "commit", "-qm", "seed binary"]);
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+
+    const senderBytes = Buffer.from(originalBytes); senderBytes[0] = 0xaa;
+    await writeFile(join(senderRoot, "asset.bin"), senderBytes);
+    const operation = await sender.capture("modify binary asset", service);
+
+    const receiverBytes = Buffer.from(originalBytes); receiverBytes[1] = 0xbb;
+    await writeFile(join(receiverRoot, "asset.bin"), receiverBytes);
+    await receiver.sync(service);
+
+    const proposal = (await receiver.diffProposal(operation.id))[0]!;
+    expect(proposal.classification).toBe("stale-base");
+    await expect(receiver.accept(operation.id)).rejects.toThrow("stale");
+    expect(await readFile(join(receiverRoot, "asset.bin"))).toEqual(receiverBytes);
+    expect(receiver.operations.get(operation.id)?.status).toBe("conflicted");
+  });
+
+  it("propagates a binary file byte-for-byte through propose, accept, and materialize on a second replica", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" }); const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+    const binaryBytes = Buffer.from(Array.from({ length: 256 }, (_, index) => index));
+    await writeFile(join(senderRoot, "screenshot.bin"), binaryBytes);
+
+    const operation = await sender.capture("add screenshot", service);
+    await receiver.sync(service);
+    await receiver.accept(operation.id);
+
+    const materialized = await readFile(join(receiverRoot, "screenshot.bin"));
+    expect(materialized).toEqual(binaryBytes);
+  });
+
+  it("rejects materializing a base64 binary change whose afterHash has been tampered with", async () => {
+    const root = await repo();
+    const daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "receiver", actorId: "actor" });
+    const binaryBytes = Buffer.from(Array.from({ length: 256 }, (_, index) => index));
+    const tampered = {
+      id: "tampered-binary-op",
+      workspaceId: "w",
+      senderReplicaId: "sender",
+      transaction: {
+        id: "tampered-binary-op",
+        base: { files: [] },
+        changes: [{ path: "asset.bin", kind: "add" as const, afterContent: binaryBytes.toString("base64"), afterEncoding: "base64" as const, afterHash: "0".repeat(64) }],
+        provenance: { source: "filesystem" as const, confidence: "known" as const },
+        safety: { risk: "low" as const, requiresApproval: false }
+      },
+      sequence: 1,
+      createdAt: new Date().toISOString(),
+      status: "proposed" as const
+    };
+    daemon.operations.set(tampered.id, tampered);
+
+    await expect(daemon.accept(tampered.id)).rejects.toThrow("hash is invalid");
   });
 });

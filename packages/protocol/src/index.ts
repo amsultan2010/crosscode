@@ -20,14 +20,18 @@ export type Claim = z.infer<typeof claimSchema>;
 export const changeTransactionSchema = z.object({
   id: z.string().min(1), taskId: z.string().optional(), intent: z.string().optional(),
   base: z.object({ headCommit: z.string().optional(), files: z.array(z.object({ path: z.string(), blobHash: z.string().optional(), contentHash: z.string() })) }),
-  changes: z.array(z.object({ path: z.string().min(1), kind: z.enum(["add", "modify", "delete", "rename"]), beforeHash: z.string().optional(), afterHash: z.string().optional(), unifiedPatch: z.string().optional(), afterContent: z.string().optional() })).min(1),
+  changes: z.array(z.object({ path: z.string().min(1), kind: z.enum(["add", "modify", "delete", "rename"]), previousPath: z.string().min(1).optional(), beforeHash: z.string().optional(), afterHash: z.string().optional(), unifiedPatch: z.string().optional(), afterContent: z.string().optional(), afterEncoding: z.enum(["utf8", "base64"]).optional() })).min(1),
   provenance: z.object({ source: z.enum(["filesystem", "cli-wrapper", "mcp", "hook", "extension"]), confidence: z.enum(["known", "inferred", "unknown"]) }),
   safety: z.object({ risk: riskSchema, requiresApproval: z.boolean() }),
   kind: captureKindSchema.optional()
 }).strict().superRefine((transaction, context) => {
   transaction.changes.forEach((change, index) => {
     if (change.kind === "rename") {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ["changes", index, "kind"], message: "Rename changes require explicit delete and add operations" });
+      if (change.previousPath === undefined || change.previousPath === change.path) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["changes", index, "previousPath"], message: "Rename changes require a previousPath different from path" });
+      }
+    } else if (change.previousPath !== undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["changes", index, "previousPath"], message: "previousPath is only valid for rename changes" });
     }
     if (change.kind !== "delete" && change.afterContent === undefined && change.unifiedPatch === undefined) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["changes", index, "afterContent"], message: "Non-delete changes require materializable content or a patch" });
@@ -435,7 +439,7 @@ export const daemonServiceConfigSchema = z.object({
       && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
     );
   }, "Service URL must use HTTPS or loopback HTTP"),
-  replicaSecret: z.string().min(1)
+  replicaSecret: z.string().min(1).optional()
 }).strict();
 export type DaemonServiceConfig = z.infer<typeof daemonServiceConfigSchema>;
 
