@@ -157,31 +157,16 @@ export const principalSchema = z.object({
 }).strict();
 export type Principal = z.infer<typeof principalSchema>;
 
-export const enrollmentRequestSchema = z.object({
-  token: z.string().min(1)
+export const registerReplicaRequestSchema = z.object({
+  name: z.string().min(1)
 }).strict();
-export type EnrollmentRequest = z.infer<typeof enrollmentRequestSchema>;
+export type RegisterReplicaRequest = z.infer<typeof registerReplicaRequestSchema>;
 
-export const enrollmentResponseSchema = z.object({
-  accessToken: z.string().min(1),
-  expiresAt: z.string().datetime(),
-  principal: principalSchema,
-  replicaSecret: z.string().min(1)
-}).strict();
-export type EnrollmentResponse = z.infer<typeof enrollmentResponseSchema>;
-
-export const replicaTokenExchangeRequestSchema = z.object({
-  workspaceId: z.string().min(1),
-  actorId: z.string().min(1),
+export const registerReplicaResponseSchema = z.object({
   replicaId: z.string().min(1),
-  replicaSecret: z.string().min(1)
+  createdAt: z.string().datetime()
 }).strict();
-export type ReplicaTokenExchangeRequest = z.infer<typeof replicaTokenExchangeRequestSchema>;
-
-export const replicaTokenExchangeResponseSchema = enrollmentResponseSchema.omit({
-  replicaSecret: true
-});
-export type ReplicaTokenExchangeResponse = z.infer<typeof replicaTokenExchangeResponseSchema>;
+export type RegisterReplicaResponse = z.infer<typeof registerReplicaResponseSchema>;
 
 export const serviceIngestRequestSchema = z.object({
   event: transactionCreatedEventSchema
@@ -439,13 +424,17 @@ export const daemonServiceConfigSchema = z.object({
       && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
     );
   }, "Service URL must use HTTPS or loopback HTTP"),
-  replicaSecret: z.string().min(1).optional()
+  session: z.object({
+    accessToken: z.string().min(1),
+    refreshToken: z.string().min(1),
+    expiresAt: z.string().datetime()
+  }).strict().optional()
 }).strict();
 export type DaemonServiceConfig = z.infer<typeof daemonServiceConfigSchema>;
 
 export const daemonConfigSchema = z.object({
   workspaceId: z.string().min(1),
-  replicaId: z.string().min(1),
+  replicaId: z.string().min(1).optional(),
   actorId: z.string().min(1),
   service: daemonServiceConfigSchema.optional()
 }).strict();
