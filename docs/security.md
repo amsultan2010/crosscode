@@ -72,16 +72,20 @@ require human approval for `high`/`critical` risk regardless of its own
 confidence score, and must never receive secrets, `.env` contents, credentials,
 private keys, or excluded paths.
 
-### `policy.autoApplyRisk` (in progress)
+### `policy.autoApplyRisk`
 
-**Not yet implemented in this codebase** — a parallel workstream is adding a
-`policy.autoApplyRisk` field to the committed `.crosscode/config.yaml`
-(enum `low | medium | high | critical`, default `low`). It controls which
-risk-classified proposals the daemon may auto-accept instead of routing them
-through the explicit human-accept flow described above. Until it lands, treat
-every non-`low`-risk proposal as requiring an explicit `accept`/`reject`
-decision; this field is a sensitive-action control and should be reviewed with
-the same scrutiny as the confirmation points above once implemented.
+An optional `policy.autoApplyRisk` field on the committed `.crosscode/config.yaml`
+(enum `low | medium | high | critical`, default `low` within an explicit `policy`
+block) lets the daemon auto-materialize newly-arrived proposals instead of
+waiting for an explicit `accept`. It does not add a new materialization path or
+weaken any gate above: a proposal is only auto-applied if it already passes the
+same `assertApplicable`/`assertChangeApplicable` checks a manual `accept` would
+require (today, only the `independent`/`low`-risk classification satisfies that),
+and its risk is at or under the configured threshold. Critical-risk paths are
+never eligible regardless of policy. An auto-applied proposal is recorded with a
+distinct `transaction.auto_applied` local event so it's visibly different from a
+human-initiated accept. No `policy` block committed (the default) leaves
+today's always-explicit-accept behavior completely unchanged.
 
 ## Threat model
 
