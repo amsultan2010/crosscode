@@ -49,6 +49,7 @@ unknown/newer major versions are rejected rather than partially parsed.
 | `handoff.requested` | `handoffRequestedEventSchema` | `Handoff` |
 | `handoff.responded` | `handoffRespondedEventSchema` | `Handoff` |
 | `intent.published` | `intentPublishedEventSchema` | `Intent` |
+| `validation.completed` | `validationCompletedEventSchema` | `Validation` |
 
 Each of these has a corresponding `*IngestRequest` schema the service accepts on
 its HTTP ingest endpoints, and a `*IngestReceipt` schema returned back.
@@ -63,19 +64,17 @@ its HTTP ingest endpoints, and a `*IngestReceipt` schema returned back.
 - `claim` — wraps a `RemoteClaim`
 - `handoff` — wraps a `RemoteHandoff`
 - `intent` — wraps a `RemoteIntent`
+- `validation` — wraps a `RemoteValidation`
 
 A replica subscribes with `wsSubscribeRequestSchema` (`workspaceId`, `replicaId`,
 `accessToken`) and gets back a `wsSubscribeAckSchema` with a resume cursor, or a
 `wsErrorMessageSchema` on failure. Each `remote*` payload additionally carries
-`eventId`, `workspaceId`, `senderReplicaId`, and `updatedAt` so a receiving replica
-can dedupe and order it against its own cursor.
-
-**In progress (not yet implemented in this codebase):** a parallel workstream is
-adding a `POST /v1/validations` / `GET /v1/validations` endpoint pair and a
-matching `validation` WebSocket fan-out message, following the same
+`eventId`, `workspaceId`, `senderReplicaId`, and an `updatedAt`/`createdAt`
+timestamp (validations are immutable, so `RemoteValidation` uses `createdAt`
+instead of `updatedAt`) so a receiving replica can dedupe and order it against its
+own cursor. `POST /v1/validations` / `GET /v1/validations` follow the same
 request/receipt/cursor/fan-out pattern as `task`/`claim`/`handoff`/`intent` above,
-so replicas can see each other's local validation results. Treat this as planned,
-not shipped, until it lands in `packages/protocol/src/index.ts`.
+letting replicas see each other's local validation results.
 
 ## Relationship to the daemon's local event log
 
