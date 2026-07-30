@@ -222,11 +222,10 @@ For the implementation plan and current milestone ledger, see [BUILD_INSTRUCTION
 
 ## Current limitations
 
-- B1 uses polling for reconnect; WebSocket fan-out and presence are B2.
-- Production PostgreSQL role grants and retention policies still need environment-specific deployment hardening.
-- Replica secrets use the protected Git-directory configuration fallback; OS-keychain integration is still planned.
-- Transactions are text-only. Binary files are rejected for sharing, although checkpoint restore preserves their exact bytes.
-- Renames are represented as explicit delete/add changes.
+- Production PostgreSQL role grants still need environment-specific deployment hardening. Retention is opt-in and admin-only: `pnpm service:prune -- --older-than-days <n>` deletes old audit events and ended sessions; cursor-reconnect-dependent tables are deliberately never pruned.
+- Replica secrets are stored in the OS keychain when available (macOS `security`, Linux `secret-tool`); otherwise, including on Windows, the mode-`0600` Git-directory configuration fallback is used.
+- Binary files are shared base64-encoded with byte-exact materialization; any conflict involving a binary file requires human approval, since deterministic hunk/merge analysis is text-only.
+- Renames are tracked as first-class rename changes (old path, new path, content); a rename conflicting with pending work on either path, moving into or out of a critical path, or whose source has diverged locally always requires approval.
 - Dependency-impact analysis for `.ts`/`.tsx` is a syntactic AST walk, not a type-checker-backed analysis (see BUILD_INSTRUCTIONS.md Milestone C for exact scope).
 - There is no hosted/managed coordination service yet — you run PostgreSQL and the service yourself.
 - Team-workspace enrollment (multi-person/multi-agent sync) requires a running coordination service and a manually issued enrollment token; there is no self-serve signup or billing yet.
