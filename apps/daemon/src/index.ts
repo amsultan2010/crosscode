@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import chokidar, { type FSWatcher } from "chokidar";
 import {
   analyzeOperation, applyRiskSafetyGate, authorizeSemanticReview, buildSemanticReviewBundle, changedExportedSymbols, contentHash, exportedSymbolNames, hunksOverlap,
-  isReviewEligible, looksLikeInterfaceChange, pathOverlaps, redactPath, transactionRisk, validateSemanticReview,
+  isReviewEligible, looksLikeInterfaceChange, pathOverlaps, redactPath, riskRank, transactionRisk, validateSemanticReview,
   type OperationAnalysis, type SemanticReviewer
 } from "@crosscode/core";
 import { createCheckpoint, discoverRepository, findAstDependentFiles, findSymbolReferences, inspectCheckpoint, publishCommit, readRevisionFile, restoreCheckpointFile, safeRepositoryPath, snapshotWorktreeTree, threeWayMerge, unifiedDiff } from "@crosscode/git";
@@ -45,14 +45,17 @@ import {
   type RemoteHandoff,
   type RemoteIntent,
   type RemoteTask,
+  type RemoteValidation,
   type Task,
   type TaskCreatedEvent,
   type TaskUpdatedEvent,
-  type Validation
+  type Validation,
+  type ValidationCompletedEvent
 } from "@crosscode/protocol";
 import type { CoordinationService } from "../../service/src/index.js";
-import { configuredAiReviewPolicy, configuredExcludedPaths, matchesConfiguredExclusion, validationCommands } from "./config.js";
-import { DaemonStateStore, type CheckpointRecord, type ClaimOutboundRecord, type ConflictArtifactRecord, type GitState, type HandoffOutboundRecord, type IntentOutboundRecord, type OutboundRecord, type TaskOutboundRecord } from "./state.js";
+import { configuredAiReviewPolicy, configuredAutoApplyRisk, configuredExcludedPaths, matchesConfiguredExclusion, validationCommands } from "./config.js";
+import { DaemonStateStore, type CheckpointRecord, type ClaimOutboundRecord, type ConflictArtifactRecord, type GitState, type HandoffOutboundRecord, type IntentOutboundRecord, type OutboundRecord, type TaskOutboundRecord, type ValidationOutboundRecord } from "./state.js";
+import type { LocalEvent } from "./local-event.js";
 import type { SemanticReviewRecord, StoredOperation } from "./types.js";
 
 const exec = promisify(execFile);
@@ -87,6 +90,8 @@ export type RemoteSyncTransport = {
   listHandoffs(after: string): Promise<{ handoffs: RemoteHandoff[]; nextCursor: string }>;
   uploadIntent(record: IntentOutboundRecord): Promise<RemoteIntent>;
   listIntents(after: string): Promise<{ intents: RemoteIntent[]; nextCursor: string }>;
+  uploadValidation(record: ValidationOutboundRecord): Promise<RemoteValidation>;
+  listValidations(after: string): Promise<{ validations: RemoteValidation[]; nextCursor: string }>;
 };
 
 export class LocalDaemon {
@@ -94,11 +99,13 @@ export class LocalDaemon {
   readonly outbound = new Map<string, OutboundRecord>();
   readonly taskOutbound = new Map<string, TaskOutboundRecord>(); readonly claimOutbound = new Map<string, ClaimOutboundRecord>();
   readonly handoffOutbound = new Map<string, HandoffOutboundRecord>(); readonly intentOutbound = new Map<string, IntentOutboundRecord>();
+  readonly validationOutbound = new Map<string, ValidationOutboundRecord>(); readonly remoteValidations = new Map<string, RemoteValidation>();
   private remoteCursor = 0;
   private remoteTaskCursor = EPOCH_CURSOR;
   private remoteClaimCursor = EPOCH_CURSOR;
   private remoteHandoffCursor = EPOCH_CURSOR;
   private remoteIntentCursor = EPOCH_CURSOR;
+  private remoteValidationCursor = EPOCH_CURSOR;
   private eventSequence = 0;
   private readonly capturedHashes = new Map<string, string | null>();
   private gitState: GitState;
@@ -116,9 +123,9 @@ export class LocalDaemon {
       const risk = transactionRisk(transaction);
       daemon.operations.set(operation.id, { ...operation, transaction: { ...transaction, safety: { risk, requiresApproval: risk === "critical" } } });
     }
-    daemon.validations.push(...saved.validations); daemon.checkpoints.push(...saved.checkpoints); for (const handoff of saved.handoffs) daemon.handoffs.set(handoff.id, handoff); for (const intent of saved.intents) daemon.intents.set(intent.id, intent); for (const record of state.listSemanticReviews()) daemon.semanticReviews.set(record.id, record); for (const record of saved.outbound) daemon.outbound.set(record.event.id, record); for (const record of saved.taskOutbound) daemon.taskOutbound.set(record.event.id, record); for (const record of saved.claimOutbound) daemon.claimOutbound.set(record.event.id, record); for (const record of saved.handoffOutbound) daemon.handoffOutbound.set(record.event.id, record); for (const record of saved.intentOutbound) daemon.intentOutbound.set(record.event.id, record); daemon.remoteCursor = saved.remoteCursor; daemon.remoteTaskCursor = saved.remoteTaskCursor; daemon.remoteClaimCursor = saved.remoteClaimCursor; daemon.remoteHandoffCursor = saved.remoteHandoffCursor; daemon.remoteIntentCursor = saved.remoteIntentCursor; daemon.eventSequence = saved.eventSequence; daemon.materializationPaused = saved.materializationPaused; for (const [path, hash] of Object.entries(saved.capturedHashes)) daemon.capturedHashes.set(path, hash); await daemon.reconcileInterruptedMaterializations(); return daemon;
+    daemon.validations.push(...saved.validations); daemon.checkpoints.push(...saved.checkpoints); for (const handoff of saved.handoffs) daemon.handoffs.set(handoff.id, handoff); for (const intent of saved.intents) daemon.intents.set(intent.id, intent); for (const record of state.listSemanticReviews()) daemon.semanticReviews.set(record.id, record); for (const record of saved.outbound) daemon.outbound.set(record.event.id, record); for (const record of saved.taskOutbound) daemon.taskOutbound.set(record.event.id, record); for (const record of saved.claimOutbound) daemon.claimOutbound.set(record.event.id, record); for (const record of saved.handoffOutbound) daemon.handoffOutbound.set(record.event.id, record); for (const record of saved.intentOutbound) daemon.intentOutbound.set(record.event.id, record); for (const record of saved.validationOutbound) daemon.validationOutbound.set(record.event.id, record); daemon.remoteCursor = saved.remoteCursor; daemon.remoteTaskCursor = saved.remoteTaskCursor; daemon.remoteClaimCursor = saved.remoteClaimCursor; daemon.remoteHandoffCursor = saved.remoteHandoffCursor; daemon.remoteIntentCursor = saved.remoteIntentCursor; daemon.remoteValidationCursor = saved.remoteValidationCursor; daemon.eventSequence = saved.eventSequence; daemon.materializationPaused = saved.materializationPaused; for (const [path, hash] of Object.entries(saved.capturedHashes)) daemon.capturedHashes.set(path, hash); await daemon.reconcileInterruptedMaterializations(); return daemon;
   }
-  async status() { const repository = await discoverRepository(this.root); return { ...repository, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, tasks: this.tasks.size, claims: this.claims.size, proposals: [...this.operations.values()].filter((operation) => operation.status === "proposed").length, materializationPaused: this.materializationPaused, eventSequence: this.eventSequence, remoteCursor: this.remoteCursor, pendingOutbound: [...this.outbound.values()].filter((record) => record.acknowledgedServerSequence === undefined).length, service: { ...this.serviceStatus } }; }
+  async status() { const repository = await discoverRepository(this.root); return { ...repository, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, tasks: this.tasks.size, claims: this.claims.size, proposals: [...this.operations.values()].filter((operation) => operation.status === "proposed").length, materializationPaused: this.materializationPaused, eventSequence: this.eventSequence, remoteCursor: this.remoteCursor, pendingOutbound: [...this.outbound.values()].filter((record) => record.acknowledgedServerSequence === undefined).length, remoteValidations: [...this.remoteValidations.values()], service: { ...this.serviceStatus } }; }
   configureRemoteSync(): void { this.serviceStatus = { ...this.serviceStatus, configured: true }; }
   recordRemoteSyncFailure(): void { this.serviceStatus = { ...this.serviceStatus, configured: true, online: false, lastSyncError: "Coordination service is unavailable" }; }
   async createTask(input: Pick<Task, "title"> & Partial<Pick<Task, "intent" | "paths" | "status">>): Promise<Task> {
@@ -325,6 +332,7 @@ export class LocalDaemon {
     await this.syncClaims(transport);
     await this.syncHandoffs(transport);
     await this.syncIntents(transport);
+    await this.syncValidations(transport);
     let uploaded = 0;
     for (const record of [...this.outbound.values()].filter((item) => item.acknowledgedServerSequence === undefined).sort((left, right) => left.event.clientSequence - right.event.clientSequence)) {
       const remote = await transport.upload(record);
@@ -365,6 +373,7 @@ export class LocalDaemon {
         throw error;
       }
     }
+    await this.autoApplyEligibleProposals(insertedIds);
     this.serviceStatus = { configured: true, online: true, lastSyncAt: now() };
     return { uploaded, downloaded, cursor: this.remoteCursor };
   }
@@ -458,6 +467,28 @@ export class LocalDaemon {
     }
   }
 
+  private async syncValidations(transport: RemoteSyncTransport): Promise<void> {
+    for (const record of [...this.validationOutbound.values()].filter((item) => item.acknowledgedAt === undefined).sort((left, right) => left.event.clientSequence - right.event.clientSequence)) {
+      const remote = await transport.uploadValidation(record);
+      if (remote.validation.id !== record.event.payload.id || remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId !== this.options.replicaId) throw new Error("Service acknowledgement did not match the outbound validation");
+      this.validationOutbound.set(record.event.id, { ...record, acknowledgedAt: remote.createdAt });
+      try { await this.persist("validation.published", { eventId: record.event.id, validationId: remote.validation.id, createdAt: remote.createdAt }); }
+      catch (error) { this.validationOutbound.set(record.event.id, record); throw error; }
+    }
+    const page = await transport.listValidations(this.remoteValidationCursor);
+    const previousCursor = this.remoteValidationCursor;
+    const previousValidations = new Map(this.remoteValidations);
+    for (const remote of page.validations) {
+      if (remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId === this.options.replicaId) continue;
+      this.remoteValidations.set(remote.validation.id, remote);
+    }
+    if (page.nextCursor !== this.remoteValidationCursor) {
+      this.remoteValidationCursor = page.nextCursor;
+      try { await this.persist("validation.synchronized", { cursor: this.remoteValidationCursor, downloaded: page.validations.length }); }
+      catch (error) { this.remoteValidationCursor = previousCursor; previousValidations.forEach((validation, id) => this.remoteValidations.set(id, validation)); throw error; }
+    }
+  }
+
   async sync(service: CoordinationService): Promise<StoredOperation[]> {
     const incoming = service.list(this.options.workspaceId, this.remoteCursor); this.remoteCursor = Math.max(this.remoteCursor, ...incoming.map((operation) => operation.sequence), 0);
     const proposals = incoming.filter((operation) => operation.senderReplicaId !== this.options.replicaId).map((operation) => {
@@ -467,7 +498,9 @@ export class LocalDaemon {
       this.operations.set(stored.id, stored);
       return stored;
     });
-    await this.persist("transaction.proposed", { proposals, remoteCursor: this.remoteCursor }); return proposals;
+    await this.persist("transaction.proposed", { proposals, remoteCursor: this.remoteCursor });
+    await this.autoApplyEligibleProposals(proposals.map((proposal) => proposal.id));
+    return proposals;
   }
   async accept(id: string, options: { reviewApprovals?: Record<string, string> } = {}): Promise<StoredOperation> {
     const reviewApprovals = options.reviewApprovals ?? {};
@@ -523,6 +556,7 @@ export class LocalDaemon {
   async validateProfile(profile: string): Promise<Validation[]> { return this.validate(profile, await validationCommands(this.root, profile)); }
   async validate(profile: string, commands: string[]): Promise<Validation[]> {
     const output: Validation[] = [];
+    const queuedEventIds: string[] = [];
     for (const command of commands) {
       const checkpoint = await this.checkpoint(`Before validation: ${profile}`);
       const started = Date.now();
@@ -531,8 +565,11 @@ export class LocalDaemon {
       const changedDuringValidation = afterTree !== checkpoint.tree;
       const validation = { id: randomUUID(), profile, command, exitCode: changedDuringValidation && result.exitCode === 0 ? 1 : result.exitCode, output: this.redactValidationOutput(`${changedDuringValidation ? "Validation invalidated because the working tree changed during the command\n" : ""}${result.output}`), durationMs: Date.now() - started, tree: checkpoint.tree, runnerId: this.options.actorId, createdAt: now() };
       this.validations.push(validation); output.push(validation);
+      const event: ValidationCompletedEvent = { id: validation.id, schemaVersion: 1, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "validation.completed", clientSequence: this.eventSequence + 1 + queuedEventIds.length, createdAt: validation.createdAt, payload: validation };
+      this.validationOutbound.set(event.id, { event }); queuedEventIds.push(event.id);
     }
-    await this.persist("validation.completed", output);
+    try { await this.persist("validation.completed", output); }
+    catch (error) { queuedEventIds.forEach((id) => this.validationOutbound.delete(id)); throw error; }
     return output;
   }
   async publish(input: { branch: string; profile: string; message?: string; dryRun?: boolean }): Promise<{ branch: string; tree: string; changedPaths: Array<{ path: string; kind: "add" | "modify" | "delete" }> } | { branch: string; commit: string; tree: string; previous?: string }> {
@@ -575,6 +612,29 @@ export class LocalDaemon {
   }
   private async assertApplicable(operation: StoredOperation, reviewApprovals: Record<string, string> = {}): Promise<void> {
     for (const change of operation.transaction.changes) await this.assertChangeApplicable(operation, change, reviewApprovals);
+  }
+
+  /**
+   * Speculatively accepts newly-arrived proposals through the ordinary accept() path when a
+   * committed .crosscode/config.yaml explicitly configures policy.autoApplyRisk. accept()'s own
+   * assertApplicable/assertChangeApplicable gates are the only thing deciding eligibility here --
+   * this never bypasses them. A proposal that still requires approval throws inside accept()
+   * before any checkpoint/materialization mutation, so it is left exactly as an ordinary pending
+   * proposal. Absence of a configured policy (undefined) preserves today's always-explicit-accept
+   * behavior unchanged.
+   */
+  private async autoApplyEligibleProposals(ids: string[]): Promise<void> {
+    if (!ids.length) return;
+    const threshold = await configuredAutoApplyRisk(this.root).catch(() => undefined);
+    if (!threshold) return;
+    for (const id of ids) {
+      const operation = this.operations.get(id);
+      if (!operation || operation.status !== "proposed" || riskRank(operation.transaction.safety.risk) > riskRank(threshold)) continue;
+      try {
+        await this.accept(id);
+        await this.persist("transaction.auto_applied", { id, autoApplyRisk: threshold });
+      } catch { /* not eligible for auto-apply under the current classification; left as a normal proposal */ }
+    }
   }
 
   /**
@@ -832,7 +892,7 @@ export class LocalDaemon {
   }
   private ignoredPath(path: string): boolean { const relative = path.startsWith(this.root) ? path.slice(this.root.length + 1) : path; return /(^|\/)(\.git|node_modules|dist|build|coverage)(\/|$)/.test(relative) || /(^|\/)\.[^/]+\.[0-9a-f-]+\.crosscode$/.test(relative) || redactPath(relative); }
   private redactValidationOutput(output: string): string { return output.slice(0, 64 * 1024).replace(/((?:api[_-]?key|token|password|secret|authorization)\s*[:=]\s*)([^\s]+)/gi, "$1[REDACTED]"); }
-  private async persist(type: string, payload: unknown): Promise<void> { this.eventSequence = this.state.record({ tasks: [...this.tasks.values()], claims: [...this.claims.values()], operations: [...this.operations.values()], validations: [...this.validations], checkpoints: [...this.checkpoints], handoffs: [...this.handoffs.values()], intents: [...this.intents.values()], outbound: [...this.outbound.values()], taskOutbound: [...this.taskOutbound.values()], claimOutbound: [...this.claimOutbound.values()], handoffOutbound: [...this.handoffOutbound.values()], intentOutbound: [...this.intentOutbound.values()], remoteCursor: this.remoteCursor, remoteTaskCursor: this.remoteTaskCursor, remoteClaimCursor: this.remoteClaimCursor, remoteHandoffCursor: this.remoteHandoffCursor, remoteIntentCursor: this.remoteIntentCursor, capturedHashes: Object.fromEntries(this.capturedHashes), gitState: this.gitState, materializationPaused: this.materializationPaused }, { type, payload }); }
+  private async persist<T extends LocalEvent["type"]>(type: T, payload: Extract<LocalEvent, { type: T }>["payload"]): Promise<void> { this.eventSequence = this.state.record({ tasks: [...this.tasks.values()], claims: [...this.claims.values()], operations: [...this.operations.values()], validations: [...this.validations], checkpoints: [...this.checkpoints], handoffs: [...this.handoffs.values()], intents: [...this.intents.values()], outbound: [...this.outbound.values()], taskOutbound: [...this.taskOutbound.values()], claimOutbound: [...this.claimOutbound.values()], handoffOutbound: [...this.handoffOutbound.values()], intentOutbound: [...this.intentOutbound.values()], validationOutbound: [...this.validationOutbound.values()], remoteCursor: this.remoteCursor, remoteTaskCursor: this.remoteTaskCursor, remoteClaimCursor: this.remoteClaimCursor, remoteHandoffCursor: this.remoteHandoffCursor, remoteIntentCursor: this.remoteIntentCursor, remoteValidationCursor: this.remoteValidationCursor, capturedHashes: Object.fromEntries(this.capturedHashes), gitState: this.gitState, materializationPaused: this.materializationPaused }, { type, payload } as LocalEvent); }
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;

@@ -17,6 +17,9 @@ const workspaceConfigSchema = z.object({
     externalAiReview: z.enum(["disabled", "approved"]).default("disabled"),
     allowedProviders: z.array(z.string().min(1)).max(50).default([]),
     requireLocalConfirmation: z.boolean().default(true)
+  }).strict().optional(),
+  policy: z.object({
+    autoApplyRisk: z.enum(["low", "medium", "high", "critical"]).default("low")
   }).strict().optional()
 }).passthrough();
 
@@ -51,4 +54,16 @@ export async function configuredAiReviewPolicy(root: string): Promise<AiReviewPo
   if (!exists) return defaultAiReviewPolicy;
   const config = await committedConfig(root);
   return config.aiReview ?? defaultAiReviewPolicy;
+}
+
+/**
+ * Returns undefined when no committed `policy` block exists, distinct from an
+ * explicitly configured value -- absence must leave auto-apply fully disabled
+ * (today's always-explicit-accept behavior), not silently default to "low".
+ */
+export async function configuredAutoApplyRisk(root: string): Promise<"low" | "medium" | "high" | "critical" | undefined> {
+  const exists = await exec("git", ["-C", root, "cat-file", "-e", "HEAD:.crosscode/config.yaml"]).then(() => true).catch(() => false);
+  if (!exists) return undefined;
+  const config = await committedConfig(root);
+  return config.policy?.autoApplyRisk;
 }

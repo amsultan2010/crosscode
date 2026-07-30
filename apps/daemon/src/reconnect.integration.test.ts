@@ -1,21 +1,21 @@
-import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTempRepo, cleanupTempRepos } from "@crosscode/test-fixtures";
 import { createServiceServer, PgStore } from "../../service/src/index.js";
 import { LocalDaemon } from "./index.js";
 import { CoordinationServiceClient } from "./service-client.js";
 
-const exec = promisify(execFile);
 const databaseUrl = process.env.CROSSCODE_TEST_DATABASE_URL;
-const directories: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  await cleanupTempRepos();
 });
+
+function repository(): Promise<string> {
+  return createTempRepo({ prefix: "crosscode-reconnect-", fileName: "a.txt", content: "one\n" });
+}
 
 describe.skipIf(!databaseUrl)("PostgreSQL daemon reconnect", () => {
   it("uploads an offline event once and downloads it as an unapplied proposal", async () => {
@@ -62,15 +62,3 @@ describe.skipIf(!databaseUrl)("PostgreSQL daemon reconnect", () => {
     }
   });
 });
-
-async function repository(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "crosscode-reconnect-"));
-  directories.push(directory);
-  await exec("git", ["init", "-q", directory]);
-  await exec("git", ["-C", directory, "config", "user.email", "test@example.com"]);
-  await exec("git", ["-C", directory, "config", "user.name", "Test"]);
-  await writeFile(join(directory, "a.txt"), "one\n");
-  await exec("git", ["-C", directory, "add", "."]);
-  await exec("git", ["-C", directory, "commit", "-qm", "initial"]);
-  return directory;
-}

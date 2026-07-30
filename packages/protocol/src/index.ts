@@ -386,6 +386,39 @@ export const intentRequestSchema = z.object({
   taskId: z.string().min(1).max(200).optional()
 }).strict();
 
+export const validationCompletedEventSchema = eventEnvelopeSchema.extend({
+  type: z.literal("validation.completed"),
+  payload: validationSchema
+}).strict();
+export type ValidationCompletedEvent = z.infer<typeof validationCompletedEventSchema>;
+
+export const remoteValidationSchema = z.object({
+  eventId: z.string().min(1),
+  workspaceId: z.string().min(1),
+  senderReplicaId: z.string().min(1),
+  validation: validationSchema,
+  createdAt: z.string().datetime()
+}).strict();
+export type RemoteValidation = z.infer<typeof remoteValidationSchema>;
+
+export const validationCursorResponseSchema = z.object({
+  validations: z.array(remoteValidationSchema),
+  nextCursor: z.string().datetime()
+}).strict();
+export type ValidationCursorResponse = z.infer<typeof validationCursorResponseSchema>;
+
+export const validationIngestRequestSchema = z.object({
+  event: validationCompletedEventSchema
+}).strict().superRefine((request, context) => assertPayloadIdMatches(request.event, context));
+export type ValidationIngestRequest = z.infer<typeof validationIngestRequestSchema>;
+
+export const validationIngestReceiptSchema = z.object({
+  eventId: z.string().min(1),
+  validationId: z.string().min(1),
+  createdAt: z.string().datetime()
+}).strict();
+export type ValidationIngestReceipt = z.infer<typeof validationIngestReceiptSchema>;
+
 export const daemonConnectionSchema = z.object({
   pid: z.number().int().positive(),
   port: z.number().int().min(1).max(65_535),
@@ -439,7 +472,8 @@ export const wsFanOutMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("task"), task: remoteTaskSchema }).strict(),
   z.object({ type: z.literal("claim"), claim: remoteClaimSchema }).strict(),
   z.object({ type: z.literal("handoff"), handoff: remoteHandoffSchema }).strict(),
-  z.object({ type: z.literal("intent"), intent: remoteIntentSchema }).strict()
+  z.object({ type: z.literal("intent"), intent: remoteIntentSchema }).strict(),
+  z.object({ type: z.literal("validation"), validation: remoteValidationSchema }).strict()
 ]);
 export type WsFanOutMessage = z.infer<typeof wsFanOutMessageSchema>;
 

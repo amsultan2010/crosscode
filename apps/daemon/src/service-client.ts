@@ -13,15 +13,18 @@ import {
   taskIngestReceiptSchema,
   taskCursorResponseSchema,
   transactionCreatedEventSchema,
+  validationCursorResponseSchema,
+  validationIngestReceiptSchema,
   type DaemonConfig,
   type EnrollmentResponse,
   type RemoteClaim,
   type RemoteHandoff,
   type RemoteIntent,
-  type RemoteTask
+  type RemoteTask,
+  type RemoteValidation
 } from "@crosscode/protocol";
 import type { RemoteOperation } from "../../service/src/index.js";
-import type { ClaimOutboundRecord, HandoffOutboundRecord, IntentOutboundRecord, OutboundRecord, TaskOutboundRecord } from "./state.js";
+import type { ClaimOutboundRecord, HandoffOutboundRecord, IntentOutboundRecord, OutboundRecord, TaskOutboundRecord, ValidationOutboundRecord } from "./state.js";
 import type { RemoteSyncTransport } from "./index.js";
 
 type Envelope<T> = { ok: true; data: T } | { ok: false; error: string };
@@ -127,6 +130,23 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
   async listIntents(after: string): Promise<{ intents: RemoteIntent[]; nextCursor: string }> {
     const data = intentCursorResponseSchema.parse(await this.authorizedRequest(`/v1/intents?after=${encodeURIComponent(after)}`, "GET"));
     return { intents: data.intents, nextCursor: data.nextCursor };
+  }
+
+  async uploadValidation(record: ValidationOutboundRecord): Promise<RemoteValidation> {
+    const data = await this.authorizedRequest("/v1/validations", "POST", { event: record.event });
+    const receipt = validationIngestReceiptSchema.parse(data);
+    return {
+      eventId: receipt.eventId,
+      workspaceId: this.identity.workspaceId,
+      senderReplicaId: this.identity.replicaId,
+      validation: record.event.payload,
+      createdAt: receipt.createdAt
+    };
+  }
+
+  async listValidations(after: string): Promise<{ validations: RemoteValidation[]; nextCursor: string }> {
+    const data = validationCursorResponseSchema.parse(await this.authorizedRequest(`/v1/validations?after=${encodeURIComponent(after)}`, "GET"));
+    return { validations: data.validations, nextCursor: data.nextCursor };
   }
 
   private async authorizedRequest(path: string, method: "GET" | "POST", body?: unknown): Promise<unknown> {

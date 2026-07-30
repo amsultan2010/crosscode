@@ -240,7 +240,8 @@ describe("three-participant end-to-end fixture (BUILD_INSTRUCTIONS.md section 19
       uploadTask: () => Promise.reject(unreachable), listTasks: (after: string) => Promise.resolve({ tasks: [], nextCursor: after }),
       uploadClaim: () => Promise.reject(unreachable), listClaims: (after: string) => Promise.resolve({ claims: [], nextCursor: after }),
       uploadHandoff: () => Promise.reject(unreachable), listHandoffs: (after: string) => Promise.resolve({ handoffs: [], nextCursor: after }),
-      uploadIntent: () => Promise.reject(unreachable), listIntents: (after: string) => Promise.resolve({ intents: [], nextCursor: after })
+      uploadIntent: () => Promise.reject(unreachable), listIntents: (after: string) => Promise.resolve({ intents: [], nextCursor: after }),
+      uploadValidation: () => Promise.reject(unreachable), listValidations: (after: string) => Promise.resolve({ validations: [], nextCursor: after })
     };
     await expect(cursor.syncRemote(failingTransport)).rejects.toThrow(/unreachable/);
     cursor.recordRemoteSyncFailure();
@@ -258,7 +259,9 @@ describe("three-participant end-to-end fixture (BUILD_INSTRUCTIONS.md section 19
       uploadHandoff: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "cursor", handoff: record.event.payload, updatedAt: new Date().toISOString() }),
       listHandoffs: async (after) => ({ handoffs: [], nextCursor: after }),
       uploadIntent: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "cursor", intent: record.event.payload, updatedAt: new Date().toISOString() }),
-      listIntents: async (after) => ({ intents: [], nextCursor: after })
+      listIntents: async (after) => ({ intents: [], nextCursor: after }),
+      uploadValidation: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "cursor", validation: record.event.payload, createdAt: new Date().toISOString() }),
+      listValidations: async (after) => ({ validations: [], nextCursor: after })
     };
     const result = await cursor.syncRemote(recoveredTransport);
     expect(result.uploaded).toBe(1);

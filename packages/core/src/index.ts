@@ -57,6 +57,8 @@ export function redactPath(path: string): boolean {
 export function riskForPath(path: string): "low" | "critical" {
   return /(^|\/)(auth|migrations?|\.crosscode|\.git|\.github\/workflows)(\/|$)|(^|\/)(package-lock\.json|pnpm-lock\.yaml|deploy|Dockerfile)/i.test(path) ? "critical" : "low";
 }
+const riskOrder: Risk[] = ["low", "medium", "high", "critical"];
+export function riskRank(risk: Risk): number { return riskOrder.indexOf(risk); }
 export function riskForClassification(classification: Classification): Risk {
   switch (classification) {
     case "critical": return "critical";

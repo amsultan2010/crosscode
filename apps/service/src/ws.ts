@@ -11,6 +11,7 @@ import {
   type RemoteIntent,
   type RemoteOperation,
   type RemoteTask,
+  type RemoteValidation,
   type WsFanOutMessage
 } from "@crosscode/protocol";
 import { verifyAccessToken } from "./auth.js";
@@ -27,6 +28,7 @@ export type WebSocketGateway = {
   broadcastClaim: (workspaceId: string, claim: RemoteClaim, excludeReplicaId: string) => void;
   broadcastHandoff: (workspaceId: string, handoff: RemoteHandoff, excludeReplicaId: string) => void;
   broadcastIntent: (workspaceId: string, intent: RemoteIntent, excludeReplicaId: string) => void;
+  broadcastValidation: (workspaceId: string, validation: RemoteValidation, excludeReplicaId: string) => void;
 };
 
 const STREAM_PATH = "/v1/stream";
@@ -90,6 +92,9 @@ export function attachWebSocketGateway(server: Server, options: WebSocketGateway
     },
     broadcastIntent(workspaceId, intent, excludeReplicaId) {
       broadcast(connectionsByWorkspace, workspaceId, { type: "intent", intent }, excludeReplicaId);
+    },
+    broadcastValidation(workspaceId, validation, excludeReplicaId) {
+      broadcast(connectionsByWorkspace, workspaceId, { type: "validation", validation }, excludeReplicaId);
     }
   };
 }

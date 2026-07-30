@@ -148,6 +148,9 @@ export async function runDaemonProcess(
           },
           onIntent: (intent) => {
             if (intent.workspaceId === config.workspaceId) void synchronize();
+          },
+          onValidation: (validation) => {
+            if (validation.workspaceId === config.workspaceId) void synchronize();
           }
         });
         liveSync.start();
