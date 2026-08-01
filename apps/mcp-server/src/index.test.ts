@@ -153,16 +153,22 @@ describe("MCP daemon boundary", () => {
     const { tools } = await client.listTools();
     const toolNames = tools.map((tool) => tool.name).sort();
     expect(toolNames).toEqual([
+      "accept_proposal",
       "announce_interface_change",
       "check_change_scope",
       "claim_scope",
       "claim_task",
       "create_checkpoint",
+      "diff_proposal",
       "get_workspace_state",
+      "inspect_proposal",
       "list_pending_semantic_reviews",
+      "list_proposal_artifacts",
       "list_remote_proposals",
       "list_tasks",
+      "publish_branch",
       "publish_intent",
+      "reject_proposal",
       "request_handoff",
       "request_validation",
       "submit_change_summary",
