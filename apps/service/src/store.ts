@@ -6,8 +6,7 @@ import type {
   RemoteTask, RemoteValidation, Task, TaskCreatedEvent, TaskUpdatedEvent, TransactionCreatedEvent, Validation, ValidationCompletedEvent
 } from "@crosscode/protocol";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
-import { hashCanonicalPayload, hashCredential, hashEnrollmentToken, randomCredential, verifyCredential } from "./crypto.js";
-import type { AccessClaims } from "./auth.js";
+import { hashCanonicalPayload } from "./crypto.js";
 
 export class StoreConflictError extends Error {}
 export class StoreUnauthorizedError extends Error {}
@@ -24,14 +23,12 @@ export type PresenceSummary = {
   cursor: number | null;
 };
 
-type IdentityRow = {
-  member_id: string;
-  actor_id: string;
-  workspace_id: string;
-  replica_id: string;
-  role: AccessClaims["role"];
-  token_version: number;
-  credential_hash: string;
+export type Membership = {
+  memberId: string;
+  userId: string;
+  actorId: string;
+  workspaceId: string;
+  role: "owner" | "member" | "viewer";
 };
 
 export class PgStore {
@@ -48,6 +45,8 @@ export class PgStore {
     await this.pool.query(handoffsIntentsSql);
     const validationsCursorSql = await readFile(new URL("../migrations/003_validations_cursor.sql", import.meta.url), "utf8");
     await this.pool.query(validationsCursorSql);
+    const supabaseAuthSql = await readFile(new URL("../migrations/004_supabase_auth.sql", import.meta.url), "utf8");
+    await this.pool.query(supabaseAuthSql);
   }
 
   async close(): Promise<void> {
@@ -68,151 +67,82 @@ export class PgStore {
 
   async provisionAdmin(input: {
     workspaceName: string;
+    userId: string;
     actorId: string;
-    enrollmentTtlSeconds?: number;
-  }): Promise<{ workspaceId: string; memberId: string; enrollmentToken: string; expiresAt: string }> {
+  }): Promise<{ workspaceId: string; memberId: string }> {
     const workspaceId = randomUUID();
     const memberId = randomUUID();
-    const enrollmentId = randomUUID();
-    const enrollmentToken = randomCredential();
-    const expiresAt = new Date(Date.now() + (input.enrollmentTtlSeconds ?? 900) * 1_000);
     await this.transaction(async (client) => {
       await client.query("INSERT INTO workspaces (id, name) VALUES ($1, $2)", [workspaceId, input.workspaceName]);
       await client.query(
-        "INSERT INTO members (id, workspace_id, actor_id, role) VALUES ($1, $2, $3, 'owner')",
-        [memberId, workspaceId, input.actorId]
+        "INSERT INTO members (id, workspace_id, user_id, actor_id, role) VALUES ($1, $2, $3, $4, 'owner')",
+        [memberId, workspaceId, input.userId, input.actorId]
       );
-      await client.query(
-        "INSERT INTO enrollments (id, workspace_id, member_id, token_hash, expires_at) VALUES ($1, $2, $3, $4, $5)",
-        [enrollmentId, workspaceId, memberId, hashEnrollmentToken(enrollmentToken), expiresAt]
-      );
-      await this.audit(client, workspaceId, memberId, null, "admin.provisioned", { enrollmentId });
+      await this.audit(client, workspaceId, memberId, null, "admin.provisioned", {});
     });
-    return { workspaceId, memberId, enrollmentToken, expiresAt: expiresAt.toISOString() };
+    return { workspaceId, memberId };
   }
 
-  async provisionEnrollment(input: {
+  async addMember(input: {
     workspaceId: string;
+    userId: string;
     actorId: string;
-    role?: AccessClaims["role"];
-    enrollmentTtlSeconds?: number;
-  }): Promise<{ workspaceId: string; memberId: string; enrollmentToken: string; expiresAt: string }> {
+    role?: Membership["role"];
+  }): Promise<{ workspaceId: string; memberId: string }> {
     const memberId = randomUUID();
-    const enrollmentId = randomUUID();
-    const enrollmentToken = randomCredential();
-    const expiresAt = new Date(Date.now() + (input.enrollmentTtlSeconds ?? 900) * 1_000);
     return this.transaction(async (client) => {
       const workspace = await client.query("SELECT id FROM workspaces WHERE id = $1", [input.workspaceId]);
       if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
-      const member = await client.query<{ id: string }>(
-        `INSERT INTO members (id, workspace_id, actor_id, role)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (workspace_id, actor_id) DO UPDATE SET role = members.role
-         RETURNING id`,
-        [memberId, input.workspaceId, input.actorId, input.role ?? "member"]
-      );
-      const persistedMemberId = member.rows[0]!.id;
-      await client.query(
-        "INSERT INTO enrollments (id, workspace_id, member_id, token_hash, expires_at) VALUES ($1, $2, $3, $4, $5)",
-        [enrollmentId, input.workspaceId, persistedMemberId, hashEnrollmentToken(enrollmentToken), expiresAt]
-      );
-      await this.audit(client, input.workspaceId, persistedMemberId, null, "member.provisioned", { enrollmentId });
-      return { workspaceId: input.workspaceId, memberId: persistedMemberId, enrollmentToken, expiresAt: expiresAt.toISOString() };
-    });
-  }
-
-  async enroll(input: { enrollmentToken: string }): Promise<{
-    claims: AccessClaims;
-    replicaSecret: string;
-  }> {
-    return this.transaction(async (client) => {
-      const result = await client.query<{
-        id: string; workspace_id: string; member_id: string; actor_id: string;
-        role: AccessClaims["role"]; token_version: number; expires_at: Date; used_at: Date | null;
-      }>(
-        `SELECT e.id, e.workspace_id, e.member_id, e.expires_at, e.used_at,
-                m.actor_id, m.role, m.token_version
-           FROM enrollments e
-           JOIN members m ON m.id = e.member_id AND m.workspace_id = e.workspace_id
-          WHERE e.token_hash = $1 AND m.disabled_at IS NULL
-          FOR UPDATE OF e`,
-        [hashEnrollmentToken(input.enrollmentToken)]
-      );
-      const row = result.rows[0];
-      if (!row || row.used_at || new Date(row.expires_at).getTime() <= Date.now()) {
-        throw new StoreUnauthorizedError("Enrollment token is invalid, expired, or already used");
-      }
-      const replicaId = randomUUID();
-      const replicaName = `replica-${replicaId}`;
-      const replicaSecret = randomCredential();
-      const credentialHash = await hashCredential(replicaSecret);
       try {
         await client.query(
-          `INSERT INTO replicas (id, workspace_id, member_id, name, credential_hash)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [replicaId, row.workspace_id, row.member_id, replicaName, credentialHash]
+          `INSERT INTO members (id, workspace_id, user_id, actor_id, role) VALUES ($1, $2, $3, $4, $5)`,
+          [memberId, input.workspaceId, input.userId, input.actorId, input.role ?? "member"]
         );
       } catch (error) {
-        if (isUniqueViolation(error)) throw new StoreConflictError("Replica name is already registered");
+        if (isUniqueViolation(error)) throw new StoreConflictError("User is already a member of a workspace");
         throw error;
       }
-      await client.query("UPDATE enrollments SET used_at = now() WHERE id = $1", [row.id]);
-      await this.audit(client, row.workspace_id, row.member_id, replicaId, "replica.enrolled", {});
-      return {
-        claims: {
-          memberId: row.member_id,
-          actorId: row.actor_id,
-          workspaceId: row.workspace_id,
-          replicaId,
-          role: row.role,
-          tokenVersion: row.token_version
-        },
-        replicaSecret
-      };
+      await this.audit(client, input.workspaceId, memberId, null, "member.provisioned", {});
+      return { workspaceId: input.workspaceId, memberId };
     });
   }
 
-  async authenticateReplica(
-    replicaId: string,
-    replicaSecret: string,
-    expected?: { workspaceId: string; actorId: string }
-  ): Promise<AccessClaims> {
-    const result = await this.pool.query<IdentityRow>(
-      `SELECT m.id AS member_id, m.actor_id, m.workspace_id, r.id AS replica_id, m.role, m.token_version, r.credential_hash
-         FROM replicas r
-         JOIN members m ON m.id = r.member_id AND m.workspace_id = r.workspace_id
-        WHERE r.id = $1 AND r.disabled_at IS NULL AND m.disabled_at IS NULL`,
-      [replicaId]
+  async resolveMembership(userId: string, workspaceId: string): Promise<Membership> {
+    const result = await this.pool.query<{ id: string; actor_id: string; role: Membership["role"] }>(
+      `SELECT id, actor_id, role FROM members WHERE user_id = $1 AND workspace_id = $2 AND disabled_at IS NULL`,
+      [userId, workspaceId]
     );
     const row = result.rows[0];
-    if (
-      !row ||
-      (expected && (row.workspace_id !== expected.workspaceId || row.actor_id !== expected.actorId)) ||
-      !(await verifyCredential(replicaSecret, row.credential_hash))
-    ) {
-      throw new StoreUnauthorizedError("Replica credentials are invalid");
-    }
-    await this.pool.query("UPDATE replicas SET last_seen_at = now() WHERE id = $1", [replicaId]);
-    return toClaims(row);
+    if (!row) throw new StoreUnauthorizedError("Membership is not available");
+    return { memberId: row.id, userId, actorId: row.actor_id, workspaceId, role: row.role };
   }
 
-  async reauthorize(claims: AccessClaims): Promise<AccessClaims> {
-    const result = await this.pool.query<IdentityRow>(
-      `SELECT m.id AS member_id, m.actor_id, m.workspace_id, r.id AS replica_id, m.role, m.token_version, r.credential_hash
-         FROM replicas r
-         JOIN members m ON m.id = r.member_id AND m.workspace_id = r.workspace_id
-        WHERE r.id = $1 AND r.member_id = $2 AND r.workspace_id = $3
-          AND r.disabled_at IS NULL AND m.disabled_at IS NULL`,
-      [claims.replicaId, claims.memberId, claims.workspaceId]
+  async registerReplica(userId: string, workspaceId: string, name: string): Promise<{ replicaId: string; createdAt: string }> {
+    const membership = await this.resolveMembership(userId, workspaceId);
+    const replicaId = randomUUID();
+    try {
+      const result = await this.pool.query<{ created_at: Date }>(
+        `INSERT INTO replicas (id, workspace_id, member_id, name) VALUES ($1, $2, $3, $4) RETURNING created_at`,
+        [replicaId, workspaceId, membership.memberId, name]
+      );
+      return { replicaId, createdAt: new Date(result.rows[0]!.created_at).toISOString() };
+    } catch (error) {
+      if (isUniqueViolation(error)) throw new StoreConflictError("Replica name is already registered");
+      throw error;
+    }
+  }
+
+  async assertReplicaOwnership(workspaceId: string, memberId: string, replicaId: string): Promise<void> {
+    const result = await this.pool.query(
+      `UPDATE replicas SET last_seen_at = now()
+        WHERE id = $1 AND workspace_id = $2 AND member_id = $3 AND disabled_at IS NULL
+        RETURNING id`,
+      [replicaId, workspaceId, memberId]
     );
-    const current = result.rows[0];
-    if (!current || Number(current.token_version) !== claims.tokenVersion) {
-      throw new StoreUnauthorizedError("Membership is no longer authorized");
-    }
-    return toClaims(current);
+    if (!result.rows[0]) throw new StoreUnauthorizedError("Replica is not registered to this member");
   }
 
-  async appendOperation(identity: AccessClaims, event: TransactionCreatedEvent): Promise<StoredOperation> {
+  async appendOperation(identity: Membership, event: TransactionCreatedEvent): Promise<StoredOperation> {
     const transaction = event.payload;
     if (new Set(transaction.changes.map((change) => change.path)).size !== transaction.changes.length) {
       throw new StoreConflictError("An operation may change each path only once");
@@ -230,7 +160,7 @@ export class PgStore {
            FROM operations
           WHERE workspace_id = $1
             AND (id = $2 OR event_id = $3 OR (replica_id = $4 AND client_sequence = $5))`,
-        [identity.workspaceId, transaction.id, event.id, identity.replicaId, event.clientSequence]
+        [identity.workspaceId, transaction.id, event.id, event.replicaId, event.clientSequence]
       );
       if (duplicate.rows[0]) {
         const stored = mapOperation(duplicate.rows[0]);
@@ -238,7 +168,7 @@ export class PgStore {
           stored.id === transaction.id && stored.eventId === event.id &&
           duplicate.rows[0].payload_hash === payloadHash &&
           stored.event.clientSequence === event.clientSequence &&
-          stored.senderReplicaId === identity.replicaId
+          stored.senderReplicaId === event.replicaId
         ) return stored;
         throw new StoreConflictError("Event or operation id was reused with different content");
       }
@@ -252,7 +182,7 @@ export class PgStore {
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb)
          RETURNING id, workspace_id, replica_id, event, transaction, server_sequence, created_at, payload_hash`,
         [
-          transaction.id, identity.workspaceId, event.id, event.clientSequence, sequence, identity.replicaId,
+          transaction.id, identity.workspaceId, event.id, event.clientSequence, sequence, event.replicaId,
           identity.memberId, identity.actorId, payloadHash, JSON.stringify(storedEvent), JSON.stringify(transaction)
         ]
       );
@@ -265,7 +195,7 @@ export class PgStore {
         );
       }
       await client.query("UPDATE workspaces SET next_sequence = $2 WHERE id = $1", [identity.workspaceId, sequence]);
-      await this.audit(client, identity.workspaceId, identity.memberId, identity.replicaId, "operation.received", {
+      await this.audit(client, identity.workspaceId, identity.memberId, event.replicaId, "operation.received", {
         operationId: transaction.id, eventId: event.id, serverSequence: sequence
       });
       return mapOperation(inserted.rows[0]!);
@@ -296,7 +226,7 @@ export class PgStore {
     return { items, nextCursor: items.at(-1)?.serverSequence ?? cursor, hasMore: result.rows.length > limit };
   }
 
-  async upsertTask(identity: AccessClaims, event: TaskCreatedEvent | TaskUpdatedEvent): Promise<RemoteTask> {
+  async upsertTask(identity: Membership, event: TaskCreatedEvent | TaskUpdatedEvent): Promise<RemoteTask> {
     const task = event.payload;
     const result = await this.pool.query<TaskRow>(
       `INSERT INTO tasks (id, workspace_id, event_id, replica_id, payload, updated_at)
@@ -304,7 +234,7 @@ export class PgStore {
        ON CONFLICT (workspace_id, id) DO UPDATE
          SET event_id = excluded.event_id, replica_id = excluded.replica_id, payload = excluded.payload, updated_at = now()
        RETURNING id, workspace_id, event_id, replica_id, payload, updated_at`,
-      [task.id, identity.workspaceId, event.id, identity.replicaId, JSON.stringify(task)]
+      [task.id, identity.workspaceId, event.id, event.replicaId, JSON.stringify(task)]
     );
     return mapTask(result.rows[0]!);
   }
@@ -322,7 +252,7 @@ export class PgStore {
     return { items, nextCursor: items.at(-1)?.updatedAt ?? after };
   }
 
-  async upsertClaim(identity: AccessClaims, event: ClaimCreatedEvent | ClaimReleasedEvent): Promise<RemoteClaim> {
+  async upsertClaim(identity: Membership, event: ClaimCreatedEvent | ClaimReleasedEvent): Promise<RemoteClaim> {
     const claim = event.payload;
     const released = event.type === "claim.released";
     const result = await this.pool.query<ClaimRow>(
@@ -332,7 +262,7 @@ export class PgStore {
          SET event_id = excluded.event_id, replica_id = excluded.replica_id, payload = excluded.payload,
              released_at = excluded.released_at, updated_at = now()
        RETURNING id, workspace_id, event_id, replica_id, payload, released_at, updated_at`,
-      [claim.id, identity.workspaceId, event.id, identity.replicaId, JSON.stringify(claim), released ? new Date() : null]
+      [claim.id, identity.workspaceId, event.id, event.replicaId, JSON.stringify(claim), released ? new Date() : null]
     );
     return mapClaim(result.rows[0]!);
   }
@@ -350,7 +280,7 @@ export class PgStore {
     return { items, nextCursor: items.at(-1)?.updatedAt ?? after };
   }
 
-  async upsertHandoff(identity: AccessClaims, event: HandoffRequestedEvent | HandoffRespondedEvent): Promise<RemoteHandoff> {
+  async upsertHandoff(identity: Membership, event: HandoffRequestedEvent | HandoffRespondedEvent): Promise<RemoteHandoff> {
     const handoff = event.payload;
     const responded = event.type === "handoff.responded";
     const result = await this.pool.query<HandoffRow>(
@@ -360,7 +290,7 @@ export class PgStore {
          SET event_id = excluded.event_id, replica_id = excluded.replica_id, payload = excluded.payload,
              responded_at = excluded.responded_at, updated_at = now()
        RETURNING id, workspace_id, event_id, replica_id, payload, responded_at, updated_at`,
-      [handoff.id, identity.workspaceId, event.id, identity.replicaId, JSON.stringify(handoff), responded ? new Date() : null]
+      [handoff.id, identity.workspaceId, event.id, event.replicaId, JSON.stringify(handoff), responded ? new Date() : null]
     );
     return mapHandoff(result.rows[0]!);
   }
@@ -378,7 +308,7 @@ export class PgStore {
     return { items, nextCursor: items.at(-1)?.updatedAt ?? after };
   }
 
-  async upsertIntent(identity: AccessClaims, event: IntentPublishedEvent): Promise<RemoteIntent> {
+  async upsertIntent(identity: Membership, event: IntentPublishedEvent): Promise<RemoteIntent> {
     const intent = event.payload;
     const result = await this.pool.query<IntentRow>(
       `INSERT INTO intents (id, workspace_id, event_id, replica_id, payload, updated_at)
@@ -386,7 +316,7 @@ export class PgStore {
        ON CONFLICT (workspace_id, id) DO UPDATE
          SET event_id = excluded.event_id, replica_id = excluded.replica_id, payload = excluded.payload, updated_at = now()
        RETURNING id, workspace_id, event_id, replica_id, payload, updated_at`,
-      [intent.id, identity.workspaceId, event.id, identity.replicaId, JSON.stringify(intent)]
+      [intent.id, identity.workspaceId, event.id, event.replicaId, JSON.stringify(intent)]
     );
     return mapIntent(result.rows[0]!);
   }
@@ -404,7 +334,7 @@ export class PgStore {
     return { items, nextCursor: items.at(-1)?.updatedAt ?? after };
   }
 
-  async recordValidation(identity: AccessClaims, event: ValidationCompletedEvent): Promise<RemoteValidation> {
+  async recordValidation(identity: Membership, event: ValidationCompletedEvent): Promise<RemoteValidation> {
     const validation = event.payload;
     const result = await this.pool.query<ValidationRow>(
       `INSERT INTO validations (id, workspace_id, event_id, replica_id, payload, created_at)
@@ -412,7 +342,7 @@ export class PgStore {
        ON CONFLICT (workspace_id, id) DO UPDATE
          SET event_id = excluded.event_id, replica_id = excluded.replica_id, payload = excluded.payload
        RETURNING id, workspace_id, event_id, replica_id, payload, created_at`,
-      [validation.id, identity.workspaceId, event.id, identity.replicaId, JSON.stringify(validation)]
+      [validation.id, identity.workspaceId, event.id, event.replicaId, JSON.stringify(validation)]
     );
     return mapValidation(result.rows[0]!);
   }
@@ -571,17 +501,6 @@ function mapOperation(row: OperationRow): StoredOperation {
     transaction: row.transaction,
     serverSequence: Number(row.server_sequence),
     createdAt: new Date(row.created_at).toISOString()
-  };
-}
-
-function toClaims(row: IdentityRow): AccessClaims {
-  return {
-    memberId: row.member_id,
-    actorId: row.actor_id,
-    workspaceId: row.workspace_id,
-    replicaId: row.replica_id,
-    role: row.role,
-    tokenVersion: Number(row.token_version)
   };
 }
 

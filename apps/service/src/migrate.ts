@@ -14,7 +14,6 @@ async function main(): Promise<void> {
       await store.pool.query(`GRANT USAGE ON SCHEMA public TO ${role}`);
       await store.pool.query(`GRANT SELECT ON ALL TABLES IN SCHEMA public TO ${role}`);
       await store.pool.query(`GRANT INSERT ON replicas, operations, operation_files, audit_events TO ${role}`);
-      await store.pool.query(`GRANT UPDATE (used_at) ON enrollments TO ${role}`);
       await store.pool.query(`GRANT UPDATE (last_seen_at) ON replicas TO ${role}`);
       await store.pool.query(`GRANT UPDATE (next_sequence) ON workspaces TO ${role}`);
     }

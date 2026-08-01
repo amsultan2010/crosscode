@@ -4,14 +4,12 @@ import {
   claimIngestRequestSchema,
   claimIngestReceiptSchema,
   cursorQuerySchema,
-  enrollmentRequestSchema,
-  enrollmentResponseSchema,
   handoffIngestRequestSchema,
   handoffIngestReceiptSchema,
   intentIngestRequestSchema,
   intentIngestReceiptSchema,
-  replicaTokenExchangeRequestSchema,
-  replicaTokenExchangeResponseSchema,
+  registerReplicaRequestSchema,
+  registerReplicaResponseSchema,
   serviceIngestReceiptSchema,
   serviceIngestRequestSchema,
   taskIngestRequestSchema,
@@ -24,19 +22,27 @@ import {
 } from "@crosscode/protocol";
 import { contentHash, redactPath } from "@crosscode/core";
 import { ZodError } from "zod";
-import { issueAccessToken, verifyAccessToken, type AccessClaims } from "./auth.js";
-import { PgStore, StoreConflictError, StoreUnauthorizedError, type StoredOperation } from "./store.js";
+import { verifySupabaseAccessToken } from "./auth.js";
+import { PgStore, StoreConflictError, StoreUnauthorizedError, type Membership, type StoredOperation } from "./store.js";
 import { attachWebSocketGateway } from "./ws.js";
 
 export type ServiceServerOptions = {
   store: PgStore;
   jwtSecret: string;
-  accessTokenTtlSeconds?: number;
+  supabaseUrl: string;
   bodyLimitBytes?: number;
   tls?: { key: string | Buffer; cert: string | Buffer };
 };
 
 const JSON_TYPE = "application/json";
+
+// Supabase-issued access tokens only carry the auth.users id (sub) — they no longer
+// embed a workspaceId/replicaId the way Crosscode-issued tokens did. Every authenticated
+// request must therefore say which workspace it targets via this header, since
+// authenticate() runs before (and, for GET routes, without) a request body to read a
+// workspaceId from. POST bodies still carry their own event.workspaceId, which is
+// checked against this header for a redundant principal-binding match.
+const WORKSPACE_HEADER = "x-crosscode-workspace-id";
 
 export function assertSafeServiceBinding(host: string, tlsEnabled: boolean): void {
   if (!isLoopback(host) && !tlsEnabled) {
@@ -68,7 +74,7 @@ async function handleRequest(
   const url = new URL(request.url ?? "/", "http://service.local");
   const route = rateLimitRoute(method, url.pathname);
   const remote = request.socket.remoteAddress ?? "unknown";
-  const rate = route === "POST /v1/enroll" ? 10 : route === "POST /v1/token" ? 30 : 300;
+  const rate = route === "POST /v1/replicas" ? 10 : 300;
   if (!limiter.take(`${remote}:${route}`, rate)) {
     response.setHeader("retry-after", "60");
     sendError(response, 429, "Rate limit exceeded");
@@ -80,25 +86,16 @@ async function handleRequest(
     return;
   }
 
-  if (method === "POST" && url.pathname === "/v1/enroll") {
-    const body = enrollmentRequestSchema.parse(await readJson(request, Math.min(options.bodyLimitBytes ?? 1_048_576, 16_384)));
-    const enrollment = await options.store.enroll({ enrollmentToken: body.token });
-    const token = await tokenResponse(enrollment.claims, options);
-    send(response, 201, enrollmentResponseSchema.parse({ ...token, replicaSecret: enrollment.replicaSecret }));
-    return;
-  }
-
-  if (method === "POST" && url.pathname === "/v1/token") {
-    const body = replicaTokenExchangeRequestSchema.parse(await readJson(request, 16_384));
-    const claims = await options.store.authenticateReplica(body.replicaId, body.replicaSecret, {
-      workspaceId: body.workspaceId,
-      actorId: body.actorId
-    });
-    send(response, 200, replicaTokenExchangeResponseSchema.parse(await tokenResponse(claims, options)));
-    return;
-  }
-
   const identity = await authenticate(request, options);
+  if (method === "POST" && url.pathname === "/v1/replicas") {
+    const body = registerReplicaRequestSchema.parse(
+      await readJson(request, Math.min(options.bodyLimitBytes ?? 1_048_576, 16_384))
+    );
+    const replica = await options.store.registerReplica(identity.userId, identity.workspaceId, body.name);
+    send(response, 201, registerReplicaResponseSchema.parse(replica));
+    return;
+  }
+
   if (method === "POST" && url.pathname === "/v1/events") {
     if (identity.role === "viewer") throw new HttpError(403, "Viewer membership is read-only");
     const body = serviceIngestRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
@@ -108,9 +105,9 @@ async function handleRequest(
     }
     if (
       body.event.workspaceId !== identity.workspaceId ||
-      body.event.replicaId !== identity.replicaId ||
       body.event.actorId !== identity.actorId
     ) throw new HttpError(403, "Event principal does not match authenticated membership");
+    await options.store.assertReplicaOwnership(identity.workspaceId, identity.memberId, body.event.replicaId);
     for (const change of body.event.payload.changes) {
       if (redactPath(change.path)) throw new HttpError(400, "Sensitive paths cannot be synchronized");
       if (change.kind !== "delete" && (change.afterContent === undefined || change.afterHash !== contentHash(change.afterContent))) {
@@ -118,7 +115,7 @@ async function handleRequest(
       }
     }
     const operation = await options.store.appendOperation(identity, body.event);
-    gateway.broadcastOperation(identity.workspaceId, toRemoteOperation(operation), identity.replicaId);
+    gateway.broadcastOperation(identity.workspaceId, toRemoteOperation(operation), body.event.replicaId);
     send(response, 200, serviceIngestReceiptSchema.parse({
       eventId: operation.eventId,
       operationId: operation.id,
@@ -146,11 +143,11 @@ async function handleRequest(
     const body = taskIngestRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
     if (
       body.event.workspaceId !== identity.workspaceId ||
-      body.event.replicaId !== identity.replicaId ||
       body.event.actorId !== identity.actorId
     ) throw new HttpError(403, "Event principal does not match authenticated membership");
+    await options.store.assertReplicaOwnership(identity.workspaceId, identity.memberId, body.event.replicaId);
     const task = await options.store.upsertTask(identity, body.event);
-    gateway.broadcastTask(identity.workspaceId, task, identity.replicaId);
+    gateway.broadcastTask(identity.workspaceId, task, body.event.replicaId);
     send(response, 200, taskIngestReceiptSchema.parse({
       eventId: task.eventId,
       taskId: task.task.id,
@@ -171,11 +168,11 @@ async function handleRequest(
     const body = claimIngestRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
     if (
       body.event.workspaceId !== identity.workspaceId ||
-      body.event.replicaId !== identity.replicaId ||
       body.event.actorId !== identity.actorId
     ) throw new HttpError(403, "Event principal does not match authenticated membership");
+    await options.store.assertReplicaOwnership(identity.workspaceId, identity.memberId, body.event.replicaId);
     const claim = await options.store.upsertClaim(identity, body.event);
-    gateway.broadcastClaim(identity.workspaceId, claim, identity.replicaId);
+    gateway.broadcastClaim(identity.workspaceId, claim, body.event.replicaId);
     send(response, 200, claimIngestReceiptSchema.parse({
       eventId: claim.eventId,
       claimId: claim.claim.id,
@@ -196,11 +193,11 @@ async function handleRequest(
     const body = handoffIngestRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
     if (
       body.event.workspaceId !== identity.workspaceId ||
-      body.event.replicaId !== identity.replicaId ||
       body.event.actorId !== identity.actorId
     ) throw new HttpError(403, "Event principal does not match authenticated membership");
+    await options.store.assertReplicaOwnership(identity.workspaceId, identity.memberId, body.event.replicaId);
     const handoff = await options.store.upsertHandoff(identity, body.event);
-    gateway.broadcastHandoff(identity.workspaceId, handoff, identity.replicaId);
+    gateway.broadcastHandoff(identity.workspaceId, handoff, body.event.replicaId);
     send(response, 200, handoffIngestReceiptSchema.parse({
       eventId: handoff.eventId,
       handoffId: handoff.handoff.id,
@@ -221,11 +218,11 @@ async function handleRequest(
     const body = intentIngestRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
     if (
       body.event.workspaceId !== identity.workspaceId ||
-      body.event.replicaId !== identity.replicaId ||
       body.event.actorId !== identity.actorId
     ) throw new HttpError(403, "Event principal does not match authenticated membership");
+    await options.store.assertReplicaOwnership(identity.workspaceId, identity.memberId, body.event.replicaId);
     const intent = await options.store.upsertIntent(identity, body.event);
-    gateway.broadcastIntent(identity.workspaceId, intent, identity.replicaId);
+    gateway.broadcastIntent(identity.workspaceId, intent, body.event.replicaId);
     send(response, 200, intentIngestReceiptSchema.parse({
       eventId: intent.eventId,
       intentId: intent.intent.id,
@@ -246,11 +243,11 @@ async function handleRequest(
     const body = validationIngestRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
     if (
       body.event.workspaceId !== identity.workspaceId ||
-      body.event.replicaId !== identity.replicaId ||
       body.event.actorId !== identity.actorId
     ) throw new HttpError(403, "Event principal does not match authenticated membership");
+    await options.store.assertReplicaOwnership(identity.workspaceId, identity.memberId, body.event.replicaId);
     const validation = await options.store.recordValidation(identity, body.event);
-    gateway.broadcastValidation(identity.workspaceId, validation, identity.replicaId);
+    gateway.broadcastValidation(identity.workspaceId, validation, body.event.replicaId);
     send(response, 200, validationIngestReceiptSchema.parse({
       eventId: validation.eventId,
       validationId: validation.validation.id,
@@ -275,31 +272,26 @@ async function handleRequest(
   throw new HttpError(404, "Route not found");
 }
 
-async function authenticate(request: IncomingMessage, options: ServiceServerOptions): Promise<AccessClaims> {
+async function authenticate(request: IncomingMessage, options: ServiceServerOptions): Promise<Membership> {
   const authorization = request.headers.authorization;
   if (!authorization?.startsWith("Bearer ")) throw new HttpError(401, "Authentication required");
-  let claims: AccessClaims;
+  const workspaceId = request.headers[WORKSPACE_HEADER];
+  if (typeof workspaceId !== "string" || workspaceId.length === 0) {
+    throw new HttpError(400, `${WORKSPACE_HEADER} header is required`);
+  }
+  let userId: string;
   try {
-    claims = await verifyAccessToken(authorization.slice(7), options.jwtSecret);
+    const claims = await verifySupabaseAccessToken(authorization.slice(7), options.jwtSecret, options.supabaseUrl);
+    userId = claims.userId;
   } catch {
     throw new HttpError(401, "Access token is invalid or expired");
   }
-  return options.store.reauthorize(claims);
-}
-
-async function tokenResponse(claims: AccessClaims, options: ServiceServerOptions) {
-  const expiresIn = options.accessTokenTtlSeconds ?? 900;
-  const accessToken = await issueAccessToken(claims, options.jwtSecret, expiresIn);
-  return {
-    accessToken,
-    expiresAt: new Date(Date.now() + expiresIn * 1_000).toISOString(),
-    principal: {
-      workspaceId: claims.workspaceId,
-      actorId: claims.actorId,
-      replicaId: claims.replicaId,
-      role: claims.role
-    }
-  };
+  try {
+    return await options.store.resolveMembership(userId, workspaceId);
+  } catch (error) {
+    if (error instanceof StoreUnauthorizedError) throw new HttpError(401, error.message);
+    throw error;
+  }
 }
 
 async function readJson(request: IncomingMessage, maximumBytes: number): Promise<unknown> {
@@ -386,8 +378,7 @@ function rateLimitRoute(method: string, pathname: string): string {
   const route = `${method} ${pathname}`;
   return new Set([
     "GET /healthz",
-    "POST /v1/enroll",
-    "POST /v1/token",
+    "POST /v1/replicas",
     "POST /v1/events",
     "GET /v1/operations",
     "POST /v1/tasks",

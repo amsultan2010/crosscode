@@ -1,3 +1,6 @@
+# Production now uses Supabase-hosted Postgres (see apps/service/src/main.ts's DATABASE_URL
+# handling). This compose file is kept only for local development and for running
+# apps/service/src/store.integration.test.ts against a plain Postgres instance.
 services:
   postgres:
     image: postgres:17-alpine

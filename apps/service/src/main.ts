@@ -3,9 +3,12 @@ import { assertSafeServiceBinding, createServiceServer } from "./http.js";
 import { PgStore } from "./store.js";
 
 export async function main(environment: NodeJS.ProcessEnv = process.env): Promise<void> {
+  // Supabase's pooled Postgres connection string is a standard `postgres://` URL, so
+  // DATABASE_URL works exactly as it did against the self-hosted database.
   const databaseUrl = required(environment.DATABASE_URL, "DATABASE_URL");
-  const jwtSecret = required(environment.CROSSCODE_JWT_SECRET, "CROSSCODE_JWT_SECRET");
-  if (Buffer.byteLength(jwtSecret) < 32) throw new Error("CROSSCODE_JWT_SECRET must contain at least 32 bytes");
+  const jwtSecret = required(environment.SUPABASE_JWT_SECRET, "SUPABASE_JWT_SECRET");
+  if (Buffer.byteLength(jwtSecret) < 32) throw new Error("SUPABASE_JWT_SECRET must contain at least 32 bytes");
+  const supabaseUrl = required(environment.SUPABASE_URL, "SUPABASE_URL");
   const host = environment.CROSSCODE_SERVICE_HOST ?? "127.0.0.1";
   const port = parsePort(environment.CROSSCODE_SERVICE_PORT ?? "8788");
   const tls = await loadTls(environment);
@@ -14,7 +17,7 @@ export async function main(environment: NodeJS.ProcessEnv = process.env): Promis
   let server: ReturnType<typeof createServiceServer>;
   try {
     await store.assertRuntimePrivileges();
-    server = createServiceServer({ store, jwtSecret, tls });
+    server = createServiceServer({ store, jwtSecret, supabaseUrl, tls });
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(port, host, () => {

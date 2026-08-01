@@ -10,13 +10,15 @@ describe.skipIf(!databaseUrl)("PostgreSQL retention pruning", () => {
     let workspaceId: string | undefined;
     try {
       await store.migrate();
+      const userId = randomUUID();
       const provisioned = await store.provisionAdmin({
         workspaceName: `test-${randomUUID()}`,
-        actorId: `actor-${randomUUID()}`
+        userId,
+        actorId: `actor-${randomUUID()}@example.com`
       });
       workspaceId = provisioned.workspaceId;
-      const enrolled = await store.enroll({ enrollmentToken: provisioned.enrollmentToken });
-      const replicaId = enrolled.claims.replicaId;
+      const replica = await store.registerReplica(userId, workspaceId, `replica-${randomUUID()}`);
+      const replicaId = replica.replicaId;
 
       const oldAuditId = randomUUID();
       const recentAuditId = randomUUID();

@@ -14,12 +14,13 @@ import {
   type RemoteValidation,
   type WsFanOutMessage
 } from "@crosscode/protocol";
-import { verifyAccessToken } from "./auth.js";
-import { StoreUnauthorizedError, type PgStore } from "./store.js";
+import { verifySupabaseAccessToken } from "./auth.js";
+import type { PgStore } from "./store.js";
 
 export type WebSocketGatewayOptions = {
   store: PgStore;
   jwtSecret: string;
+  supabaseUrl: string;
 };
 
 export type WebSocketGateway = {
@@ -115,16 +116,14 @@ function handleConnection(
       clearTimeout(handshakeTimer);
       try {
         const request = wsSubscribeRequestSchema.parse(JSON.parse(data.toString()));
-        const claims = await verifyAccessToken(request.accessToken, options.jwtSecret);
-        const identity = await options.store.reauthorize(claims);
-        if (identity.workspaceId !== request.workspaceId || identity.replicaId !== request.replicaId) {
-          throw new StoreUnauthorizedError("Subscription principal does not match authenticated membership");
-        }
-        connection = register(connectionsByWorkspace, socket, identity.workspaceId, identity.replicaId, identity.actorId);
-        const cursor = await options.store.getCursor(identity.workspaceId);
+        const claims = await verifySupabaseAccessToken(request.accessToken, options.jwtSecret, options.supabaseUrl);
+        const membership = await options.store.resolveMembership(claims.userId, request.workspaceId);
+        await options.store.assertReplicaOwnership(membership.workspaceId, membership.memberId, request.replicaId);
+        connection = register(connectionsByWorkspace, socket, membership.workspaceId, request.replicaId, membership.actorId);
+        const cursor = await options.store.getCursor(membership.workspaceId);
         send(socket, wsSubscribeAckSchema.parse({ type: "subscribed", cursor }));
-        broadcastPresence(connectionsByWorkspace, identity.workspaceId, identity.replicaId, identity.actorId, "online");
-        await options.store.recordSessionStart(identity.workspaceId, identity.replicaId, cursor);
+        broadcastPresence(connectionsByWorkspace, membership.workspaceId, request.replicaId, membership.actorId, "online");
+        await options.store.recordSessionStart(membership.workspaceId, request.replicaId, cursor);
       } catch {
         send(socket, wsErrorMessageSchema.parse({ type: "error", message: "Subscription rejected" }));
         socket.close(1008, "Subscription rejected");

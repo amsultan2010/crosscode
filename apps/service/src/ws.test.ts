@@ -1,21 +1,24 @@
 import type { AddressInfo } from "node:net";
 import type { HandoffRequestedEvent, IntentPublishedEvent, TransactionCreatedEvent, WsFanOutMessage, WsSubscribeAck } from "@crosscode/protocol";
 import { contentHash } from "@crosscode/core";
+import { SignJWT } from "jose";
 import { WebSocket } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
-import { issueAccessToken, type AccessClaims } from "./auth.js";
 import { createServiceServer } from "./http.js";
-import type { PgStore, StoredOperation } from "./store.js";
+import type { Membership, PgStore, StoredOperation } from "./store.js";
 
 const jwtSecret = "service-ws-test-secret-with-at-least-32-bytes-long";
-const claimsA: AccessClaims = {
-  memberId: "member-1", actorId: "actor-1", workspaceId: "workspace-1",
-  replicaId: "replica-a", role: "member", tokenVersion: 1
+const supabaseUrl = "https://rzsslbmahvoesjxmgefr.supabase.co";
+const WORKSPACE_HEADER = "x-crosscode-workspace-id";
+
+const membershipA: Membership = {
+  memberId: "member-1", userId: "user-a", actorId: "actor-1", workspaceId: "workspace-1", role: "member"
 };
-const claimsB: AccessClaims = {
-  memberId: "member-2", actorId: "actor-2", workspaceId: "workspace-1",
-  replicaId: "replica-b", role: "member", tokenVersion: 1
+const membershipB: Membership = {
+  memberId: "member-2", userId: "user-b", actorId: "actor-2", workspaceId: "workspace-1", role: "member"
 };
+const replicaA = "replica-a";
+const replicaB = "replica-b";
 
 const servers: ReturnType<typeof createServiceServer>[] = [];
 const sockets: WebSocket[] = [];
@@ -25,28 +28,41 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
 });
 
+function membershipByUserId(userId: string): Membership {
+  if (userId === membershipA.userId) return membershipA;
+  if (userId === membershipB.userId) return membershipB;
+  throw new Error("Unknown user");
+}
+
 describe("service WebSocket fan-out", () => {
   it("completes the subscribe handshake and returns the current cursor", async () => {
     const store = {
-      reauthorize: async (claims: AccessClaims) => claims,
+      resolveMembership: async (userId: string) => membershipByUserId(userId),
+      assertReplicaOwnership: async () => {},
       getCursor: async () => 7,
       recordSessionStart: async () => {},
       recordSessionEnd: async () => {}
     } as unknown as PgStore;
     const base = await listen(store);
-    const token = await issueAccessToken(claimsA, jwtSecret);
-    const { socket, first } = await connect(base, claimsA, token);
+    const token = await signToken(membershipA.userId);
+    const { socket, first } = await connect(base, membershipA, replicaA, token);
     expect(first).toEqual({ type: "subscribed", cursor: 7 });
     socket.close();
   });
 
   it("rejects a subscribe handshake with an invalid access token", async () => {
-    const store = { reauthorize: async (claims: AccessClaims) => claims, getCursor: async () => 0, recordSessionStart: async () => {}, recordSessionEnd: async () => {} } as unknown as PgStore;
+    const store = {
+      resolveMembership: async (userId: string) => membershipByUserId(userId),
+      assertReplicaOwnership: async () => {},
+      getCursor: async () => 0,
+      recordSessionStart: async () => {},
+      recordSessionEnd: async () => {}
+    } as unknown as PgStore;
     const base = await listen(store);
     const socket = openSocket(base);
     const closeCode = await new Promise<number>((resolve) => {
       socket.once("open", () => socket.send(JSON.stringify({
-        type: "subscribe", workspaceId: claimsA.workspaceId, replicaId: claimsA.replicaId, accessToken: "not-a-real-token"
+        type: "subscribe", workspaceId: membershipA.workspaceId, replicaId: replicaA, accessToken: "not-a-real-token"
       })));
       socket.once("close", (code) => resolve(code));
     });
@@ -54,24 +70,30 @@ describe("service WebSocket fan-out", () => {
   });
 
   it("broadcasts presence online and offline to other connected replicas", async () => {
-    const store = { reauthorize: async (claims: AccessClaims) => claims, getCursor: async () => 0, recordSessionStart: async () => {}, recordSessionEnd: async () => {} } as unknown as PgStore;
+    const store = {
+      resolveMembership: async (userId: string) => membershipByUserId(userId),
+      assertReplicaOwnership: async () => {},
+      getCursor: async () => 0,
+      recordSessionStart: async () => {},
+      recordSessionEnd: async () => {}
+    } as unknown as PgStore;
     const base = await listen(store);
-    const tokenA = await issueAccessToken(claimsA, jwtSecret);
-    const tokenB = await issueAccessToken(claimsB, jwtSecret);
-    const { socket: socketA } = await connect(base, claimsA, tokenA);
+    const tokenA = await signToken(membershipA.userId);
+    const tokenB = await signToken(membershipB.userId);
+    const { socket: socketA } = await connect(base, membershipA, replicaA, tokenA);
 
     const onlineMessage = nextMessage(socketA);
-    const { socket: socketB } = await connect(base, claimsB, tokenB);
+    const { socket: socketB } = await connect(base, membershipB, replicaB, tokenB);
     expect(await onlineMessage).toEqual({
       type: "presence",
-      presence: { replicaId: claimsB.replicaId, actorId: claimsB.actorId, status: "online", lastSeenAt: expect.any(String) }
+      presence: { replicaId: replicaB, actorId: membershipB.actorId, status: "online", lastSeenAt: expect.any(String) }
     });
 
     const offlineMessage = nextMessage(socketA);
     socketB.close();
     expect(await offlineMessage).toEqual({
       type: "presence",
-      presence: { replicaId: claimsB.replicaId, actorId: claimsB.actorId, status: "offline", lastSeenAt: expect.any(String) }
+      presence: { replicaId: replicaB, actorId: membershipB.actorId, status: "offline", lastSeenAt: expect.any(String) }
     });
   });
 
@@ -79,17 +101,18 @@ describe("service WebSocket fan-out", () => {
     const event = makeEvent();
     const operation = storedOperation(event);
     const store = {
-      reauthorize: async (claims: AccessClaims) => claims,
+      resolveMembership: async (userId: string) => membershipByUserId(userId),
+      assertReplicaOwnership: async () => {},
       getCursor: async () => 0,
       appendOperation: async () => operation,
       recordSessionStart: async () => {},
       recordSessionEnd: async () => {}
     } as unknown as PgStore;
     const base = await listen(store);
-    const tokenA = await issueAccessToken(claimsA, jwtSecret);
-    const tokenB = await issueAccessToken(claimsB, jwtSecret);
-    const { socket: socketA } = await connect(base, claimsA, tokenA);
-    const { socket: socketB } = await connect(base, claimsB, tokenB);
+    const tokenA = await signToken(membershipA.userId);
+    const tokenB = await signToken(membershipB.userId);
+    const { socket: socketA } = await connect(base, membershipA, replicaA, tokenA);
+    const { socket: socketB } = await connect(base, membershipB, replicaB, tokenB);
     await nextMessage(socketA); // presence.online for replica-b, ignored here
 
     const senderMessage = nextMessage(socketA);
@@ -98,10 +121,10 @@ describe("service WebSocket fan-out", () => {
     senderMessage.then(() => { senderSawMessage = true; });
 
     const httpBase = base.replace("ws://", "http://");
-    const accessToken = await issueAccessToken(claimsA, jwtSecret);
+    const accessToken = await signToken(membershipA.userId);
     const response = await fetch(`${httpBase}/v1/events`, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
+      headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membershipA.workspaceId },
       body: JSON.stringify({ event })
     });
     expect(response.status).toBe(200);
@@ -114,11 +137,12 @@ describe("service WebSocket fan-out", () => {
 
   it("fans out a live handoff and intent to other replicas while excluding the sender", async () => {
     const handoffEvent = makeHandoffEvent();
-    const remoteHandoff = { eventId: handoffEvent.id, workspaceId: claimsA.workspaceId, senderReplicaId: claimsA.replicaId, handoff: handoffEvent.payload, updatedAt: "2026-01-01T00:00:01.000Z" };
+    const remoteHandoff = { eventId: handoffEvent.id, workspaceId: membershipA.workspaceId, senderReplicaId: replicaA, handoff: handoffEvent.payload, updatedAt: "2026-01-01T00:00:01.000Z" };
     const intentEvent = makeIntentEvent();
-    const remoteIntent = { eventId: intentEvent.id, workspaceId: claimsA.workspaceId, senderReplicaId: claimsA.replicaId, intent: intentEvent.payload, updatedAt: "2026-01-01T00:00:01.000Z" };
+    const remoteIntent = { eventId: intentEvent.id, workspaceId: membershipA.workspaceId, senderReplicaId: replicaA, intent: intentEvent.payload, updatedAt: "2026-01-01T00:00:01.000Z" };
     const store = {
-      reauthorize: async (claims: AccessClaims) => claims,
+      resolveMembership: async (userId: string) => membershipByUserId(userId),
+      assertReplicaOwnership: async () => {},
       getCursor: async () => 0,
       recordSessionStart: async () => {},
       recordSessionEnd: async () => {},
@@ -126,19 +150,19 @@ describe("service WebSocket fan-out", () => {
       upsertIntent: async () => remoteIntent
     } as unknown as PgStore;
     const base = await listen(store);
-    const tokenA = await issueAccessToken(claimsA, jwtSecret);
-    const tokenB = await issueAccessToken(claimsB, jwtSecret);
-    const { socket: socketA } = await connect(base, claimsA, tokenA);
-    const { socket: socketB } = await connect(base, claimsB, tokenB);
+    const tokenA = await signToken(membershipA.userId);
+    const tokenB = await signToken(membershipB.userId);
+    const { socket: socketA } = await connect(base, membershipA, replicaA, tokenA);
+    const { socket: socketB } = await connect(base, membershipB, replicaB, tokenB);
     await nextMessage(socketA); // presence.online for replica-b, ignored here
 
     const httpBase = base.replace("ws://", "http://");
-    const accessToken = await issueAccessToken(claimsA, jwtSecret);
+    const accessToken = await signToken(membershipA.userId);
 
     const handoffReceiverMessage = nextMessage(socketB);
     const handoffResponse = await fetch(`${httpBase}/v1/handoffs`, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
+      headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membershipA.workspaceId },
       body: JSON.stringify({ event: handoffEvent })
     });
     expect(handoffResponse.status).toBe(200);
@@ -147,7 +171,7 @@ describe("service WebSocket fan-out", () => {
     const intentReceiverMessage = nextMessage(socketB);
     const intentResponse = await fetch(`${httpBase}/v1/intents`, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
+      headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membershipA.workspaceId },
       body: JSON.stringify({ event: intentEvent })
     });
     expect(intentResponse.status).toBe(200);
@@ -155,8 +179,19 @@ describe("service WebSocket fan-out", () => {
   });
 });
 
+async function signToken(userId: string): Promise<string> {
+  return new SignJWT({ email: "member@example.com", role: "authenticated" })
+    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .setSubject(userId)
+    .setIssuer(`${supabaseUrl}/auth/v1`)
+    .setAudience("authenticated")
+    .setIssuedAt()
+    .setExpirationTime("15m")
+    .sign(new TextEncoder().encode(jwtSecret));
+}
+
 async function listen(store: PgStore): Promise<string> {
-  const server = createServiceServer({ store, jwtSecret });
+  const server = createServiceServer({ store, jwtSecret, supabaseUrl });
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   return `ws://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -168,11 +203,11 @@ function openSocket(base: string): WebSocket {
   return socket;
 }
 
-async function connect(base: string, claims: AccessClaims, accessToken: string): Promise<{ socket: WebSocket; first: WsSubscribeAck }> {
+async function connect(base: string, membership: Membership, replicaId: string, accessToken: string): Promise<{ socket: WebSocket; first: WsSubscribeAck }> {
   const socket = openSocket(base);
   const first = await new Promise<WsSubscribeAck>((resolve, reject) => {
     socket.once("open", () => socket.send(JSON.stringify({
-      type: "subscribe", workspaceId: claims.workspaceId, replicaId: claims.replicaId, accessToken
+      type: "subscribe", workspaceId: membership.workspaceId, replicaId, accessToken
     })));
     socket.once("message", (data) => resolve(JSON.parse(data.toString())));
     socket.once("error", reject);
@@ -188,9 +223,9 @@ function makeEvent(): TransactionCreatedEvent {
   return {
     id: "operation-1",
     schemaVersion: 1,
-    workspaceId: claimsA.workspaceId,
-    replicaId: claimsA.replicaId,
-    actorId: claimsA.actorId,
+    workspaceId: membershipA.workspaceId,
+    replicaId: replicaA,
+    actorId: membershipA.actorId,
     type: "transaction.created",
     clientSequence: 1,
     createdAt: "2026-01-01T00:00:00.000Z",
@@ -221,13 +256,13 @@ function makeHandoffEvent(): HandoffRequestedEvent {
   return {
     id: "handoff-1",
     schemaVersion: 1,
-    workspaceId: claimsA.workspaceId,
-    replicaId: claimsA.replicaId,
-    actorId: claimsA.actorId,
+    workspaceId: membershipA.workspaceId,
+    replicaId: replicaA,
+    actorId: membershipA.actorId,
     type: "handoff.requested",
     clientSequence: 1,
     createdAt: "2026-01-01T00:00:00.000Z",
-    payload: { id: "handoff-1", operationId: "operation-1", requestedBy: claimsA.actorId, status: "pending", createdAt: "2026-01-01T00:00:00.000Z" }
+    payload: { id: "handoff-1", operationId: "operation-1", requestedBy: membershipA.actorId, status: "pending", createdAt: "2026-01-01T00:00:00.000Z" }
   };
 }
 
@@ -235,12 +270,12 @@ function makeIntentEvent(): IntentPublishedEvent {
   return {
     id: "intent-1",
     schemaVersion: 1,
-    workspaceId: claimsA.workspaceId,
-    replicaId: claimsA.replicaId,
-    actorId: claimsA.actorId,
+    workspaceId: membershipA.workspaceId,
+    replicaId: replicaA,
+    actorId: membershipA.actorId,
     type: "intent.published",
     clientSequence: 1,
     createdAt: "2026-01-01T00:00:00.000Z",
-    payload: { id: "intent-1", actorId: claimsA.actorId, text: "Rename foo to bar", createdAt: "2026-01-01T00:00:00.000Z" }
+    payload: { id: "intent-1", actorId: membershipA.actorId, text: "Rename foo to bar", createdAt: "2026-01-01T00:00:00.000Z" }
   };
 }
