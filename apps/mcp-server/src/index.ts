@@ -1,28 +1,17 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { zodToJsonSchema } from "zod-to-json-schema";
-import { z, type ZodTypeAny } from "zod";
-import { pathOverlaps, semanticReviewSchema } from "@crosscode/core";
 import {
-  captureRequestSchema,
-  changeScopeRequestSchema,
-  changeSummaryRequestSchema,
-  checkpointRequestSchema,
-  claimRequestSchema,
-  handoffRequestSchema,
-  taskRequestSchema,
-  validationRequestSchema
-} from "@crosscode/protocol";
+  CallToolRequestSchema,
+  ListResourcesRequestSchema,
+  ListToolsRequestSchema,
+  ReadResourceRequestSchema
+} from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
+import { pathOverlaps } from "@crosscode/core";
 import { DaemonClient } from "../../daemon/src/client.js";
 import { ensureDaemonRunning } from "./bootstrap.js";
-
-const emptyInputSchema = z.object({}).strict();
-const claimTaskInputSchema = taskRequestSchema.pick({ title: true, paths: true });
-const claimScopeInputSchema = claimRequestSchema.pick({ taskId: true, target: true });
-const publishIntentInputSchema = captureRequestSchema.omit({ kind: true });
-const announceInterfaceChangeInputSchema = captureRequestSchema.omit({ kind: true });
-const submitSemanticReviewInputSchema = semanticReviewSchema.extend({ requestId: z.string() });
+import { mcpResources } from "./resources.js";
+import { mcpToolCatalog, submitSemanticReviewInputSchema, toolInputSchemas, type ToolName } from "./tool-catalog.js";
 
 export function mcpTools(client: DaemonClient) {
   return {
@@ -57,66 +46,59 @@ export function mcpTools(client: DaemonClient) {
     request_validation: (input: { profile: string }) => client.validate(input.profile),
     create_checkpoint: () => client.checkpoint(),
     list_pending_semantic_reviews: () => client.pendingSemanticReviews(),
-    submit_semantic_review: ({ requestId, ...review }: z.infer<typeof submitSemanticReviewInputSchema>) => client.submitSemanticReview(requestId, review)
+    submit_semantic_review: ({ requestId, ...review }: z.infer<typeof submitSemanticReviewInputSchema>) =>
+      client.submitSemanticReview(requestId, review),
+    inspect_proposal: (input: { operationId: string }) => client.analyze(input.operationId),
+    diff_proposal: (input: { operationId: string }) => client.diff(input.operationId),
+    list_proposal_artifacts: (input: { operationId: string }) => client.artifacts(input.operationId),
+    accept_proposal: (input: { operationId: string; reviewApprovals?: Record<string, string> }) =>
+      client.accept(input.operationId, input.reviewApprovals ? { reviewApprovals: input.reviewApprovals } : undefined),
+    reject_proposal: (input: { operationId: string }) => client.reject(input.operationId),
+    publish_branch: (input: { branch: string; profile: string; message?: string; dryRun?: boolean; confirm: true }) =>
+      client.publish({ branch: input.branch, profile: input.profile, message: input.message, dryRun: input.dryRun })
   };
 }
 
-type ToolName = keyof ReturnType<typeof mcpTools>;
-
-const toolInputSchemas: Record<ToolName, ZodTypeAny> = {
-  get_workspace_state: emptyInputSchema,
-  list_tasks: emptyInputSchema,
-  claim_task: claimTaskInputSchema,
-  claim_scope: claimScopeInputSchema,
-  publish_intent: publishIntentInputSchema,
-  check_change_scope: changeScopeRequestSchema,
-  submit_change_summary: changeSummaryRequestSchema,
-  list_remote_proposals: emptyInputSchema,
-  request_handoff: handoffRequestSchema,
-  announce_interface_change: announceInterfaceChangeInputSchema,
-  request_validation: validationRequestSchema,
-  create_checkpoint: checkpointRequestSchema,
-  list_pending_semantic_reviews: emptyInputSchema,
-  submit_semantic_review: submitSemanticReviewInputSchema
-};
-
-const toolDescriptions: Record<ToolName, string> = {
-  get_workspace_state: "Read the local daemon's workspace status: HEAD, branch, dirty state, and pending counts.",
-  list_tasks: "List tasks known to the local daemon.",
-  claim_task: "Create a task, optionally scoped to a set of paths.",
-  claim_scope: "Advertise a path claim against a task so other agents can see it.",
-  publish_intent: "Capture the current working-tree edits as a durable transaction tagged with an intent.",
-  check_change_scope: "Check whether a set of paths overlaps existing claims or pending remote proposals before editing.",
-  submit_change_summary: "Capture the current working-tree edits as a durable transaction tagged as a change summary.",
-  list_remote_proposals: "List remote operations that are proposed and awaiting local review.",
-  request_handoff: "Request a handoff of a proposed operation to another participant for review.",
-  announce_interface_change: "Capture the current working-tree edits as a durable transaction tagged as an interface change.",
-  request_validation: "Run a named validation profile and return its results.",
-  create_checkpoint: "Create a Git checkpoint of the current worktree without moving HEAD.",
-  list_pending_semantic_reviews: "List semantic reviews awaiting this agent's judgment: an ambiguous change bundle the daemon needs reasoned about before it can proceed.",
-  submit_semantic_review: "Submit this agent's semantic review for a pending requestId: classification, confidence, affected symbols, evidence, invariants to preserve, an optional proposed resolution, and whether it requires human approval."
-};
+function errorContent(message: string, hint: string) {
+  return { content: [{ type: "text" as const, text: `${message}\n\nHint: ${hint}` }], isError: true as const };
+}
 
 export function buildMcpServer(client: DaemonClient): Server {
   const tools = mcpTools(client);
-  const server = new Server({ name: "crosscode-mcp", version: "0.1.0" }, { capabilities: { tools: {} } });
+  const server = new Server({ name: "crosscode-mcp", version: "0.1.0" }, { capabilities: { tools: {}, resources: {} } });
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: (Object.keys(tools) as ToolName[]).map((name) => ({
-      name,
-      description: toolDescriptions[name],
-      inputSchema: zodToJsonSchema(toolInputSchemas[name], { target: "jsonSchema7" }) as Record<string, unknown>
-    }))
-  }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: mcpToolCatalog() }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const name = request.params.name as ToolName;
-    const tool = tools[name] as ((input?: unknown) => unknown) | undefined;
-    if (!tool) throw new Error(`Unknown MCP tool: ${request.params.name}`);
+    const tool = tools[name as keyof typeof tools] as ((input?: unknown) => unknown) | undefined;
+    if (!tool) {
+      return errorContent(
+        `Unknown MCP tool: "${request.params.name}"`,
+        "Call tools/list to see the available tool names, or read the crosscode://guidance/tool-sequencing resource for how they fit together."
+      );
+    }
     const schema = toolInputSchemas[name];
-    const input = schema.parse(request.params.arguments ?? {});
-    const result = await tool(input);
+    const parsed = schema.safeParse(request.params.arguments ?? {});
+    if (!parsed.success) {
+      const issues = parsed.error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`).join("; ");
+      return errorContent(
+        `Invalid arguments for tool "${name}": ${issues}`,
+        "Check the tool's inputSchema from tools/list and retry with arguments that match it."
+      );
+    }
+    const result = await tool(parsed.data);
     return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  });
+
+  server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+    resources: mcpResources().map(({ uri, name: resourceName, description, mimeType }) => ({ uri, name: resourceName, description, mimeType }))
+  }));
+
+  server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    const resource = mcpResources().find((entry) => entry.uri === request.params.uri);
+    if (!resource) throw new Error(`Unknown MCP resource: ${request.params.uri}`);
+    return { contents: [{ uri: resource.uri, mimeType: resource.mimeType, text: resource.text }] };
   });
 
   return server;
