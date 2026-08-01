@@ -557,54 +557,7 @@ The first implementation may use a simple provider interface and a mock reviewer
 
 ## 13. Agent integration capability ladder
 
-Design adapters around declared capabilities, not product names.
-
-### Level 0 — filesystem/Git observation
-
-Works for all tools. The daemon detects completed work afterward. This is the minimum compatibility guarantee.
-
-### Level 1 — CLI wrapper
-
-Provide transparent wrappers:
-
-```bash
-crosscode run -- codex
-crosscode run -- claude
-crosscode run -- opencode
-```
-
-The wrapper records session boundaries, process metadata, working directory, exit codes, and optionally recognized validation/Git commands. It must pass arguments and exit status through unchanged. Users can always invoke the original binary directly.
-
-### Level 2 — MCP server
-
-Expose a provider-neutral MCP tool surface from the local daemon. Initial tools:
-
-```text
-get_workspace_state
-list_tasks
-claim_task
-claim_scope
-publish_intent
-check_change_scope
-submit_change_summary
-list_remote_proposals
-request_handoff
-announce_interface_change
-request_validation
-create_checkpoint
-list_pending_semantic_reviews
-submit_semantic_review
-```
-
-MCP tools should inform agents before edits, but no agent is trusted to call them. The filesystem observer remains the fallback.
-
-### Level 3 — native hooks/plugins
-
-Use vendor lifecycle hooks where available to enrich attribution and create early warnings. Normalize provider events to Crosscode's protocol; do not leak vendor-specific event formats into the core.
-
-### Level 4 — programmatic adapters
-
-Only after the core works, support richer adapters that can start/pause sessions, send context, and show live progress.
+**Moved to [`AGENTS.md`](./AGENTS.md#agent-integration-capability-ladder)**, alongside the CLI/MCP-first workflow contract and the MCP trust model. This section keeps the adapter interface and initial-adapter list only, since those are implementation detail rather than the agent-facing contract.
 
 ### Adapter interface
 

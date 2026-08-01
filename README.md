@@ -28,6 +28,7 @@ Paste the prompt in [`docs/install-prompt.md`](./docs/install-prompt.md) into an
 - Live WebSocket presence, task, claim, handoff, and intent fan-out, with a durable poll fallback
 - `publish --branch` with a dry-run plan, publishing accepted work as ordinary commits to a real remote
 - Editor/agent integration exclusively through the MCP server — the supported product surface is the daemon + MCP server (plus the CLI as the daemon's local tool). A previously-built VS Code/Cursor extension exists in-tree (`apps/vscode-extension`) but is frozen and unsupported by decision; VS Code and Cursor users connect via MCP instead (`docs/mcp-clients.md`)
+- CLI/MCP-first for agents: status, claiming, checkpoints, proposal review, accept/reject, and publish are all direct CLI/MCP operations against the local daemon — a coding agent (Claude Code, Codex, etc.) never needs to open a website to do routine work. Humans are guided to the docs-site (`apps/docs-site`) for full documentation, configuration/settings reference, and eventual web-dashboard version history; see [`AGENTS.md`](./AGENTS.md)
 - A bounded, non-authoritative AI semantic reviewer for ambiguous conflicts, gated behind explicit workspace policy and human approval
 
 See [BUILD_INSTRUCTIONS.md](./BUILD_INSTRUCTIONS.md) for the authoritative, milestone-by-milestone status of what's implemented and tested.

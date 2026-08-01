@@ -62,6 +62,10 @@ for the worktree. These two, plus the daemon itself, are the entire supported
 product surface: editors and agents (including VS Code and Cursor) integrate via
 MCP (`docs/mcp-clients.md`). A previously-built VS Code/Cursor extension remains
 in-tree at `apps/vscode-extension` but is frozen and unsupported by decision.
+This CLI/MCP-first contract — agents get frictionless direct access to routine
+operations (status, claims, checkpoints, accept/reject, publish) with no
+website required, while humans are guided to the docs-site for depth — is
+formalized in [`AGENTS.md`](../AGENTS.md).
 
 ## Safety invariants
 
