@@ -26,9 +26,9 @@ A local-first coordination layer for people and coding agents working in separat
 - **Docs site** now agent-crawlable: HTML pages generate from the root `docs/*.md` at build time (single source of truth, no more hand-transcribed drift), plus `llms.txt`/`llms-full.txt` and raw `.md` served directly. (`apps/docs-site`)
 - **Root `AGENTS.md`** created as the file coding agents auto-load: capability ladder, MCP trust model, and the CLI/MCP-first workflow contract, moved out of this document.
 
-**Known test flakiness (pre-existing, not introduced by the above):** a handful of `apps/daemon` integration/e2e tests (`process.test.ts`, `three-participant.e2e.test.ts`, `uninstall.integration.test.ts`, plus two real-daemon-boundary tests in `apps/mcp-server/src/index.test.ts`) time out under this sandbox's resource constraints when spawning real daemon child processes under load. They pass reliably run alone or with reduced test-runner concurrency. Not a correctness regression — worth fixing before building more surface on top of the daemon (see Phase 9).
+**Daemon test flakiness — fixed (2026-08-01).** Root causes were: `DaemonClient`'s HTTP request timeout was a hardcoded 3s (too tight for a real daemon under load — also a latent production fragility, not just a test artifact — now 10s); vitest ran daemon-spawning integration/e2e tests with unbounded fork concurrency, so real child daemon processes starved each other for CPU (now capped at `maxForks: 4`); and the heaviest test cases in `process.test.ts`/`three-participant.e2e.test.ts` had tighter per-test timeouts than lighter cases in the same files — an inverted budget, not just contention — now rebalanced to match real cost.
 
-**Verification baseline:** TypeScript build passes; 171 of 183 vitest tests pass without a test database (the 6 daemon-spawn timeouts above are the only failures, all pre-existing); `pnpm audit --audit-level high` clean; docs-site builds; CLI/MCP manually smoke-tested.
+**Verification baseline:** TypeScript build passes; full vitest suite passes cleanly and repeatably (23 test files, 177 tests, 6 skipped pending `CROSSCODE_TEST_DATABASE_URL`); `pnpm audit --audit-level high` clean; docs-site builds; CLI/MCP manually smoke-tested.
 
 ## The plan
 
