@@ -6,6 +6,7 @@ import { createTempRepo, cleanupTempRepos } from "@crosscode/test-fixtures";
 import { createServiceServer, PgStore } from "../../service/src/index.js";
 import { LocalDaemon } from "./index.js";
 import { CoordinationServiceClient } from "./service-client.js";
+import { legacyEnroll } from "./test-legacy-enroll.js";
 
 const databaseUrl = process.env.CROSSCODE_TEST_DATABASE_URL;
 
@@ -28,8 +29,8 @@ describe.skipIf(!databaseUrl)("PostgreSQL daemon reconnect", () => {
     const port = (server.address() as AddressInfo).port;
     const url = `http://127.0.0.1:${port}`;
     try {
-      const senderEnrollment = await CoordinationServiceClient.enroll(url, owner.enrollmentToken);
-      const receiverEnrollment = await CoordinationServiceClient.enroll(url, member.enrollmentToken);
+      const senderEnrollment = await legacyEnroll(url, owner.enrollmentToken);
+      const receiverEnrollment = await legacyEnroll(url, member.enrollmentToken);
       const senderRoot = await repository();
       const receiverRoot = await repository();
       let sender = await LocalDaemon.open(senderRoot, senderEnrollment.principal);
@@ -40,8 +41,8 @@ describe.skipIf(!databaseUrl)("PostgreSQL daemon reconnect", () => {
       sender.close();
       sender = await LocalDaemon.open(senderRoot, senderEnrollment.principal);
       expect(sender.outbound.get(local.id)!.event).toEqual(stableEvent);
-      const senderClient = new CoordinationServiceClient(senderEnrollment.principal, { url, replicaSecret: senderEnrollment.replicaSecret });
-      const receiverClient = new CoordinationServiceClient(receiverEnrollment.principal, { url, replicaSecret: receiverEnrollment.replicaSecret });
+      const senderClient = new CoordinationServiceClient(senderEnrollment.principal, { url, session: { accessToken: senderEnrollment.accessToken, refreshToken: "legacy-bridge-unused", expiresAt: senderEnrollment.expiresAt } });
+      const receiverClient = new CoordinationServiceClient(receiverEnrollment.principal, { url, session: { accessToken: receiverEnrollment.accessToken, refreshToken: "legacy-bridge-unused", expiresAt: receiverEnrollment.expiresAt } });
 
       await sender.syncRemote(senderClient);
       await sender.syncRemote(senderClient);

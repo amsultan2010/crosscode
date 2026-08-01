@@ -4,8 +4,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { DaemonClient } from "../../daemon/src/client.js";
-import { readDaemonConfig, writeDaemonConfig } from "../../daemon/src/runtime.js";
-import { CoordinationServiceClient } from "../../daemon/src/service-client.js";
+import { login, logout, readDaemonConfig, writeDaemonConfig } from "../../daemon/src/runtime.js";
 
 type CliResult = { value?: unknown; exitCode?: number };
 
@@ -23,18 +22,29 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
   }
   if (command === "join") {
     const settings = await readDaemonConfig(directory);
-    const serviceUrl = valueAfter(args, "--service");
-    if (serviceUrl) {
-      const enrollmentToken = process.env.CROSSCODE_ENROLLMENT_TOKEN;
-      if (!enrollmentToken) throw new Error("CROSSCODE_ENROLLMENT_TOKEN is required for service enrollment");
-      const enrollment = await CoordinationServiceClient.enroll(serviceUrl, enrollmentToken);
-      const updated = { workspaceId: enrollment.principal.workspaceId, actorId: enrollment.principal.actorId, replicaId: enrollment.principal.replicaId, service: { url: serviceUrl, replicaSecret: enrollment.replicaSecret } };
-      await writeDaemonConfig(directory, updated);
-      return { value: { ...updated, service: { url: serviceUrl, configured: true } } };
-    }
-    const updated = { ...settings, workspaceId: args[1] ?? settings.workspaceId };
+    const workspaceId = valueAfter(args, "--workspace") ?? args[1];
+    if (!workspaceId) throw new Error("Usage: crosscode join --workspace <workspaceId> (run `crosscode -- login` first)");
+    const updated = { ...settings, workspaceId };
     await writeDaemonConfig(directory, updated);
     return { value: updated };
+  }
+  if (command === "login") {
+    let email = valueAfter(args, "--email") ?? process.env.CROSSCODE_EMAIL;
+    let password = valueAfter(args, "--password") ?? process.env.CROSSCODE_PASSWORD;
+    const serviceUrl = valueAfter(args, "--service");
+    if ((!email || !password) && process.stdout.isTTY) {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      if (!email) email = await rl.question("Email: ");
+      if (!password) password = await rl.question("Password: ");
+      rl.close();
+    }
+    if (!email || !password) throw new Error("Usage: crosscode -- login --email <email> --password <password> [--service <url>] (or set CROSSCODE_EMAIL/CROSSCODE_PASSWORD)");
+    const updated = await login(directory, { email, password, serviceUrl });
+    return { value: { workspaceId: updated.workspaceId, actorId: updated.actorId, service: { url: updated.service!.url, loggedIn: true } } };
+  }
+  if (command === "logout") {
+    await logout(directory);
+    return { value: { loggedOut: true } };
   }
   if (command === "run") {
     const separator = args.indexOf("--");

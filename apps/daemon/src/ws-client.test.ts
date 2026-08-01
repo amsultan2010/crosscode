@@ -2,9 +2,10 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebSocket, WebSocketServer } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
-import { LiveSyncClient } from "./ws-client.js";
+import { LiveSyncClient, type AccessTokenProvider } from "./ws-client.js";
 
 const identity = { workspaceId: "workspace-1", actorId: "actor-1", replicaId: "replica-a" };
+const tokenProvider: AccessTokenProvider = { getValidAccessToken: async () => "test-token" };
 
 type FakeService = { url: string; close: () => Promise<void> };
 
@@ -25,7 +26,7 @@ describe("daemon live sync client", () => {
       });
     });
     const operations: string[] = [];
-    const client = new LiveSyncClient(identity, { url: service.url, replicaSecret: "secret" }, {
+    const client = new LiveSyncClient(identity, { url: service.url }, tokenProvider, {
       onOperation: (operation) => operations.push(operation.id)
     });
     clients.push(client);
@@ -44,7 +45,7 @@ describe("daemon live sync client", () => {
     });
     const handoffs: string[] = [];
     const intents: string[] = [];
-    const client = new LiveSyncClient(identity, { url: service.url, replicaSecret: "secret" }, {
+    const client = new LiveSyncClient(identity, { url: service.url }, tokenProvider, {
       onOperation: () => {},
       onHandoff: (handoff) => handoffs.push(handoff.handoff.id),
       onIntent: (intent) => intents.push(intent.intent.id)
@@ -77,7 +78,8 @@ describe("daemon live sync client", () => {
     const operations: string[] = [];
     const client = new LiveSyncClient(
       identity,
-      { url: service.url, replicaSecret: "secret" },
+      { url: service.url },
+      tokenProvider,
       { onOperation: (operation) => operations.push(operation.id) },
       { initialBackoffMs: 10, maxBackoffMs: 20 }
     );
@@ -96,7 +98,8 @@ describe("daemon live sync client", () => {
     });
     const client = new LiveSyncClient(
       identity,
-      { url: service.url, replicaSecret: "secret" },
+      { url: service.url },
+      tokenProvider,
       { onOperation: () => {} },
       { initialBackoffMs: 20, maxBackoffMs: 80 }
     );
@@ -112,7 +115,22 @@ describe("daemon live sync client", () => {
   it("does not throw when the service is unreachable and keeps retrying in the background", async () => {
     const client = new LiveSyncClient(
       identity,
-      { url: "http://127.0.0.1:1", replicaSecret: "secret" },
+      { url: "http://127.0.0.1:1" },
+      tokenProvider,
+      { onOperation: () => {} },
+      { initialBackoffMs: 10, maxBackoffMs: 20 }
+    );
+    clients.push(client);
+    expect(() => client.start()).not.toThrow();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+
+  it("stops reconnecting when the access token provider keeps failing", async () => {
+    const failingProvider: AccessTokenProvider = { getValidAccessToken: async () => { throw new Error("no session"); } };
+    const client = new LiveSyncClient(
+      identity,
+      { url: "http://127.0.0.1:1" },
+      failingProvider,
       { onOperation: () => {} },
       { initialBackoffMs: 10, maxBackoffMs: 20 }
     );
@@ -124,19 +142,7 @@ describe("daemon live sync client", () => {
 
 function startFakeService(onConnection: (socket: WebSocket) => void): Promise<FakeService> {
   return new Promise((resolve) => {
-    const server: Server = createServer((request, response) => {
-      if (request.method === "POST" && request.url === "/v1/token") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({
-          ok: true,
-          data: {
-            accessToken: "test-token",
-            expiresAt: new Date(Date.now() + 60_000).toISOString(),
-            principal: { workspaceId: identity.workspaceId, actorId: identity.actorId, replicaId: identity.replicaId, role: "member" }
-          }
-        }));
-        return;
-      }
+    const server: Server = createServer((_request, response) => {
       response.writeHead(404);
       response.end();
     });
