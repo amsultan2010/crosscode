@@ -1,5 +1,8 @@
 # Crosscode
 
+[![CI](https://github.com/amsultan2010/crosscode/actions/workflows/ci.yml/badge.svg)](https://github.com/amsultan2010/crosscode/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
 Crosscode is a local-first coordination layer for developers and coding agents working in separate checkouts of the same Git repository. It watches ordinary filesystem and Git activity, records stable edits as durable transactions, exchanges those transactions through an authenticated coordination service, and presents remote work as proposals. A remote proposal is never written into a checkout until that replica explicitly accepts it.
 
 Git remains the durable history and publishing layer. Crosscode does not replace your editor, agent, Git host, branches, worktrees, staging area, or normal commits.
@@ -242,3 +245,11 @@ For the implementation plan and current milestone ledger, see [BUILD_INSTRUCTION
 - There is no hosted/managed coordination service yet — you run a Supabase project and the service yourself.
 - Team-workspace provisioning (multi-person/multi-agent sync) requires a running coordination service and an administrator running `pnpm service:provision` with the Supabase service-role key; there is no self-serve signup or billing yet.
 - Deliberately not published to npm or any editor marketplace — the supported surface is the daemon + MCP server, run from a cloned checkout via `pnpm install` and `tsx` (see `docs/install-prompt.md`). The in-tree VS Code/Cursor extension is frozen and unsupported by decision.
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for dev
+setup, workspace layout, and PR expectations. Participation in this project is
+governed by the [Code of Conduct](./CODE_OF_CONDUCT.md). To report a security
+vulnerability, see [SECURITY.md](./SECURITY.md) rather than opening a public
+issue. Crosscode is licensed under the [MIT License](./LICENSE).
