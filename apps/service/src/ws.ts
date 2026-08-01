@@ -14,12 +14,13 @@ import {
   type RemoteValidation,
   type WsFanOutMessage
 } from "@crosscode/protocol";
+import type { JWTVerifyGetKey } from "jose";
 import { verifySupabaseAccessToken } from "./auth.js";
 import type { PgStore } from "./store.js";
 
 export type WebSocketGatewayOptions = {
   store: PgStore;
-  jwtSecret: string;
+  jwks: JWTVerifyGetKey;
   supabaseUrl: string;
 };
 
@@ -116,7 +117,7 @@ function handleConnection(
       clearTimeout(handshakeTimer);
       try {
         const request = wsSubscribeRequestSchema.parse(JSON.parse(data.toString()));
-        const claims = await verifySupabaseAccessToken(request.accessToken, options.jwtSecret, options.supabaseUrl);
+        const claims = await verifySupabaseAccessToken(request.accessToken, options.jwks, options.supabaseUrl);
         const membership = await options.store.resolveMembership(claims.userId, request.workspaceId);
         await options.store.assertReplicaOwnership(membership.workspaceId, membership.memberId, request.replicaId);
         connection = register(connectionsByWorkspace, socket, membership.workspaceId, request.replicaId, membership.actorId);

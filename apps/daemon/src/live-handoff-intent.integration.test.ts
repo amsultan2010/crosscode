@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createTempRepo, cleanupTempRepos, waitFor } from "@crosscode/test-fixtures";
 import { createServiceServer, PgStore } from "../../service/src/index.js";
 import { writeDaemonConfig } from "./runtime.js";
-import { provisionTestPrincipal, TEST_JWT_SECRET, TEST_SUPABASE_URL } from "./test-supabase-session.js";
+import { provisionTestPrincipal, testSupabaseJwks, TEST_SUPABASE_URL } from "./test-supabase-session.js";
 import { spawnDaemon, stopDaemon, stopAllDaemons } from "./test-helpers.js";
 
 const databaseUrl = process.env.CROSSCODE_TEST_DATABASE_URL;
@@ -25,7 +25,7 @@ describe.skipIf(!databaseUrl)("PostgreSQL live handoff and intent coordination",
     await store.migrate();
     const owner = await provisionTestPrincipal(store, { workspaceName: "live-handoff-intent-test", actorId: "alice" });
     const bob = await provisionTestPrincipal(store, { workspaceId: owner.principal.workspaceId, actorId: "bob" });
-    const server = createServiceServer({ store, jwtSecret: TEST_JWT_SECRET, supabaseUrl: TEST_SUPABASE_URL });
+    const server = createServiceServer({ store, jwks: await testSupabaseJwks(), supabaseUrl: TEST_SUPABASE_URL });
     await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
     const port = (server.address() as AddressInfo).port;
     const url = `http://127.0.0.1:${port}`;

@@ -6,7 +6,7 @@ import type { PresenceUpdate } from "@crosscode/protocol";
 import { createTempRepo, cleanupTempRepos, waitFor } from "@crosscode/test-fixtures";
 import { createServiceServer, PgStore } from "../../service/src/index.js";
 import { writeDaemonConfig } from "./runtime.js";
-import { provisionTestPrincipal, TEST_JWT_SECRET, TEST_SUPABASE_URL } from "./test-supabase-session.js";
+import { provisionTestPrincipal, testSupabaseJwks, TEST_SUPABASE_URL } from "./test-supabase-session.js";
 import { spawnDaemon, stopDaemon, stopAllDaemons, type ManagedDaemon } from "./test-helpers.js";
 import type { StoredOperation } from "./types.js";
 
@@ -32,7 +32,7 @@ describe.skipIf(!databaseUrl)("PostgreSQL live WebSocket coordination", () => {
     const owner = await provisionTestPrincipal(store, { workspaceName: "live-coordination-test", actorId: "alice" });
     const bob = await provisionTestPrincipal(store, { workspaceId: owner.principal.workspaceId, actorId: "bob" });
     const carol = await provisionTestPrincipal(store, { workspaceId: owner.principal.workspaceId, actorId: "carol" });
-    let server = createServiceServer({ store, jwtSecret: TEST_JWT_SECRET, supabaseUrl: TEST_SUPABASE_URL });
+    let server = createServiceServer({ store, jwks: await testSupabaseJwks(), supabaseUrl: TEST_SUPABASE_URL });
     await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
     const port = (server.address() as AddressInfo).port;
     const url = `http://127.0.0.1:${port}`;

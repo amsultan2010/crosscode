@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { createSupabaseJwks } from "./auth.js";
 import { assertSafeServiceBinding, createServiceServer } from "./http.js";
 import { PgStore } from "./store.js";
 
@@ -6,9 +7,12 @@ export async function main(environment: NodeJS.ProcessEnv = process.env): Promis
   // Supabase's pooled Postgres connection string is a standard `postgres://` URL, so
   // DATABASE_URL works exactly as it did against the self-hosted database.
   const databaseUrl = required(environment.DATABASE_URL, "DATABASE_URL");
-  const jwtSecret = required(environment.SUPABASE_JWT_SECRET, "SUPABASE_JWT_SECRET");
-  if (Buffer.byteLength(jwtSecret) < 32) throw new Error("SUPABASE_JWT_SECRET must contain at least 32 bytes");
   const supabaseUrl = required(environment.SUPABASE_URL, "SUPABASE_URL");
+  // Supabase signs access tokens with an asymmetric key (verified via its JWKS
+  // endpoint), not a shared secret, so there is no SUPABASE_JWT_SECRET to configure.
+  // createSupabaseJwks fetches and caches the project's public keys; build it once
+  // and reuse it for the life of the process.
+  const jwks = createSupabaseJwks(supabaseUrl);
   const host = environment.CROSSCODE_SERVICE_HOST ?? "127.0.0.1";
   const port = parsePort(environment.CROSSCODE_SERVICE_PORT ?? "8788");
   const tls = await loadTls(environment);
@@ -17,7 +21,7 @@ export async function main(environment: NodeJS.ProcessEnv = process.env): Promis
   let server: ReturnType<typeof createServiceServer>;
   try {
     await store.assertRuntimePrivileges();
-    server = createServiceServer({ store, jwtSecret, supabaseUrl, tls });
+    server = createServiceServer({ store, jwks, supabaseUrl, tls });
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(port, host, () => {

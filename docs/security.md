@@ -7,10 +7,12 @@ password, `crosscode -- login`); the daemon stores the resulting Supabase
 session (short-lived access token plus a longer-lived refresh token) rather
 than a Crosscode-issued credential. The coordination service verifies each
 request's access token against Supabase's own signing key
-(`verifySupabaseAccessToken`, `apps/service/src/auth.ts`), configured via
-`SUPABASE_JWT_SECRET` (must be at least 32 bytes) and `SUPABASE_URL` (used to
-check the expected token issuer, `<SUPABASE_URL>/auth/v1`, and the
-`authenticated` audience) — it no longer signs its own JWTs. Claims
+(`verifySupabaseAccessToken`, `apps/service/src/auth.ts`) — Supabase signs
+access tokens with an asymmetric key (ES256 by default), fetched and cached
+from `<SUPABASE_URL>/auth/v1/.well-known/jwks.json`, not a shared secret, so
+there is nothing equivalent to `CROSSCODE_JWT_SECRET` to configure or leak.
+`SUPABASE_URL` is still used to check the expected token issuer
+(`<SUPABASE_URL>/auth/v1`) and the `authenticated` audience. Claims
 (`SupabaseAccessClaims`):
 
 ```ts

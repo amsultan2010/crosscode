@@ -6,7 +6,7 @@ import { createTempRepo, cleanupTempRepos } from "@crosscode/test-fixtures";
 import { createServiceServer, PgStore } from "../../service/src/index.js";
 import { LocalDaemon } from "./index.js";
 import { CoordinationServiceClient } from "./service-client.js";
-import { provisionTestPrincipal, TEST_JWT_SECRET, TEST_SUPABASE_URL } from "./test-supabase-session.js";
+import { provisionTestPrincipal, testSupabaseJwks, TEST_SUPABASE_URL } from "./test-supabase-session.js";
 
 const databaseUrl = process.env.CROSSCODE_TEST_DATABASE_URL;
 
@@ -24,7 +24,7 @@ describe.skipIf(!databaseUrl)("PostgreSQL daemon reconnect", () => {
     await store.migrate();
     const sender_ = await provisionTestPrincipal(store, { workspaceName: "reconnect-test", actorId: "sender" });
     const receiver_ = await provisionTestPrincipal(store, { workspaceId: sender_.principal.workspaceId, actorId: "receiver" });
-    let server = createServiceServer({ store, jwtSecret: TEST_JWT_SECRET, supabaseUrl: TEST_SUPABASE_URL });
+    let server = createServiceServer({ store, jwks: await testSupabaseJwks(), supabaseUrl: TEST_SUPABASE_URL });
     await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
     const port = (server.address() as AddressInfo).port;
     const url = `http://127.0.0.1:${port}`;
@@ -47,7 +47,7 @@ describe.skipIf(!databaseUrl)("PostgreSQL daemon reconnect", () => {
       await sender.syncRemote(senderClient);
       await sender.syncRemote(senderClient);
       await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
-      server = createServiceServer({ store, jwtSecret: TEST_JWT_SECRET, supabaseUrl: TEST_SUPABASE_URL });
+      server = createServiceServer({ store, jwks: await testSupabaseJwks(), supabaseUrl: TEST_SUPABASE_URL });
       await new Promise<void>((resolveListen) => server.listen(port, "127.0.0.1", resolveListen));
       await receiver.syncRemote(receiverClient);
       await receiver.syncRemote(receiverClient);

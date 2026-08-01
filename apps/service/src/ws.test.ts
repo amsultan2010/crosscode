@@ -1,13 +1,12 @@
 import type { AddressInfo } from "node:net";
 import type { HandoffRequestedEvent, IntentPublishedEvent, TransactionCreatedEvent, WsFanOutMessage, WsSubscribeAck } from "@crosscode/protocol";
 import { contentHash } from "@crosscode/core";
-import { SignJWT } from "jose";
 import { WebSocket } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
 import { createServiceServer } from "./http.js";
 import type { Membership, PgStore, StoredOperation } from "./store.js";
+import { signTestSupabaseToken, testSupabaseJwks } from "./test-jwks.js";
 
-const jwtSecret = "service-ws-test-secret-with-at-least-32-bytes-long";
 const supabaseUrl = "https://rzsslbmahvoesjxmgefr.supabase.co";
 const WORKSPACE_HEADER = "x-crosscode-workspace-id";
 
@@ -180,18 +179,11 @@ describe("service WebSocket fan-out", () => {
 });
 
 async function signToken(userId: string): Promise<string> {
-  return new SignJWT({ email: "member@example.com", role: "authenticated" })
-    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
-    .setSubject(userId)
-    .setIssuer(`${supabaseUrl}/auth/v1`)
-    .setAudience("authenticated")
-    .setIssuedAt()
-    .setExpirationTime("15m")
-    .sign(new TextEncoder().encode(jwtSecret));
+  return signTestSupabaseToken(supabaseUrl, { sub: userId });
 }
 
 async function listen(store: PgStore): Promise<string> {
-  const server = createServiceServer({ store, jwtSecret, supabaseUrl });
+  const server = createServiceServer({ store, jwks: await testSupabaseJwks(), supabaseUrl });
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   return `ws://127.0.0.1:${(server.address() as AddressInfo).port}`;

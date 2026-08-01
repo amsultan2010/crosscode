@@ -22,13 +22,14 @@ import {
 } from "@crosscode/protocol";
 import { contentHash, redactPath } from "@crosscode/core";
 import { ZodError } from "zod";
+import type { JWTVerifyGetKey } from "jose";
 import { verifySupabaseAccessToken } from "./auth.js";
 import { PgStore, StoreConflictError, StoreUnauthorizedError, type Membership, type StoredOperation } from "./store.js";
 import { attachWebSocketGateway } from "./ws.js";
 
 export type ServiceServerOptions = {
   store: PgStore;
-  jwtSecret: string;
+  jwks: JWTVerifyGetKey;
   supabaseUrl: string;
   bodyLimitBytes?: number;
   tls?: { key: string | Buffer; cert: string | Buffer };
@@ -281,7 +282,7 @@ async function authenticate(request: IncomingMessage, options: ServiceServerOpti
   }
   let userId: string;
   try {
-    const claims = await verifySupabaseAccessToken(authorization.slice(7), options.jwtSecret, options.supabaseUrl);
+    const claims = await verifySupabaseAccessToken(authorization.slice(7), options.jwks, options.supabaseUrl);
     userId = claims.userId;
   } catch {
     throw new HttpError(401, "Access token is invalid or expired");

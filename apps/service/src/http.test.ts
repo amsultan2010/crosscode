@@ -1,12 +1,11 @@
 import type { AddressInfo } from "node:net";
 import type { HandoffRequestedEvent, IntentPublishedEvent, TransactionCreatedEvent } from "@crosscode/protocol";
 import { contentHash } from "@crosscode/core";
-import { SignJWT } from "jose";
 import { afterEach, describe, expect, it } from "vitest";
 import { createServiceServer } from "./http.js";
 import type { Membership, PgStore, StoredOperation } from "./store.js";
+import { signTestSupabaseToken, testSupabaseJwks } from "./test-jwks.js";
 
-const jwtSecret = "service-http-test-secret-with-at-least-32-bytes";
 const supabaseUrl = "https://rzsslbmahvoesjxmgefr.supabase.co";
 const WORKSPACE_HEADER = "x-crosscode-workspace-id";
 
@@ -150,18 +149,11 @@ describe("service HTTP boundary", () => {
 });
 
 async function signToken(userId: string): Promise<string> {
-  return new SignJWT({ email: "member@example.com", role: "authenticated" })
-    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
-    .setSubject(userId)
-    .setIssuer(`${supabaseUrl}/auth/v1`)
-    .setAudience("authenticated")
-    .setIssuedAt()
-    .setExpirationTime("15m")
-    .sign(new TextEncoder().encode(jwtSecret));
+  return signTestSupabaseToken(supabaseUrl, { sub: userId });
 }
 
 async function listen(store: PgStore, bodyLimitBytes?: number): Promise<string> {
-  const server = createServiceServer({ store, jwtSecret, supabaseUrl, bodyLimitBytes });
+  const server = createServiceServer({ store, jwks: await testSupabaseJwks(), supabaseUrl, bodyLimitBytes });
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

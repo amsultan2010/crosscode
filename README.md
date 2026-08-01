@@ -80,12 +80,12 @@ Crosscode's coordination service verifies Supabase-issued JWTs and stores worksp
 - **Project URL** (Project Settings → API) → `SUPABASE_URL`
 - **`anon` public key** (Project Settings → API) → `SUPABASE_ANON_KEY`, used by every member's `crosscode -- login`
 - **`service_role` key** (Project Settings → API) → `SUPABASE_SERVICE_ROLE_KEY`, used only by the admin-side `service:provision` command — never distribute this key to members
-- **JWT Secret** (Project Settings → API → JWT Settings) → `SUPABASE_JWT_SECRET`, used by the service to verify Supabase-issued access tokens
 - **Connection string** (Project Settings → Database) → `DATABASE_URL` (Supabase's pooled `postgres://` connection string works as-is)
+
+Supabase projects sign access tokens with an asymmetric key (ES256 by default), verified via the project's public JWKS endpoint (`<SUPABASE_URL>/auth/v1/.well-known/jwks.json`) rather than a shared secret — there is no JWT secret to configure.
 
 ```bash
 export SUPABASE_URL="https://<project-ref>.supabase.co"
-export SUPABASE_JWT_SECRET="<project JWT secret>"
 export SUPABASE_SERVICE_ROLE_KEY="<project service_role key>"
 export DATABASE_URL="<Supabase pooled connection string>"
 export MIGRATION_DATABASE_URL="${DATABASE_URL}"
@@ -107,8 +107,7 @@ Service environment variables:
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `DATABASE_URL` | Supabase (or plain) PostgreSQL connection string | required |
-| `SUPABASE_URL` | Supabase project URL, used to verify token issuer | required |
-| `SUPABASE_JWT_SECRET` | Supabase project JWT secret, at least 32 bytes | required |
+| `SUPABASE_URL` | Supabase project URL, used to verify token issuer and fetch its JWKS | required |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service-role key; only needed by `pnpm service:provision`, not by `pnpm service` itself | required for provisioning |
 | `CROSSCODE_SERVICE_HOST` | Listen address | `127.0.0.1` |
 | `CROSSCODE_SERVICE_PORT` | Listen port | `8788` |

@@ -33,7 +33,7 @@ operations, tasks, claims, handoffs, intents, and an audit log
 `003_validations_cursor.sql`, `004_supabase_auth.sql`). Workspace members
 authenticate directly against Supabase Auth (email + password, `crosscode --
 login`); the service verifies the resulting Supabase-issued JWTs
-(`SUPABASE_JWT_SECRET`/`SUPABASE_URL`, `apps/service/src/auth.ts`) rather than
+(fetched from `SUPABASE_URL`'s JWKS endpoint, `apps/service/src/auth.ts`) rather than
 signing its own. A replica (an individual daemon/device identity) is
 self-registered by an authenticated member calling `POST /v1/replicas`
 (`apps/service/src/http.ts`) instead of being minted through an admin-issued

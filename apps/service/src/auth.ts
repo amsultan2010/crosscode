@@ -1,4 +1,4 @@
-import { jwtVerify } from "jose";
+import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
 
 export type SupabaseAccessClaims = {
   userId: string;
@@ -6,19 +6,24 @@ export type SupabaseAccessClaims = {
   expiresAt: string;
 };
 
-function key(secret: string): Uint8Array {
-  if (Buffer.byteLength(secret) < 32) throw new Error("Supabase JWT secret must contain at least 32 bytes");
-  return new TextEncoder().encode(secret);
+/**
+ * Supabase projects sign access tokens with an asymmetric key (ES256 by default for
+ * new projects) discoverable via their JWKS endpoint, not a static shared secret.
+ * createRemoteJWKSet caches fetched keys and handles rotation on its own, so build
+ * one per project URL and reuse it across requests rather than per-verification.
+ */
+export function createSupabaseJwks(supabaseUrl: string): JWTVerifyGetKey {
+  const normalized = supabaseUrl.replace(/\/$/, "");
+  return createRemoteJWKSet(new URL(`${normalized}/auth/v1/.well-known/jwks.json`));
 }
 
 export async function verifySupabaseAccessToken(
   token: string,
-  jwtSecret: string,
+  jwks: JWTVerifyGetKey,
   supabaseUrl: string
 ): Promise<SupabaseAccessClaims> {
   const issuer = `${supabaseUrl.replace(/\/$/, "")}/auth/v1`;
-  const { payload } = await jwtVerify(token, key(jwtSecret), {
-    algorithms: ["HS256"],
+  const { payload } = await jwtVerify(token, jwks, {
     issuer,
     audience: "authenticated"
   });

@@ -1,16 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { SignJWT } from "jose";
 import type { PgStore } from "../../service/src/index.js";
+import { signTestSupabaseToken, testSupabaseJwks } from "../../service/src/test-jwks.js";
 
 /**
  * Test-only fabrication of a Supabase-shaped access token and a provisioned workspace
  * member, for Postgres integration tests that need a valid identity but have no real
- * Supabase Auth project to sign against. The service only verifies the JWT's signature,
- * issuer, audience, and subject (see apps/service/src/auth.ts) -- it never calls out to
- * Supabase itself -- so a locally-signed token with the same shared secret is sufficient.
+ * Supabase Auth project to sign against. Delegates to apps/service/src/test-jwks.ts's
+ * shared ES256 test keypair, matching what apps/service/src/auth.ts actually verifies
+ * (Supabase signs with an asymmetric key, not a shared secret).
  */
 export const TEST_SUPABASE_URL = "https://test.supabase.co";
-export const TEST_JWT_SECRET = "daemon-integration-test-secret-with-at-least-32-bytes";
+export { testSupabaseJwks };
 
 export type TestPrincipal = {
   workspaceId: string;
@@ -21,21 +21,12 @@ export type TestPrincipal = {
 
 export async function fabricateSupabaseAccessToken(
   userId: string,
-  jwtSecret: string = TEST_JWT_SECRET,
   supabaseUrl: string = TEST_SUPABASE_URL,
   ttlSeconds = 3_600
 ): Promise<{ accessToken: string; expiresAt: string }> {
-  const issuer = `${supabaseUrl.replace(/\/$/, "")}/auth/v1`;
-  const expiresAtSeconds = Math.floor(Date.now() / 1_000) + ttlSeconds;
-  const accessToken = await new SignJWT({})
-    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
-    .setSubject(userId)
-    .setIssuer(issuer)
-    .setAudience("authenticated")
-    .setIssuedAt()
-    .setExpirationTime(expiresAtSeconds)
-    .sign(new TextEncoder().encode(jwtSecret));
-  return { accessToken, expiresAt: new Date(expiresAtSeconds * 1_000).toISOString() };
+  const accessToken = await signTestSupabaseToken(supabaseUrl, { sub: userId, ttl: `${ttlSeconds}s` });
+  const expiresAt = new Date(Date.now() + ttlSeconds * 1_000).toISOString();
+  return { accessToken, expiresAt };
 }
 
 /**
