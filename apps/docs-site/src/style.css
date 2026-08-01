@@ -116,6 +116,31 @@ header.site-header a:hover {
   color: var(--bg);
 }
 
+.nav-github {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  padding: 0.32rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--fg) !important;
+  text-decoration: none !important;
+}
+
+.nav-github:hover {
+  background: var(--bg-raised);
+  border-color: var(--fg-dim);
+}
+
+.nav-github svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  fill: currentColor;
+  flex-shrink: 0;
+}
+
 main {
   max-width: var(--max-width);
   margin: 0 auto;
@@ -309,6 +334,24 @@ footer.site-footer {
   font-size: 0.84rem;
   padding: 2rem 1.25rem;
   text-align: center;
+}
+
+footer.site-footer p {
+  color: var(--muted);
+  margin: 0.5rem 0 0;
+}
+
+footer.site-footer p:first-child {
+  margin-top: 0;
+}
+
+footer.site-footer a {
+  color: var(--muted);
+  text-decoration-color: var(--border-strong);
+}
+
+footer.site-footer a:hover {
+  color: var(--fg);
 }
 
 .cta {
@@ -1025,6 +1068,33 @@ main.docs-layout {
 .docs-content {
   flex: 1;
   min-width: 0;
+  max-width: 42rem;
+}
+
+.docs-content > h1:first-child {
+  margin-top: 0;
+}
+
+.docs-content ul,
+.docs-content ol {
+  padding-left: 1.2rem;
+}
+
+.docs-content li {
+  margin-bottom: 0.5rem;
+  line-height: 1.6;
+}
+
+.docs-content li::marker {
+  color: var(--muted);
+}
+
+.docs-content li:last-child {
+  margin-bottom: 0;
+}
+
+.docs-content h2:first-of-type {
+  margin-top: 2.25rem;
 }
 
 .docs-next {
