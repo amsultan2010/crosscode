@@ -84,6 +84,9 @@ importers:
 
   apps/docs-site:
     devDependencies:
+      markdown-it:
+        specifier: ^14.1.0
+        version: 14.3.0
       vite:
         specifier: ^7.1.0
         version: 7.3.6(@types/node@22.20.1)(tsx@4.23.1)(yaml@2.9.0)

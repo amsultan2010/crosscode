@@ -3,11 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "generate:docs": "node scripts/generate-docs.mjs",
+    "dev": "node scripts/generate-docs.mjs && vite",
+    "build": "node scripts/generate-docs.mjs && vite build",
     "preview": "vite preview"
   },
   "devDependencies": {
+    "markdown-it": "^14.1.0",
     "vite": "^7.1.0"
   }
 }
