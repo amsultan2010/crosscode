@@ -67,10 +67,13 @@ other checkouts of this same repository. Do the following:
 - Nothing here requires `pnpm build` — the MCP server and daemon both run directly
   from TypeScript source via `tsx`, so `pnpm install` is the only setup step.
 - Joining an existing team workspace (so proposals from other people/agents show
-  up) isn't wired into this prompt yet — that needs `CROSSCODE_SERVICE_URL` and
-  `CROSSCODE_ENROLLMENT_TOKEN` set in the MCP server's `env` block, which requires
-  a running coordination service and an issued enrollment token. The daemon-side
-  support for this already exists (`apps/mcp-server/src/bootstrap.ts` reads both
-  variables automatically); only the hosted signup/billing flow that issues the
-  token is still pending (see BUILD_INSTRUCTIONS.md and the project's near-term
-  plan for the hosted service, Clerk auth, and Stripe billing).
+  up) isn't wired into this prompt yet — that needs `CROSSCODE_SERVICE_URL` set in
+  the MCP server's `env` block plus a prior `crosscode -- login` (Supabase Auth
+  email+password sign-in) in the worktree, which requires a running coordination
+  service and an administrator-provisioned Supabase user (`pnpm
+  service:provision`, see README.md). The daemon-side support for this already
+  exists (`apps/mcp-server/src/bootstrap.ts` reads `CROSSCODE_SERVICE_URL` and
+  checks for a logged-in session); only the hosted signup/billing flow that
+  provisions new users without a manual admin step is still pending (see
+  BUILD_INSTRUCTIONS.md and the project's near-term plan for the hosted service
+  and billing).

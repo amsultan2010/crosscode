@@ -8,7 +8,7 @@ per-worktree daemon --- SQLite events + outbox
         |
         | authenticated HTTP sync
         v
-coordination service --- PostgreSQL operations + audit log
+coordination service --- Supabase-hosted PostgreSQL operations + audit log
         |
         v
 other daemons receive reviewable proposals
@@ -27,15 +27,30 @@ directory; the same descriptor is what `apps/mcp-server` and `apps/cli` connect 
 
 ## Coordination service (`apps/service`)
 
-The service is a PostgreSQL-backed record of workspace state: operations, tasks,
-claims, handoffs, intents, and an audit log (`apps/service/migrations/001_initial.sql`,
-`002_handoffs_intents.sql`). Daemons authenticate with short-lived JWTs obtained
-through one-time replica enrollment, upload operations idempotently, and download
-them back in cursor order. Live updates also fan out over WebSocket (presence,
-task, claim, handoff, intent, operation), with a durable poll fallback when a
-replica is offline. The service enforces workspace membership and role on every
-request; it does not execute anything a replica sends it beyond storing and
-relaying it.
+The service is a Supabase-hosted-PostgreSQL-backed record of workspace state:
+operations, tasks, claims, handoffs, intents, and an audit log
+(`apps/service/migrations/001_initial.sql`, `002_handoffs_intents.sql`,
+`003_validations_cursor.sql`, `004_supabase_auth.sql`). Workspace members
+authenticate directly against Supabase Auth (email + password, `crosscode --
+login`); the service verifies the resulting Supabase-issued JWTs
+(`SUPABASE_JWT_SECRET`/`SUPABASE_URL`, `apps/service/src/auth.ts`) rather than
+signing its own. A replica (an individual daemon/device identity) is
+self-registered by an authenticated member calling `POST /v1/replicas`
+(`apps/service/src/http.ts`) instead of being minted through an admin-issued
+enrollment token. Every authenticated request carries an
+`x-crosscode-workspace-id` header naming which workspace it targets, since a
+Supabase access token only carries the member's `auth.users` id, not a
+workspace/replica scope the way Crosscode's own previously-issued tokens did.
+Daemons upload operations idempotently and download them back in cursor order.
+Live updates also fan out over WebSocket (presence, task, claim, handoff,
+intent, operation), with a durable poll fallback when a replica is offline. The
+service enforces workspace membership and role on every request (including
+Postgres Row Level Security as defense-in-depth alongside the service's own
+`resolveMembership` checks); it does not execute anything a replica sends it
+beyond storing and relaying it. Workspace and member provisioning
+(`pnpm service:provision`) remains an administrator-side operation, now backed
+by the Supabase admin API (`SUPABASE_SERVICE_ROLE_KEY`) to create or invite
+Supabase Auth users instead of writing one-time enrollment tokens.
 
 ## Thin clients (`apps/cli`, `apps/mcp-server`)
 
