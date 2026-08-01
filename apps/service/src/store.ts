@@ -39,14 +39,28 @@ export class PgStore {
   }
 
   async migrate(): Promise<void> {
-    const sql = await readFile(new URL("../migrations/001_initial.sql", import.meta.url), "utf8");
-    await this.pool.query(sql);
-    const handoffsIntentsSql = await readFile(new URL("../migrations/002_handoffs_intents.sql", import.meta.url), "utf8");
-    await this.pool.query(handoffsIntentsSql);
-    const validationsCursorSql = await readFile(new URL("../migrations/003_validations_cursor.sql", import.meta.url), "utf8");
-    await this.pool.query(validationsCursorSql);
-    const supabaseAuthSql = await readFile(new URL("../migrations/004_supabase_auth.sql", import.meta.url), "utf8");
-    await this.pool.query(supabaseAuthSql);
+    // Migrations 004/005 DROP+CREATE RLS policies, which (unlike the IF NOT EXISTS
+    // DDL in 001-003) is not safe to run concurrently: two connections racing to
+    // DROP/CREATE the same policy on the same table can deadlock in Postgres. Every
+    // test file that shares one database calls migrate() at startup, so serialize
+    // the whole sequence behind a session-level advisory lock on a single connection.
+    const client = await this.pool.connect();
+    try {
+      await client.query("SELECT pg_advisory_lock(hashtext('crosscode_migrate'))");
+      const sql = await readFile(new URL("../migrations/001_initial.sql", import.meta.url), "utf8");
+      await client.query(sql);
+      const handoffsIntentsSql = await readFile(new URL("../migrations/002_handoffs_intents.sql", import.meta.url), "utf8");
+      await client.query(handoffsIntentsSql);
+      const validationsCursorSql = await readFile(new URL("../migrations/003_validations_cursor.sql", import.meta.url), "utf8");
+      await client.query(validationsCursorSql);
+      const supabaseAuthSql = await readFile(new URL("../migrations/004_supabase_auth.sql", import.meta.url), "utf8");
+      await client.query(supabaseAuthSql);
+      const rlsHardeningSql = await readFile(new URL("../migrations/005_rls_hardening.sql", import.meta.url), "utf8");
+      await client.query(rlsHardeningSql);
+    } finally {
+      await client.query("SELECT pg_advisory_unlock(hashtext('crosscode_migrate'))");
+      client.release();
+    }
   }
 
   async close(): Promise<void> {

@@ -14,6 +14,28 @@ ALTER TABLE replicas DROP COLUMN IF EXISTS credential_hash;
 
 DROP TABLE IF EXISTS enrollments;
 
+-- A real Supabase project already provides schema `auth` and function `auth.uid()`
+-- (used below by membership_workspace_ids()). A plain Postgres database used for
+-- local/CI testing has neither, so migrating it would otherwise fail with
+-- "schema auth does not exist" the moment CREATE FUNCTION tries to resolve the
+-- reference. Create a minimal stub only when they are missing; this is a no-op
+-- against real Supabase, where auth.uid() reads the caller's JWT `sub` claim, and
+-- gives local/CI Postgres a resolvable (always-NULL) stand-in instead. The stub's
+-- NULL return only matters to `authenticated`/`anon`-role PostgREST callers; the
+-- service itself always connects with a privileged role that bypasses RLS.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'auth') THEN
+    CREATE SCHEMA auth;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'auth' AND p.proname = 'uid'
+  ) THEN
+    CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $stub$ SELECT NULL::uuid $stub$;
+  END IF;
+END $$;
+
 -- Row Level Security below is defense-in-depth, not the primary authorization
 -- mechanism: the service itself still connects with a privileged Postgres role (not
 -- through PostgREST), and application code in authenticate()/resolveMembership()
@@ -51,13 +73,24 @@ ALTER TABLE audit_events ENABLE ROW LEVEL SECURITY;
 -- workspaces / members: membership itself is only ever written by the service's
 -- privileged role (via provisionAdmin/addMember, using the Supabase service_role
 -- key), so these get read-only policies; there is no self-service INSERT/UPDATE path.
+--
+-- Every policy below is preceded by DROP POLICY IF EXISTS: unlike the CREATE TABLE
+-- IF NOT EXISTS / ADD COLUMN IF NOT EXISTS statements elsewhere in these migrations,
+-- Postgres has no CREATE POLICY IF NOT EXISTS, and PgStore.migrate() is called by
+-- every test file (and by the standalone migrate script) against the same
+-- already-migrated database, so this needs to be safe to run repeatedly.
+DROP POLICY IF EXISTS workspaces_member_select ON workspaces;
 CREATE POLICY workspaces_member_select ON workspaces
   FOR SELECT USING (id IN (SELECT public.membership_workspace_ids()));
 
+DROP POLICY IF EXISTS members_member_select ON members;
 CREATE POLICY members_member_select ON members
   FOR SELECT USING (workspace_id IN (SELECT public.membership_workspace_ids()));
 
 -- replicas: self-service registration by any authenticated member.
+DROP POLICY IF EXISTS replicas_member_select ON replicas;
+DROP POLICY IF EXISTS replicas_member_insert ON replicas;
+DROP POLICY IF EXISTS replicas_member_update ON replicas;
 CREATE POLICY replicas_member_select ON replicas
   FOR SELECT USING (workspace_id IN (SELECT public.membership_workspace_ids()));
 CREATE POLICY replicas_member_insert ON replicas
@@ -66,6 +99,9 @@ CREATE POLICY replicas_member_update ON replicas
   FOR UPDATE USING (workspace_id IN (SELECT public.membership_workspace_ids()))
   WITH CHECK (workspace_id IN (SELECT public.membership_workspace_ids()));
 
+DROP POLICY IF EXISTS sessions_member_select ON sessions;
+DROP POLICY IF EXISTS sessions_member_insert ON sessions;
+DROP POLICY IF EXISTS sessions_member_update ON sessions;
 CREATE POLICY sessions_member_select ON sessions
   FOR SELECT USING (workspace_id IN (SELECT public.membership_workspace_ids()));
 CREATE POLICY sessions_member_insert ON sessions
@@ -74,6 +110,9 @@ CREATE POLICY sessions_member_update ON sessions
   FOR UPDATE USING (workspace_id IN (SELECT public.membership_workspace_ids()))
   WITH CHECK (workspace_id IN (SELECT public.membership_workspace_ids()));
 
+DROP POLICY IF EXISTS tasks_member_select ON tasks;
+DROP POLICY IF EXISTS tasks_member_insert ON tasks;
+DROP POLICY IF EXISTS tasks_member_update ON tasks;
 CREATE POLICY tasks_member_select ON tasks
   FOR SELECT USING (workspace_id IN (SELECT public.membership_workspace_ids()));
 CREATE POLICY tasks_member_insert ON tasks
@@ -82,6 +121,9 @@ CREATE POLICY tasks_member_update ON tasks
   FOR UPDATE USING (workspace_id IN (SELECT public.membership_workspace_ids()))
   WITH CHECK (workspace_id IN (SELECT public.membership_workspace_ids()));
 
+DROP POLICY IF EXISTS claims_member_select ON claims;
+DROP POLICY IF EXISTS claims_member_insert ON claims;
+DROP POLICY IF EXISTS claims_member_update ON claims;
 CREATE POLICY claims_member_select ON claims
   FOR SELECT USING (workspace_id IN (SELECT public.membership_workspace_ids()));
 CREATE POLICY claims_member_insert ON claims
@@ -90,36 +132,50 @@ CREATE POLICY claims_member_update ON claims
   FOR UPDATE USING (workspace_id IN (SELECT public.membership_workspace_ids()))
   WITH CHECK (workspace_id IN (SELECT public.membership_workspace_ids()));
 
+DROP POLICY IF EXISTS operations_member_select ON operations;
+DROP POLICY IF EXISTS operations_member_insert ON operations;
 CREATE POLICY operations_member_select ON operations
   FOR SELECT USING (workspace_id IN (SELECT public.membership_workspace_ids()));
 CREATE POLICY operations_member_insert ON operations
   FOR INSERT WITH CHECK (workspace_id IN (SELECT public.membership_workspace_ids()));
 
+DROP POLICY IF EXISTS operation_files_member_select ON operation_files;
+DROP POLICY IF EXISTS operation_files_member_insert ON operation_files;
 CREATE POLICY operation_files_member_select ON operation_files
   FOR SELECT USING (workspace_id IN (SELECT public.membership_workspace_ids()));
 CREATE POLICY operation_files_member_insert ON operation_files
   FOR INSERT WITH CHECK (workspace_id IN (SELECT public.membership_workspace_ids()));
 
+DROP POLICY IF EXISTS operation_dependencies_member_select ON operation_dependencies;
+DROP POLICY IF EXISTS operation_dependencies_member_insert ON operation_dependencies;
 CREATE POLICY operation_dependencies_member_select ON operation_dependencies
   FOR SELECT USING (workspace_id IN (SELECT public.membership_workspace_ids()));
 CREATE POLICY operation_dependencies_member_insert ON operation_dependencies
   FOR INSERT WITH CHECK (workspace_id IN (SELECT public.membership_workspace_ids()));
 
+DROP POLICY IF EXISTS operation_reviews_member_select ON operation_reviews;
+DROP POLICY IF EXISTS operation_reviews_member_insert ON operation_reviews;
 CREATE POLICY operation_reviews_member_select ON operation_reviews
   FOR SELECT USING (workspace_id IN (SELECT public.membership_workspace_ids()));
 CREATE POLICY operation_reviews_member_insert ON operation_reviews
   FOR INSERT WITH CHECK (workspace_id IN (SELECT public.membership_workspace_ids()));
 
+DROP POLICY IF EXISTS validations_member_select ON validations;
+DROP POLICY IF EXISTS validations_member_insert ON validations;
 CREATE POLICY validations_member_select ON validations
   FOR SELECT USING (workspace_id IN (SELECT public.membership_workspace_ids()));
 CREATE POLICY validations_member_insert ON validations
   FOR INSERT WITH CHECK (workspace_id IN (SELECT public.membership_workspace_ids()));
 
+DROP POLICY IF EXISTS checkpoints_member_select ON checkpoints;
+DROP POLICY IF EXISTS checkpoints_member_insert ON checkpoints;
 CREATE POLICY checkpoints_member_select ON checkpoints
   FOR SELECT USING (workspace_id IN (SELECT public.membership_workspace_ids()));
 CREATE POLICY checkpoints_member_insert ON checkpoints
   FOR INSERT WITH CHECK (workspace_id IN (SELECT public.membership_workspace_ids()));
 
+DROP POLICY IF EXISTS audit_events_member_select ON audit_events;
+DROP POLICY IF EXISTS audit_events_member_insert ON audit_events;
 CREATE POLICY audit_events_member_select ON audit_events
   FOR SELECT USING (workspace_id IN (SELECT public.membership_workspace_ids()));
 CREATE POLICY audit_events_member_insert ON audit_events
