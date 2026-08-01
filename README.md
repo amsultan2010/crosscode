@@ -93,7 +93,7 @@ pnpm service:migrate
 pnpm service
 ```
 
-The last migration (`apps/service/migrations/004_supabase_auth.sql`) enables Row Level Security and maps `members` to Supabase's `auth.users` by `user_id`; because a real `REFERENCES auth.users(id)` foreign key requires the `auth` schema (which only exists inside an actual Supabase project, not a plain test Postgres instance), add it once by hand after migrating against Supabase:
+Migration `004_supabase_auth.sql` enables Row Level Security and maps `members` to Supabase's `auth.users` by `user_id`; `005_rls_hardening.sql` adds the RLS policies for `handoffs`/`intents` and moves the `membership_workspace_ids()` helper into a `private` schema so it isn't directly callable as a PostgREST RPC endpoint. Because a real `REFERENCES auth.users(id)` foreign key requires the `auth` schema (which only exists inside an actual Supabase project, not a plain test Postgres instance), add it once by hand after migrating against Supabase:
 
 ```sql
 ALTER TABLE members ADD CONSTRAINT members_user_id_fkey
