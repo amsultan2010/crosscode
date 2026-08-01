@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const exec = promisify(execFile);
-const SERVICE_NAME = "crosscode-replica-secret";
+const SERVICE_NAME = "crosscode-supabase-session";
 
 /**
  * Shells out to the OS-native secret store rather than depending on a native npm module

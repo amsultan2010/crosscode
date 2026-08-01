@@ -7,13 +7,11 @@ import {
   cursorResponseSchema,
   daemonConfigSchema,
   daemonConnectionSchema,
-  enrollmentRequestSchema,
-  enrollmentResponseSchema,
   eventEnvelopeSchema,
   principalSchema,
+  registerReplicaRequestSchema,
+  registerReplicaResponseSchema,
   remoteOperationSchema,
-  replicaTokenExchangeRequestSchema,
-  replicaTokenExchangeResponseSchema,
   serviceIngestReceiptSchema,
   serviceIngestRequestSchema,
   publishRequestSchema,
@@ -73,29 +71,21 @@ describe("protocol schemas", () => {
     expect(daemonConnectionSchema.parse({ pid: 123, port: 4567, secret: "secret", startedAt: "2026-01-01T00:00:00.000Z" }).port).toBe(4567);
   });
 
-  it("validates service principals and one-time enrollment", () => {
+  it("validates service principals", () => {
     const principal = { workspaceId: "workspace-1", actorId: "actor-1", replicaId: "replica-1", role: "member" as const };
-    const enrollmentCredential = "one-time-token";
     expect(principalSchema.parse(principal)).toEqual(principal);
     expect(() => principalSchema.parse({ ...principal, role: "administrator" })).toThrow();
     expect(() => principalSchema.parse({ ...principal, extra: true })).toThrow();
-
-    expect(enrollmentRequestSchema.parse({ token: enrollmentCredential })).toEqual({ token: enrollmentCredential });
-    const enrollment = { accessToken: "access-token", expiresAt: "2026-01-01T00:05:00.000Z", principal, replicaSecret: "replica-secret" };
-    expect(enrollmentResponseSchema.parse(enrollment)).toEqual(enrollment);
-    expect(() => enrollmentRequestSchema.parse({ token: enrollmentCredential, workspaceId: "workspace-1" })).toThrow();
   });
 
-  it("validates replica token exchange without returning the replica secret", () => {
-    const principal = { workspaceId: "workspace-1", actorId: "actor-1", replicaId: "replica-1", role: "viewer" as const };
-    const request = { workspaceId: principal.workspaceId, actorId: principal.actorId, replicaId: principal.replicaId, replicaSecret: "replica-secret" };
-    expect(replicaTokenExchangeRequestSchema.parse(request)).toEqual(request);
-    expect(replicaTokenExchangeResponseSchema.parse({ accessToken: "access-token", expiresAt: "2026-01-01T00:05:00.000Z", principal })).toEqual({
-      accessToken: "access-token", expiresAt: "2026-01-01T00:05:00.000Z", principal
-    });
-    expect(() => replicaTokenExchangeResponseSchema.parse({
-      accessToken: "access-token", expiresAt: "2026-01-01T00:05:00.000Z", principal, replicaSecret: "must-not-leak"
-    })).toThrow();
+  it("validates self-service replica registration requests and responses", () => {
+    expect(registerReplicaRequestSchema.parse({ name: "my-laptop" })).toEqual({ name: "my-laptop" });
+    expect(() => registerReplicaRequestSchema.parse({ name: "" })).toThrow();
+    expect(() => registerReplicaRequestSchema.parse({ name: "my-laptop", token: "x" })).toThrow();
+
+    const response = { replicaId: "replica-1", createdAt: "2026-01-01T00:00:00.000Z" };
+    expect(registerReplicaResponseSchema.parse(response)).toEqual(response);
+    expect(() => registerReplicaResponseSchema.parse({ ...response, createdAt: "not-a-date" })).toThrow();
   });
 
   it("binds transaction-created event identity to its transaction payload", () => {
@@ -129,10 +119,19 @@ describe("protocol schemas", () => {
 
   it("accepts secure or loopback daemon service configuration only", () => {
     const base = { workspaceId: "workspace-1", replicaId: "replica-1", actorId: "actor-1" };
-    expect(daemonConfigSchema.parse({ ...base, service: { url: "https://service.example.test", replicaSecret: "secret" } }).service?.url).toBe("https://service.example.test");
-    expect(daemonConfigSchema.parse({ ...base, service: { url: "http://127.0.0.1:8080", replicaSecret: "secret" } }).service?.url).toBe("http://127.0.0.1:8080");
-    expect(() => daemonConfigSchema.parse({ ...base, service: { url: "http://service.example.test", replicaSecret: "secret" } })).toThrow();
-    expect(() => daemonConfigSchema.parse({ ...base, service: { url: "https://service.example.test", replicaSecret: "secret", token: "x" } })).toThrow();
+    const session = { accessToken: "access-token", refreshToken: "refresh-token", expiresAt: "2026-01-01T00:05:00.000Z" };
+    expect(daemonConfigSchema.parse({ ...base, service: { url: "https://service.example.test", session } }).service?.url).toBe("https://service.example.test");
+    expect(daemonConfigSchema.parse({ ...base, service: { url: "http://127.0.0.1:8080", session } }).service?.url).toBe("http://127.0.0.1:8080");
+    expect(() => daemonConfigSchema.parse({ ...base, service: { url: "http://service.example.test", session } })).toThrow();
+    expect(() => daemonConfigSchema.parse({ ...base, service: { url: "https://service.example.test", session, token: "x" } })).toThrow();
+    expect(() => daemonConfigSchema.parse({ ...base, service: { url: "https://service.example.test", session: { ...session, accessToken: "" } } })).toThrow();
+  });
+
+  it("makes replicaId optional on the daemon config until self-registration completes", () => {
+    const { replicaId: _replicaId, ...withoutReplicaId } = { workspaceId: "workspace-1", replicaId: "replica-1", actorId: "actor-1" };
+    expect(daemonConfigSchema.parse(withoutReplicaId)).toEqual(withoutReplicaId);
+    expect(daemonConfigSchema.parse({ ...withoutReplicaId, replicaId: "replica-1" }).replicaId).toBe("replica-1");
+    expect(() => daemonConfigSchema.parse({ ...withoutReplicaId, replicaId: "" })).toThrow();
   });
 
   it("validates WebSocket handshake, presence, fan-out, and ack/error messages", () => {

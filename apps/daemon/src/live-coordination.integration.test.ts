@@ -5,8 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { PresenceUpdate } from "@crosscode/protocol";
 import { createTempRepo, cleanupTempRepos, waitFor } from "@crosscode/test-fixtures";
 import { createServiceServer, PgStore } from "../../service/src/index.js";
-import { CoordinationServiceClient } from "./service-client.js";
 import { writeDaemonConfig } from "./runtime.js";
+import { legacyEnroll } from "./test-legacy-enroll.js";
 import { spawnDaemon, stopDaemon, stopAllDaemons, type ManagedDaemon } from "./test-helpers.js";
 import type { StoredOperation } from "./types.js";
 
@@ -37,15 +37,15 @@ describe.skipIf(!databaseUrl)("PostgreSQL live WebSocket coordination", () => {
     const port = (server.address() as AddressInfo).port;
     const url = `http://127.0.0.1:${port}`;
     try {
-      const enrollA = await CoordinationServiceClient.enroll(url, owner.enrollmentToken);
-      const enrollB = await CoordinationServiceClient.enroll(url, bob.enrollmentToken);
-      const enrollC = await CoordinationServiceClient.enroll(url, carol.enrollmentToken);
+      const enrollA = await legacyEnroll(url, owner.enrollmentToken);
+      const enrollB = await legacyEnroll(url, bob.enrollmentToken);
+      const enrollC = await legacyEnroll(url, carol.enrollmentToken);
       const rootA = await repository();
       const rootB = await repository();
       const rootC = await repository();
-      await writeDaemonConfig(rootA, { workspaceId: enrollA.principal.workspaceId, replicaId: enrollA.principal.replicaId, actorId: enrollA.principal.actorId, service: { url, replicaSecret: enrollA.replicaSecret } });
-      await writeDaemonConfig(rootB, { workspaceId: enrollB.principal.workspaceId, replicaId: enrollB.principal.replicaId, actorId: enrollB.principal.actorId, service: { url, replicaSecret: enrollB.replicaSecret } });
-      await writeDaemonConfig(rootC, { workspaceId: enrollC.principal.workspaceId, replicaId: enrollC.principal.replicaId, actorId: enrollC.principal.actorId, service: { url, replicaSecret: enrollC.replicaSecret } });
+      await writeDaemonConfig(rootA, { workspaceId: enrollA.principal.workspaceId, replicaId: enrollA.principal.replicaId, actorId: enrollA.principal.actorId, service: { url, session: { accessToken: enrollA.accessToken, refreshToken: "legacy-bridge-unused", expiresAt: enrollA.expiresAt } } });
+      await writeDaemonConfig(rootB, { workspaceId: enrollB.principal.workspaceId, replicaId: enrollB.principal.replicaId, actorId: enrollB.principal.actorId, service: { url, session: { accessToken: enrollB.accessToken, refreshToken: "legacy-bridge-unused", expiresAt: enrollB.expiresAt } } });
+      await writeDaemonConfig(rootC, { workspaceId: enrollC.principal.workspaceId, replicaId: enrollC.principal.replicaId, actorId: enrollC.principal.actorId, service: { url, session: { accessToken: enrollC.accessToken, refreshToken: "legacy-bridge-unused", expiresAt: enrollC.expiresAt } } });
 
       const presenceLogA: PresenceUpdate[] = [];
       const presenceLogB: PresenceUpdate[] = [];

@@ -12,7 +12,7 @@ import {
   type RemoteTask,
   type RemoteValidation
 } from "@crosscode/protocol";
-import { fetchAccessToken } from "./service-client.js";
+export type AccessTokenProvider = { getValidAccessToken(): Promise<string> };
 
 export type LiveSyncCallbacks = {
   onOperation: (operation: RemoteOperation) => void;
@@ -42,7 +42,8 @@ export class LiveSyncClient {
 
   constructor(
     private readonly identity: Pick<DaemonConfig, "workspaceId" | "actorId" | "replicaId">,
-    private readonly service: NonNullable<DaemonConfig["service"]>,
+    private readonly service: Pick<NonNullable<DaemonConfig["service"]>, "url">,
+    private readonly tokenProvider: AccessTokenProvider,
     private readonly callbacks: LiveSyncCallbacks,
     options: LiveSyncOptions = {}
   ) {
@@ -65,7 +66,7 @@ export class LiveSyncClient {
     if (this.stopped) return;
     let accessToken: string;
     try {
-      accessToken = await fetchAccessToken(this.service.url, this.identity, this.service);
+      accessToken = await this.tokenProvider.getValidAccessToken();
     } catch {
       this.scheduleReconnect();
       return;

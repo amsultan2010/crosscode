@@ -1,14 +1,16 @@
+import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import {
   claimIngestReceiptSchema,
   claimCursorResponseSchema,
   cursorResponseSchema,
-  enrollmentResponseSchema,
   handoffCursorResponseSchema,
   handoffIngestReceiptSchema,
   intentCursorResponseSchema,
   intentIngestReceiptSchema,
+  registerReplicaRequestSchema,
+  registerReplicaResponseSchema,
   remoteOperationSchema,
-  replicaTokenExchangeResponseSchema,
   serviceIngestReceiptSchema,
   taskIngestReceiptSchema,
   taskCursorResponseSchema,
@@ -16,7 +18,6 @@ import {
   validationCursorResponseSchema,
   validationIngestReceiptSchema,
   type DaemonConfig,
-  type EnrollmentResponse,
   type RemoteClaim,
   type RemoteHandoff,
   type RemoteIntent,
@@ -26,16 +27,58 @@ import {
 import type { RemoteOperation } from "../../service/src/index.js";
 import type { ClaimOutboundRecord, HandoffOutboundRecord, IntentOutboundRecord, OutboundRecord, TaskOutboundRecord, ValidationOutboundRecord } from "./state.js";
 import type { RemoteSyncTransport } from "./index.js";
+import { getSupabaseClient, toStoredSession, type StoredSession } from "./supabase-client.js";
 
 type Envelope<T> = { ok: true; data: T } | { ok: false; error: string };
 
+export type CoordinationServiceIdentity = Pick<DaemonConfig, "workspaceId" | "actorId"> & { replicaId?: string };
+
+export type CoordinationServiceHooks = {
+  onSessionRefreshed?: (session: StoredSession) => Promise<void> | void;
+  onReplicaRegistered?: (replicaId: string) => Promise<void> | void;
+};
+
+/**
+ * identity.replicaId is mutated in place by ensureReplicaRegistered() so callers that
+ * hold a reference to the same identity object observe the newly assigned id.
+ */
 export class CoordinationServiceClient implements RemoteSyncTransport {
-  private accessToken?: string;
+  private session: StoredSession;
 
-  constructor(private readonly identity: Pick<DaemonConfig, "workspaceId" | "actorId" | "replicaId">, private readonly service: NonNullable<DaemonConfig["service"]>) {}
+  constructor(
+    private readonly identity: CoordinationServiceIdentity,
+    private readonly service: NonNullable<DaemonConfig["service"]>,
+    private readonly hooks: CoordinationServiceHooks = {}
+  ) {
+    if (!service.session) throw new Error("Run 'crosscode -- login' before starting the daemon");
+    this.session = service.session;
+  }
 
-  static async enroll(url: string, token: string): Promise<EnrollmentResponse> {
-    return enrollmentResponseSchema.parse(await request(url, "/v1/enroll", "POST", undefined, { token }, false));
+  get replicaId(): string | undefined {
+    return this.identity.replicaId;
+  }
+
+  async ensureReplicaRegistered(name?: string): Promise<string> {
+    if (this.identity.replicaId) return this.identity.replicaId;
+    const data = await this.authorizedRequest("/v1/replicas", "POST", registerReplicaRequestSchema.parse({ name: name ?? defaultReplicaName() }));
+    const response = registerReplicaResponseSchema.parse(data);
+    this.identity.replicaId = response.replicaId;
+    await this.hooks.onReplicaRegistered?.(response.replicaId);
+    return response.replicaId;
+  }
+
+  async getValidAccessToken(): Promise<string> {
+    if (isExpiringSoon(this.session.expiresAt)) await this.refreshAccessToken();
+    return this.session.accessToken;
+  }
+
+  async refreshAccessToken(): Promise<string> {
+    const supabase = getSupabaseClient();
+    const { data, error } = await supabase.auth.refreshSession({ refresh_token: this.session.refreshToken });
+    if (error || !data.session) throw new Error(`Supabase session refresh failed: ${error?.message ?? "no session returned"}; run 'crosscode -- login' again`);
+    this.session = toStoredSession(data.session);
+    await this.hooks.onSessionRefreshed?.(this.session);
+    return this.session.accessToken;
   }
 
   async upload(record: OutboundRecord): Promise<RemoteOperation> {
@@ -45,7 +88,7 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
     return {
       id: receipt.operationId,
       workspaceId: this.identity.workspaceId,
-      senderReplicaId: this.identity.replicaId,
+      senderReplicaId: this.requireReplicaId(),
       transaction: record.transaction,
       sequence: receipt.serverSequence,
       createdAt: event.createdAt
@@ -69,7 +112,7 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
     return {
       eventId: receipt.eventId,
       workspaceId: this.identity.workspaceId,
-      senderReplicaId: this.identity.replicaId,
+      senderReplicaId: this.requireReplicaId(),
       task: record.event.payload,
       updatedAt: receipt.updatedAt
     };
@@ -86,7 +129,7 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
     return {
       eventId: receipt.eventId,
       workspaceId: this.identity.workspaceId,
-      senderReplicaId: this.identity.replicaId,
+      senderReplicaId: this.requireReplicaId(),
       claim: record.event.payload,
       released: record.event.type === "claim.released",
       updatedAt: receipt.updatedAt
@@ -104,7 +147,7 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
     return {
       eventId: receipt.eventId,
       workspaceId: this.identity.workspaceId,
-      senderReplicaId: this.identity.replicaId,
+      senderReplicaId: this.requireReplicaId(),
       handoff: record.event.payload,
       updatedAt: receipt.updatedAt
     };
@@ -121,7 +164,7 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
     return {
       eventId: receipt.eventId,
       workspaceId: this.identity.workspaceId,
-      senderReplicaId: this.identity.replicaId,
+      senderReplicaId: this.requireReplicaId(),
       intent: record.event.payload,
       updatedAt: receipt.updatedAt
     };
@@ -138,7 +181,7 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
     return {
       eventId: receipt.eventId,
       workspaceId: this.identity.workspaceId,
-      senderReplicaId: this.identity.replicaId,
+      senderReplicaId: this.requireReplicaId(),
       validation: record.event.payload,
       createdAt: receipt.createdAt
     };
@@ -149,36 +192,31 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
     return { validations: data.validations, nextCursor: data.nextCursor };
   }
 
-  private async authorizedRequest(path: string, method: "GET" | "POST", body?: unknown): Promise<unknown> {
-    if (!this.accessToken) await this.refresh();
-    try { return await request(this.service.url, path, method, this.accessToken, body); }
-    catch (error) {
-      if (error instanceof ServiceHttpError) {
-        if (error.status !== 401) throw error;
-        await this.refresh();
-        return request(this.service.url, path, method, this.accessToken, body);
-      }
-      return request(this.service.url, path, method, this.accessToken, body);
-    }
+  private requireReplicaId(): string {
+    if (!this.identity.replicaId) throw new Error("Replica is not registered yet; call ensureReplicaRegistered() first");
+    return this.identity.replicaId;
   }
 
-  private async refresh(): Promise<void> {
-    this.accessToken = await fetchAccessToken(this.service.url, this.identity, this.service);
+  private async authorizedRequest(path: string, method: "GET" | "POST", body?: unknown): Promise<unknown> {
+    try {
+      return await request(this.service.url, path, method, this.session.accessToken, body);
+    } catch (error) {
+      if (error instanceof ServiceHttpError) {
+        if (error.status !== 401) throw error;
+        await this.refreshAccessToken();
+        return request(this.service.url, path, method, this.session.accessToken, body);
+      }
+      return request(this.service.url, path, method, this.session.accessToken, body);
+    }
   }
 }
 
-export async function fetchAccessToken(
-  url: string,
-  identity: Pick<DaemonConfig, "workspaceId" | "actorId" | "replicaId">,
-  service: Pick<NonNullable<DaemonConfig["service"]>, "replicaSecret">
-): Promise<string> {
-  const data = await request(url, "/v1/token", "POST", undefined, {
-    workspaceId: identity.workspaceId,
-    actorId: identity.actorId,
-    replicaId: identity.replicaId,
-    replicaSecret: service.replicaSecret
-  });
-  return replicaTokenExchangeResponseSchema.parse(data).accessToken;
+function isExpiringSoon(expiresAt: string, bufferMs = 30_000): boolean {
+  return new Date(expiresAt).getTime() - Date.now() <= bufferMs;
+}
+
+function defaultReplicaName(): string {
+  return `${hostname()}-${randomUUID().slice(0, 6)}`;
 }
 
 class ServiceHttpError extends Error {

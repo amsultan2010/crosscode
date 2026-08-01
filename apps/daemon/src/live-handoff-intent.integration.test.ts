@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempRepo, cleanupTempRepos, waitFor } from "@crosscode/test-fixtures";
 import { createServiceServer, PgStore } from "../../service/src/index.js";
-import { CoordinationServiceClient } from "./service-client.js";
 import { writeDaemonConfig } from "./runtime.js";
+import { legacyEnroll } from "./test-legacy-enroll.js";
 import { spawnDaemon, stopDaemon, stopAllDaemons } from "./test-helpers.js";
 
 const databaseUrl = process.env.CROSSCODE_TEST_DATABASE_URL;
@@ -30,12 +30,12 @@ describe.skipIf(!databaseUrl)("PostgreSQL live handoff and intent coordination",
     const port = (server.address() as AddressInfo).port;
     const url = `http://127.0.0.1:${port}`;
     try {
-      const enrollA = await CoordinationServiceClient.enroll(url, owner.enrollmentToken);
-      const enrollB = await CoordinationServiceClient.enroll(url, bob.enrollmentToken);
+      const enrollA = await legacyEnroll(url, owner.enrollmentToken);
+      const enrollB = await legacyEnroll(url, bob.enrollmentToken);
       const rootA = await repository();
       const rootB = await repository();
-      await writeDaemonConfig(rootA, { workspaceId: enrollA.principal.workspaceId, replicaId: enrollA.principal.replicaId, actorId: enrollA.principal.actorId, service: { url, replicaSecret: enrollA.replicaSecret } });
-      await writeDaemonConfig(rootB, { workspaceId: enrollB.principal.workspaceId, replicaId: enrollB.principal.replicaId, actorId: enrollB.principal.actorId, service: { url, replicaSecret: enrollB.replicaSecret } });
+      await writeDaemonConfig(rootA, { workspaceId: enrollA.principal.workspaceId, replicaId: enrollA.principal.replicaId, actorId: enrollA.principal.actorId, service: { url, session: { accessToken: enrollA.accessToken, refreshToken: "legacy-bridge-unused", expiresAt: enrollA.expiresAt } } });
+      await writeDaemonConfig(rootB, { workspaceId: enrollB.principal.workspaceId, replicaId: enrollB.principal.replicaId, actorId: enrollB.principal.actorId, service: { url, session: { accessToken: enrollB.accessToken, refreshToken: "legacy-bridge-unused", expiresAt: enrollB.expiresAt } } });
 
       // A uploads quickly (short poll); B polls slowly so fast delivery to B can only have
       // arrived over the live WebSocket path, proving live fan-out rather than eventual poll consistency.

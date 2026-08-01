@@ -46,21 +46,23 @@ describe("managed daemon runtime", () => {
     await expect(access(await daemonConnectionPath(root))).rejects.toThrow();
   });
 
-  it("stores a replica secret in the OS keychain instead of the config file when the keychain is available", async () => {
+  it("stores a Supabase refresh token in the OS keychain instead of the config file when the keychain is available", async () => {
     if (!(await keychainAvailable())) return;
     const root = await repo();
-    const config = { workspaceId: "w", replicaId: "r", actorId: "a", service: { url: "http://127.0.0.1:8788", replicaSecret: "super-secret-value" } };
+    const session = { accessToken: "access-token", refreshToken: "super-secret-refresh-token", expiresAt: "2026-01-01T00:05:00.000Z" };
+    const config = { workspaceId: "w", replicaId: "r", actorId: "a", service: { url: "http://127.0.0.1:8788", session } };
     await writeDaemonConfig(root, config);
 
     const onDisk = JSON.parse(await readFile(await daemonConfigPath(root), "utf8"));
-    expect(onDisk.service.replicaSecret).toBeUndefined();
+    expect(onDisk.service.session.refreshToken).not.toBe(session.refreshToken);
 
     await expect(readDaemonConfig(root)).resolves.toEqual(config);
   });
 
-  it("falls back to writing the secret inline in the config file when the keychain is unavailable", async () => {
+  it("falls back to writing the session inline in the config file when the keychain is unavailable", async () => {
     const root = await repo();
-    const config = { workspaceId: "w", replicaId: "r", actorId: "a", service: { url: "http://127.0.0.1:8788", replicaSecret: "super-secret-value" } };
+    const session = { accessToken: "access-token", refreshToken: "super-secret-refresh-token", expiresAt: "2026-01-01T00:05:00.000Z" };
+    const config = { workspaceId: "w", replicaId: "r", actorId: "a", service: { url: "http://127.0.0.1:8788", session } };
     const keychain = await import("./keychain.js");
     const unavailable = vi.spyOn(keychain, "keychainAvailable").mockResolvedValue(false);
     try {
@@ -70,7 +72,7 @@ describe("managed daemon runtime", () => {
     }
 
     const onDisk = JSON.parse(await readFile(await daemonConfigPath(root), "utf8"));
-    expect(onDisk.service.replicaSecret).toBe("super-secret-value");
+    expect(onDisk.service.session.refreshToken).toBe(session.refreshToken);
     await expect(readDaemonConfig(root)).resolves.toEqual(config);
   });
 });
