@@ -199,14 +199,14 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
 
   private async authorizedRequest(path: string, method: "GET" | "POST", body?: unknown): Promise<unknown> {
     try {
-      return await request(this.service.url, path, method, this.session.accessToken, body);
+      return await request(this.service.url, path, method, this.session.accessToken, body, true, this.identity.workspaceId);
     } catch (error) {
       if (error instanceof ServiceHttpError) {
         if (error.status !== 401) throw error;
         await this.refreshAccessToken();
-        return request(this.service.url, path, method, this.session.accessToken, body);
+        return request(this.service.url, path, method, this.session.accessToken, body, true, this.identity.workspaceId);
       }
-      return request(this.service.url, path, method, this.session.accessToken, body);
+      return request(this.service.url, path, method, this.session.accessToken, body, true, this.identity.workspaceId);
     }
   }
 }
@@ -223,7 +223,7 @@ class ServiceHttpError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
 }
 
-async function request(url: string, path: string, method: "GET" | "POST", token?: string, body?: unknown, retryNetwork = true): Promise<unknown> {
+async function request(url: string, path: string, method: "GET" | "POST", token?: string, body?: unknown, retryNetwork = true, workspaceId?: string): Promise<unknown> {
   let response: Response | undefined;
   let lastError: unknown;
   for (let attempt = 0; attempt < (retryNetwork ? 2 : 1); attempt += 1) {
@@ -232,6 +232,7 @@ async function request(url: string, path: string, method: "GET" | "POST", token?
         method,
         headers: {
           ...(token ? { authorization: `Bearer ${token}` } : {}),
+          ...(workspaceId ? { "x-crosscode-workspace-id": workspaceId } : {}),
           ...(body === undefined ? {} : { "content-type": "application/json" })
         },
         body: body === undefined ? undefined : JSON.stringify(body),
