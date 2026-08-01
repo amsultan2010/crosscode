@@ -8,9 +8,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { daemonConnectionSchema } from "@crosscode/protocol";
+import { AgentDelegatedReviewer, contentHash } from "@crosscode/core";
 import { DaemonClient } from "../../daemon/src/client.js";
 import { daemonConnectionPath } from "../../daemon/src/runtime.js";
-import { startDaemon, type RunningDaemon } from "../../daemon/src/index.js";
+import { startDaemon, LocalDaemon, type RunningDaemon } from "../../daemon/src/index.js";
+import { CoordinationService } from "../../service/src/index.js";
 import { mcpTools } from "./index.js";
 
 const exec = promisify(execFile);
@@ -46,6 +48,27 @@ async function writeConnectionFile(path: string, connection: { pid: number; port
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   await chmod(dirname(path), 0o700);
   await writeFile(path, JSON.stringify(daemonConnectionSchema.parse(connection)), { mode: 0o600 });
+}
+
+async function initReviewRepo(): Promise<string> {
+  const root = await initRepo();
+  await mkdir(join(root, ".crosscode"), { recursive: true });
+  await writeFile(join(root, ".crosscode", "config.yaml"),
+    "version: 1\nvalidation:\n  profiles:\n    fast:\n      commands:\n        - node --version\naiReview:\n  externalAiReview: approved\n  allowedProviders:\n    - mock-provider\n  requireLocalConfirmation: true\n");
+  await exec("git", ["-C", root, "add", "."]);
+  await exec("git", ["-C", root, "commit", "-qm", "ai review policy"]);
+  return root;
+}
+
+async function likelyCompatibleProposal(senderRoot: string, receiverRoot: string, service: CoordinationService, receiver: LocalDaemon) {
+  const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+  await writeFile(join(senderRoot, "a.txt"), "sender-edit\n");
+  const operation = await sender.capture("edit", service);
+  await receiver.sync(service);
+  const modifyChange = { path: "a.txt", kind: "modify" as const, beforeHash: contentHash("one\n"), afterHash: contentHash("receiver-edit\n"), afterContent: "receiver-edit\n" };
+  const pendingLocal = { id: "fake-local-op", workspaceId: "w", senderReplicaId: "receiver", transaction: { id: "fake-local-op", base: { files: [] }, changes: [modifyChange], provenance: { source: "filesystem" as const, confidence: "known" as const }, safety: { risk: "low" as const, requiresApproval: false } }, sequence: 1, createdAt: new Date().toISOString(), status: "local" as const };
+  receiver.operations.set(pendingLocal.id, pendingLocal);
+  return operation;
 }
 
 describe("MCP daemon boundary", () => {
@@ -136,12 +159,14 @@ describe("MCP daemon boundary", () => {
       "claim_task",
       "create_checkpoint",
       "get_workspace_state",
+      "list_pending_semantic_reviews",
       "list_remote_proposals",
       "list_tasks",
       "publish_intent",
       "request_handoff",
       "request_validation",
-      "submit_change_summary"
+      "submit_change_summary",
+      "submit_semantic_review"
     ]);
     const claimTaskTool = tools.find((tool) => tool.name === "claim_task")!;
     expect(claimTaskTool.inputSchema.type).toBe("object");
@@ -181,5 +206,56 @@ describe("MCP daemon boundary", () => {
     const createdTask = await client.callTool({ name: "claim_task", arguments: { title: "Works without any manual init or daemon start" } });
     const task = JSON.parse((createdTask.content as Array<{ type: string; text: string }>)[0]!.text) as { id: string; title: string };
     expect(task.title).toBe("Works without any manual init or daemon start");
+  }, 20_000);
+
+  it("lets the connected agent discover and resolve a pending semantic review over MCP", async () => {
+    const senderRoot = await initReviewRepo();
+    const receiverRoot = await initReviewRepo();
+    const service = new CoordinationService();
+    const running = await startDaemon(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b", reviewer: new AgentDelegatedReviewer() });
+    daemons.push(running);
+    const operation = await likelyCompatibleProposal(senderRoot, receiverRoot, service, running.daemon);
+    const connectionPath = await daemonConnectionPath(receiverRoot);
+    await writeConnectionFile(connectionPath, { pid: process.pid, port: running.port, secret: running.secret, startedAt: new Date().toISOString() });
+
+    const transport = new StdioClientTransport({ command: tsxBin, args: [mcpMain], cwd: receiverRoot, stderr: "inherit" });
+    const client = new Client({ name: "crosscode-mcp-semantic-review-test-client", version: "0.1.0" });
+    clients.push(client);
+    await client.connect(transport);
+
+    const reviewPromise = fetch(`http://127.0.0.1:${running.port}/v1/operations/${operation.id}/reviews`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${running.secret}`, "content-type": "application/json" },
+      body: JSON.stringify({ path: "a.txt", providerId: "mock-provider" })
+    });
+
+    let pending: Array<{ requestId: string; requestedAt: string; request: { workspaceId: string } }> = [];
+    for (let attempt = 0; attempt < 50 && pending.length === 0; attempt += 1) {
+      const listed = await client.callTool({ name: "list_pending_semantic_reviews", arguments: {} });
+      pending = JSON.parse((listed.content as Array<{ type: string; text: string }>)[0]!.text);
+      if (pending.length === 0) await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+    }
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.request.workspaceId).toBe("w");
+
+    const submitted = await client.callTool({
+      name: "submit_semantic_review",
+      arguments: {
+        requestId: pending[0]!.requestId,
+        classification: "compatible",
+        confidence: 0.9,
+        affectedSymbols: [],
+        evidence: ["reviewed via MCP"],
+        invariantsToPreserve: [],
+        requiresHumanApproval: false
+      }
+    });
+    expect(JSON.parse((submitted.content as Array<{ type: string; text: string }>)[0]!.text)).toEqual({ ok: true });
+
+    const reviewResponse = await reviewPromise;
+    expect(reviewResponse.status).toBe(201);
+    const { data: record } = await reviewResponse.json();
+    expect(record.classification).toBe("compatible");
+    expect(running.daemon.listSemanticReviewsFor(operation.id)).toEqual([record]);
   }, 20_000);
 });

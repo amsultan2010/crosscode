@@ -3,7 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { z, type ZodTypeAny } from "zod";
-import { pathOverlaps } from "@crosscode/core";
+import { pathOverlaps, semanticReviewSchema } from "@crosscode/core";
 import {
   captureRequestSchema,
   changeScopeRequestSchema,
@@ -22,6 +22,7 @@ const claimTaskInputSchema = taskRequestSchema.pick({ title: true, paths: true }
 const claimScopeInputSchema = claimRequestSchema.pick({ taskId: true, target: true });
 const publishIntentInputSchema = captureRequestSchema.omit({ kind: true });
 const announceInterfaceChangeInputSchema = captureRequestSchema.omit({ kind: true });
+const submitSemanticReviewInputSchema = semanticReviewSchema.extend({ requestId: z.string() });
 
 export function mcpTools(client: DaemonClient) {
   return {
@@ -54,7 +55,9 @@ export function mcpTools(client: DaemonClient) {
     request_handoff: (input: { operationId: string; note?: string }) => client.requestHandoff(input),
     announce_interface_change: (input: { intent: string }) => client.capture(input.intent, "interface-change"),
     request_validation: (input: { profile: string }) => client.validate(input.profile),
-    create_checkpoint: () => client.checkpoint()
+    create_checkpoint: () => client.checkpoint(),
+    list_pending_semantic_reviews: () => client.pendingSemanticReviews(),
+    submit_semantic_review: ({ requestId, ...review }: z.infer<typeof submitSemanticReviewInputSchema>) => client.submitSemanticReview(requestId, review)
   };
 }
 
@@ -72,7 +75,9 @@ const toolInputSchemas: Record<ToolName, ZodTypeAny> = {
   request_handoff: handoffRequestSchema,
   announce_interface_change: announceInterfaceChangeInputSchema,
   request_validation: validationRequestSchema,
-  create_checkpoint: checkpointRequestSchema
+  create_checkpoint: checkpointRequestSchema,
+  list_pending_semantic_reviews: emptyInputSchema,
+  submit_semantic_review: submitSemanticReviewInputSchema
 };
 
 const toolDescriptions: Record<ToolName, string> = {
@@ -87,7 +92,9 @@ const toolDescriptions: Record<ToolName, string> = {
   request_handoff: "Request a handoff of a proposed operation to another participant for review.",
   announce_interface_change: "Capture the current working-tree edits as a durable transaction tagged as an interface change.",
   request_validation: "Run a named validation profile and return its results.",
-  create_checkpoint: "Create a Git checkpoint of the current worktree without moving HEAD."
+  create_checkpoint: "Create a Git checkpoint of the current worktree without moving HEAD.",
+  list_pending_semantic_reviews: "List semantic reviews awaiting this agent's judgment: an ambiguous change bundle the daemon needs reasoned about before it can proceed.",
+  submit_semantic_review: "Submit this agent's semantic review for a pending requestId: classification, confidence, affected symbols, evidence, invariants to preserve, an optional proposed resolution, and whether it requires human approval."
 };
 
 export function buildMcpServer(client: DaemonClient): Server {

@@ -47,7 +47,7 @@ export const semanticReviewSchema = z.object({
   requiresHumanApproval: z.boolean()
 }).strict();
 
-const UNCERTAIN_FALLBACK: SemanticReview = {
+export const UNCERTAIN_FALLBACK: SemanticReview = {
   classification: "uncertain",
   confidence: 0,
   affectedSymbols: [],

@@ -6,7 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import chokidar, { type FSWatcher } from "chokidar";
 import {
-  analyzeOperation, applyRiskSafetyGate, authorizeSemanticReview, buildSemanticReviewBundle, changedExportedSymbols, contentHash, exportedSymbolNames, hunksOverlap,
+  AgentDelegatedReviewer, analyzeOperation, applyRiskSafetyGate, authorizeSemanticReview, buildSemanticReviewBundle, changedExportedSymbols, contentHash, exportedSymbolNames, hunksOverlap,
   isReviewEligible, looksLikeInterfaceChange, pathOverlaps, redactPath, riskRank, transactionRisk, validateSemanticReview,
   type OperationAnalysis, type SemanticReviewer
 } from "@crosscode/core";
@@ -1010,6 +1010,12 @@ function reviewDecisionId(pathname: string, action: "accept" | "reject"): string
   try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid review ID"); }
 }
 
+function semanticReviewSubmitId(pathname: string): string | undefined {
+  const match = pathname.match(/^\/v1\/semantic-reviews\/([^/]+)\/submit$/);
+  if (!match) return undefined;
+  try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid requestId"); }
+}
+
 function handoffRespondId(pathname: string): string | undefined {
   const match = pathname.match(/^\/v1\/handoffs\/([^/]+)\/respond$/);
   if (!match) return undefined;
@@ -1050,6 +1056,25 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
       const reviewsOperationId = reviewsCollectionId(pathname);
       const acceptReviewId = reviewDecisionId(pathname, "accept");
       const rejectReviewId = reviewDecisionId(pathname, "reject");
+      const submitReviewRequestId = semanticReviewSubmitId(pathname);
+      /**
+       * These two routes must not run inside `daemon.runExclusive` -- a pending agent-delegated
+       * review can be held open (up to its timeout) waiting on a future `submit()` call, and that
+       * call itself arrives as another HTTP request. Serializing it behind the same mutex as the
+       * request that created the pending review would deadlock the daemon.
+       */
+      if (method === "GET" && pathname === "/v1/semantic-reviews/pending") {
+        const data = daemon.options.reviewer instanceof AgentDelegatedReviewer ? daemon.options.reviewer.listPending() : [];
+        sendJson(response, 200, { ok: true, data });
+        return;
+      }
+      if (method === "POST" && submitReviewRequestId) {
+        if (!(daemon.options.reviewer instanceof AgentDelegatedReviewer)) { sendJson(response, 404, { ok: false, error: "No pending semantic review for this requestId" }); return; }
+        const submission = daemon.options.reviewer.submit(submitReviewRequestId, payload);
+        if (!submission.ok) { sendJson(response, 404, { ok: false, error: submission.error }); return; }
+        sendJson(response, 200, { ok: true, data: submission });
+        return;
+      }
       const result = await daemon.runExclusive(async () => {
         let status = 200;
         let data: unknown;

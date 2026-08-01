@@ -3,6 +3,7 @@ import type { ChangeTransaction } from "@crosscode/protocol";
 
 export * from "./semantic-review.js";
 export * from "./mock-semantic-reviewer.js";
+export * from "./agent-delegated-reviewer.js";
 
 export type Classification = "independent" | "likely-compatible" | "delete-vs-modify" | "semantic-overlap" | "interface-impact" | "stale-base" | "stale-base-resolved" | "critical";
 export type Risk = "low" | "medium" | "high" | "critical";
