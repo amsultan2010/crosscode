@@ -6,7 +6,7 @@ Last updated: 2026-08-01 (Milestones A-E complete; the post-E backend-completion
 
 **Scope decision (2026-07-30): the product surface is the daemon + MCP server only.** The VS Code/Cursor extension and npm/VS Code Marketplace publishing are NOT part of the product going forward — this is a deliberate decision, not a deferral. Editors and agents integrate with Crosscode exclusively through the MCP server (`apps/mcp-server`, see `docs/mcp-clients.md`) and the daemon's CLI (`apps/cli`, the daemon's local admin/setup tool). The existing `apps/vscode-extension` code remains in the repository as-is (built, tested, functional) but is frozen and unsupported; it receives no further work, and no extension-related item counts as outstanding anywhere in this document. Distribution stays clone-and-run via `tsx` (`docs/install-prompt.md`); nothing is published to npm or any marketplace. Sections below that specify or track extension work (14, Phase 5, Milestone E, parts of 13/22) are retained as historical record of what was built, superseded by this decision.
 
-Crosscode now has a tested local safety core and a working multi-replica coordination path: real daemons exchange live proposals, tasks, claims, handoffs, and validation results through an authenticated PostgreSQL-backed service, deterministically classify conflicts, optionally auto-apply low-risk proposals under an explicit committed policy, gate publish on validation, and are reachable from any MCP client. The daemon remains the sole local authority; the CLI and MCP entry point communicate through its authenticated loopback API. What remains genuinely open: a real (non-mock) AI review provider. A Google-Docs-style live web dashboard with browser accounts remains a separately-scoped future track and is intentionally not part of this repository yet; see section 1's non-goals for the current release boundary.
+Crosscode now has a tested local safety core and a working multi-replica coordination path: real daemons exchange live proposals, tasks, claims, handoffs, and validation results through an authenticated PostgreSQL-backed service, deterministically classify conflicts, optionally auto-apply low-risk proposals under an explicit committed policy, gate publish on validation, and are reachable from any MCP client. The daemon remains the sole local authority; the CLI and MCP entry point communicate through its authenticated loopback API. What remains genuinely open: a real (non-mock) AI review provider (Phase 6), followed by a Google-Docs-style live web dashboard with browser accounts (Phase 8, planned — see section 20). The dashboard is intentionally not part of this repository yet, but it is a committed future milestone, not a rejected feature; see section 1's non-goals for the current release boundary.
 
 ### Completed
 
@@ -60,7 +60,10 @@ Current verification baseline:
 
 - The VS Code/Cursor extension as a supported product surface. The code in `apps/vscode-extension` stays in-tree, built and tested, but frozen; the former outstanding items tied to it (a human interactive walkthrough, a combined editor+MCP+extension fixture) are closed as moot, not pending.
 - Publishing to npm or the VS Code Marketplace. Distribution is clone-and-run via `tsx`.
-- A Google-Docs-style live web dashboard with browser accounts tied to MCP-authenticated agents (a separately-scoped future track; see section 1's non-goals).
+
+### Deferred to a future milestone (not excluded — see Phase 8, section 20)
+
+- A Google-Docs-style live web dashboard with browser accounts tied to MCP-authenticated agents. Unlike the extension and npm publishing above, this is not a closed decision — it is planned, just sequenced after the real `SemanticReviewer` provider (Phase 6). See Phase 8 in section 20 for its rough scope.
 
 ### Known foundation debt
 
@@ -68,7 +71,7 @@ None outstanding.
 
 ### Recommended next gate
 
-Milestones A through E are all COMPLETE, each confirmed by real fixtures rather than description: durable local daemon (A), authenticated HTTP/WebSocket sync including live task/claim/handoff/intent/validation fan-out and durable session summaries confirmed against a real PostgreSQL database (B), deterministic conflict/risk classification including an AST-based TypeScript dependency graph and a direct conflict-artifact read route (C), validation-gated publish (D), and a standards-compliant MCP server (E; the extension built under E is now frozen per the scope decision above). The post-E backend-completion pass and the full hardening pass (OS keychain, retention, MCP docs, binary file sharing, true rename tracking) are also complete. The single remaining engineering item is a real external AI-provider `SemanticReviewer` implementation behind the existing provider-neutral interface, once a provider and credentials are chosen (Phase 6). The web dashboard remains a separately-scoped future track.
+Milestones A through E are all COMPLETE, each confirmed by real fixtures rather than description: durable local daemon (A), authenticated HTTP/WebSocket sync including live task/claim/handoff/intent/validation fan-out and durable session summaries confirmed against a real PostgreSQL database (B), deterministic conflict/risk classification including an AST-based TypeScript dependency graph and a direct conflict-artifact read route (C), validation-gated publish (D), and a standards-compliant MCP server (E; the extension built under E is now frozen per the scope decision above). The post-E backend-completion pass and the full hardening pass (OS keychain, retention, MCP docs, binary file sharing, true rename tracking) are also complete. The next engineering item is a real external AI-provider `SemanticReviewer` implementation behind the existing provider-neutral interface, once a provider and credentials are chosen (Phase 6). After that, the web dashboard (Phase 8, see section 20) is the next planned milestone — it is deferred, not abandoned.
 
 ## 1. Product definition
 
@@ -872,6 +875,15 @@ Implement in order. Do not begin later phases until the preceding acceptance cri
 - Desktop control app.
 - Rich native adapters where public stable APIs exist.
 - Monorepo/submodule/sparse-checkout hardening.
+
+### Phase 8 — web dashboard — NOT STARTED (planned, sequenced after Phase 6)
+
+A read-mostly browser dashboard against the shared coordination service — not a new authority, and not a replacement for the daemon's local-first guarantees.
+
+- **Scope:** a new `apps/dashboard` (or similar) web app authenticating members via Supabase Auth (same identity already used by the daemon/service, see the section 0 migration note), showing live workspace presence, tasks, claims, proposals, and validation status by subscribing to the service's existing `/v1/stream` WebSocket fan-out and reading its existing REST endpoints. No new service-side data model is required for the read path — `PgStore.listPresence`, tasks, claims, and validations already exist and are exercised by the daemon today.
+- **Writes in v1:** task creation/update, claim creation/release, and intent publishing — these already flow through the service as ordinary authenticated operations today (the daemon does this over HTTP; the dashboard would do the same over the same authenticated API).
+- **Explicitly deferred within Phase 8, not v1:** proposal accept/reject and any action that materializes changes into a participant's working tree. Per section 1's fundamental rules, only the local daemon may write to a participant's filesystem — a browser has no local access. Enabling "accept from the dashboard" needs a new remote-command channel (service → daemon, analogous to how `handoff.requested` already flows, but for accept/reject) that does not exist yet; treat it as a distinct follow-up once the read-only/task-management dashboard is proven, not part of the initial Phase 8 cut.
+- **Exit criteria:** a member can sign in on the web, see live presence/tasks/claims/proposals/validation status for a workspace without running a daemon, and create/manage tasks and claims from the browser — while proposal acceptance and publishing remain daemon-only operations, preserving the "Git/filesystem remains locally authoritative" rule.
 
 ## 21. Explicit non-goals for the first release
 
