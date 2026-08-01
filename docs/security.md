@@ -79,8 +79,8 @@ Per BUILD_INSTRUCTIONS.md section 16, these require explicit local user approval
 regardless of automation elsewhere:
 
 - Applying a high- or critical-risk operation.
-- Sending code to an external AI reviewer when not pre-approved by workspace
-  policy (`configuredAiReviewPolicy`'s `externalAiReview: "approved"` plus
+- Requesting a semantic review when not pre-approved by workspace policy
+  (`configuredAiReviewPolicy`'s `externalAiReview: "approved"` plus
   `requireLocalConfirmation`).
 - Publishing Git commits or pushes (`publish` requires a prior passing
   validation and, outside `dryRun`, an explicit confirmation or `--yes`).
@@ -90,7 +90,19 @@ The AI semantic reviewer (BUILD_INSTRUCTIONS.md section 12) is bounded and
 non-authoritative: it cannot write files or publish commits directly, must
 require human approval for `high`/`critical` risk regardless of its own
 confidence score, and must never receive secrets, `.env` contents, credentials,
-private keys, or excluded paths.
+private keys, or excluded paths. Review is delegated to the workspace member's
+own already-connected MCP agent (Claude Code, Codex CLI, etc.) rather than a
+separate external AI provider: `AgentDelegatedReviewer`
+(`packages/core/src/agent-delegated-reviewer.ts`) parks the redacted review
+bundle behind `GET /v1/semantic-reviews/pending` until the connected agent
+calls the `submit_semantic_review` MCP tool (`POST
+/v1/semantic-reviews/:requestId/submit`, `docs/mcp-clients.md`) with its
+judgment, or the request times out into the safe `uncertain`/
+`requiresHumanApproval` fallback. Crosscode stores, configures, or transmits no
+separate AI provider credentials for this — the redaction, prompt-injection
+resistance, risk safety gate, and audit-record guarantees described above and
+in BUILD_INSTRUCTIONS.md section 12 apply identically to the agent-delegated
+bundle.
 
 ### `policy.autoApplyRisk`
 

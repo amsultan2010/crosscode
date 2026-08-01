@@ -131,7 +131,19 @@ against a running Crosscode daemon in this environment.
 `get_workspace_state`, `list_tasks`, `claim_task`, `claim_scope`, `publish_intent`,
 `check_change_scope`, `submit_change_summary`, `list_remote_proposals`,
 `request_handoff`, `announce_interface_change`, `request_validation`,
-`create_checkpoint` — see BUILD_INSTRUCTIONS.md section 13 for the capability this
-tool surface implements. Tool input schemas are generated from the Zod request
-schemas in `packages/protocol`, so `tools/list` always reflects the daemon's
-actual request validation.
+`create_checkpoint`, `list_pending_semantic_reviews`, `submit_semantic_review` —
+see BUILD_INSTRUCTIONS.md section 13 for the capability this tool surface
+implements. Tool input schemas are generated from the Zod request schemas in
+`packages/protocol`, so `tools/list` always reflects the daemon's actual request
+validation.
+
+`list_pending_semantic_reviews` and `submit_semantic_review` are how the AI
+semantic reviewer (BUILD_INSTRUCTIONS.md section 12) is delegated to the
+connected agent instead of an external AI provider: `list_pending_semantic_reviews`
+takes no arguments and returns the pending review bundles awaiting judgment
+(`GET /v1/semantic-reviews/pending`); `submit_semantic_review` takes a `requestId`
+plus the same fields as `packages/core/src/semantic-review.ts`'s
+`semanticReviewSchema` (`classification`, `confidence`, `affectedSymbols`,
+`evidence`, `invariantsToPreserve`, an optional `proposedResolution`, and
+`requiresHumanApproval`) and forwards them to
+`POST /v1/semantic-reviews/:requestId/submit`.

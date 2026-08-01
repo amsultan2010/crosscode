@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import type { CaptureKind, Claim, Handoff, Intent, Task, Validation } from "@crosscode/protocol";
 import { daemonConnectionSchema, type DaemonConnection } from "@crosscode/protocol";
+import type { SemanticReview, SemanticReviewRequest } from "@crosscode/core";
 import type { CheckpointRecord, ConflictArtifactRecord } from "./state.js";
 import type { SemanticReviewRecord, StoredOperation } from "./types.js";
 import { daemonConnectionPath } from "./runtime.js";
@@ -60,6 +61,8 @@ export class DaemonClient {
   semanticReviews(operationId: string): Promise<SemanticReviewRecord[]> { return this.request("GET", `/v1/operations/${encodeURIComponent(operationId)}/reviews`); }
   acceptSemanticReview(reviewId: string): Promise<SemanticReviewRecord> { return this.request("POST", `/v1/reviews/${encodeURIComponent(reviewId)}/accept`, {}); }
   rejectSemanticReview(reviewId: string): Promise<SemanticReviewRecord> { return this.request("POST", `/v1/reviews/${encodeURIComponent(reviewId)}/reject`, {}); }
+  pendingSemanticReviews(): Promise<Array<{ requestId: string; requestedAt: string; request: SemanticReviewRequest }>> { return this.request("GET", "/v1/semantic-reviews/pending"); }
+  submitSemanticReview(requestId: string, review: SemanticReview): Promise<{ ok: true }> { return this.request("POST", `/v1/semantic-reviews/${encodeURIComponent(requestId)}/submit`, review); }
   checkpoints(): Promise<CheckpointRecord[]> { return this.request("GET", "/v1/checkpoints"); }
   checkpoint(message?: string): Promise<{ ref: string; commit: string; tree: string }> { return this.request("POST", "/v1/checkpoints", message ? { message } : {}); }
   inspectCheckpoint(ref: string): Promise<{ ref: string; commit: string; tree: string; files: string[] }> { return this.request("POST", "/v1/checkpoints/inspect", { ref }); }

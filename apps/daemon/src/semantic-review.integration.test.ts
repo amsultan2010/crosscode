@@ -6,10 +6,11 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { CoordinationService } from "../../service/src/index.js";
-import { contentHash, MockSemanticReviewer, type SemanticReview } from "@crosscode/core";
-import { LocalDaemon } from "./index.js";
+import { AgentDelegatedReviewer, contentHash, MockSemanticReviewer, type SemanticReview } from "@crosscode/core";
+import { LocalDaemon, startDaemon } from "./index.js";
 
 const exec = promisify(execFile); const directories: string[] = [];
+const servers: Array<{ close: () => Promise<void> }> = [];
 async function repo(): Promise<string> {
   const path = await mkdtemp(join(tmpdir(), "crosscode-daemon-review-"));
   directories.push(path);
@@ -37,7 +38,10 @@ async function repoWithDisabledReview(): Promise<string> {
   await exec("git", ["-C", path, "commit", "-qm", "initial"]);
   return path;
 }
-afterEach(async () => { await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map((server) => server.close()));
+  await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
 
 async function likelyCompatibleProposal(senderRoot: string, receiverRoot: string, service: CoordinationService, receiver: LocalDaemon) {
   const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
@@ -181,5 +185,75 @@ describe("AI semantic reviewer", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]!.payload).not.toContain("do-not-leak-this-value");
     eventRows.forEach((row) => expect(row.payload).not.toContain("do-not-leak-this-value"));
+  });
+});
+
+describe("agent-delegated semantic review over the local HTTP API", () => {
+  it("shows an ambiguous proposal as pending and reflects the agent's submitted review through the ordinary accept flow", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const running = await startDaemon(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b", reviewer: new AgentDelegatedReviewer() });
+    servers.push(running);
+    const operation = await likelyCompatibleProposal(senderRoot, receiverRoot, service, running.daemon);
+    const url = `http://127.0.0.1:${running.port}`;
+    const authorization = `Bearer ${running.secret}`;
+
+    const requestPromise = fetch(`${url}/v1/operations/${operation.id}/reviews`, {
+      method: "POST",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify({ path: "a.txt", providerId: "mock-provider" })
+    });
+
+    let pending: Array<{ requestId: string; requestedAt: string }> = [];
+    for (let attempt = 0; attempt < 50 && pending.length === 0; attempt += 1) {
+      const pendingResponse = await fetch(`${url}/v1/semantic-reviews/pending`, { headers: { authorization } });
+      ({ data: pending } = await pendingResponse.json());
+      if (pending.length === 0) await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+    }
+    expect(pending).toHaveLength(1);
+
+    const submitResponse = await fetch(`${url}/v1/semantic-reviews/${pending[0]!.requestId}/submit`, {
+      method: "POST",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify({ classification: "compatible", confidence: 0.9, affectedSymbols: [], evidence: ["agent reviewed it"], invariantsToPreserve: [], requiresHumanApproval: false })
+    });
+    expect(submitResponse.status).toBe(200);
+    expect(await submitResponse.json()).toEqual({ ok: true, data: { ok: true } });
+
+    const requestResponse = await requestPromise;
+    expect(requestResponse.status).toBe(201);
+    const { data: record } = await requestResponse.json();
+    expect(record.classification).toBe("compatible");
+    expect(record.decision).toBe("pending");
+
+    const afterSubmitPending = await (await fetch(`${url}/v1/semantic-reviews/pending`, { headers: { authorization } })).json();
+    expect(afterSubmitPending.data).toEqual([]);
+
+    const approved = await running.daemon.resolveSemanticReview(record.id, "accepted");
+    expect(approved.decision).toBe("accepted");
+    const accepted = await running.daemon.accept(operation.id, { reviewApprovals: { "a.txt": record.id } });
+    expect(accepted.status).toBe("accepted");
+    expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe("sender-edit\n");
+  });
+
+  it("falls back to the safe uncertain/requiresHumanApproval behavior when the agent never submits before the timeout", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
+    const running = await startDaemon(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b", reviewer: new AgentDelegatedReviewer({ timeoutMs: 20 }) });
+    servers.push(running);
+    const operation = await likelyCompatibleProposal(senderRoot, receiverRoot, service, running.daemon);
+    const url = `http://127.0.0.1:${running.port}`;
+    const authorization = `Bearer ${running.secret}`;
+
+    const requestResponse = await fetch(`${url}/v1/operations/${operation.id}/reviews`, {
+      method: "POST",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify({ path: "a.txt", providerId: "mock-provider" })
+    });
+    expect(requestResponse.status).toBe(201);
+    const { data: record } = await requestResponse.json();
+    expect(record.classification).toBe("uncertain");
+    expect(record.response.requiresHumanApproval).toBe(true);
+
+    const pendingResponse = await fetch(`${url}/v1/semantic-reviews/pending`, { headers: { authorization } });
+    expect((await pendingResponse.json()).data).toEqual([]);
   });
 });
