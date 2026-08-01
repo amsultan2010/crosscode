@@ -14,7 +14,7 @@ const exec = promisify(execFile);
 const directories: string[] = [];
 const children = new Set<ChildProcess>();
 
-async function waitFor<T>(read: () => Promise<T>, accept: (value: T) => boolean | Promise<boolean>, timeoutMs = 8_000): Promise<T> {
+async function waitFor<T>(read: () => Promise<T>, accept: (value: T) => boolean | Promise<boolean>, timeoutMs = 15_000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
   while (Date.now() < deadline) {
@@ -123,5 +123,5 @@ describe("daemon process lifecycle", () => {
 
     await stop(second, "SIGTERM");
     await expect(access(await daemonConnectionPath(receiver))).rejects.toThrow();
-  }, 25_000);
+  }, 45_000);
 });

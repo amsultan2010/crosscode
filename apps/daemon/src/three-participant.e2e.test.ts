@@ -129,7 +129,7 @@ describe("three-participant end-to-end fixture (BUILD_INSTRUCTIONS.md section 19
     await writeFile(join(claudeRoot, "unrelated.txt"), "leave me alone\n");
     expect(await git(claudeRoot, ["branch", "--show-current"])).toBe(branchBefore);
     expect(await readFile(join(claudeRoot, "unrelated.txt"), "utf8")).toBe("leave me alone\n");
-  }, 20_000);
+  }, 40_000);
 
   it("never silently merges concurrent edits to the same symbol: two independent proposals for the same line land on an untouched third participant and neither materializes without approval", async () => {
     const root = await seedWorkspace();

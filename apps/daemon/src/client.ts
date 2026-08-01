@@ -84,7 +84,7 @@ export class DaemonClient {
           ...(body === undefined ? {} : { "content-type": "application/json" })
         },
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(3_000)
+        signal: AbortSignal.timeout(10_000)
       });
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : "Daemon request failed");
