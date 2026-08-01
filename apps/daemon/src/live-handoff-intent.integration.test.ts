@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createTempRepo, cleanupTempRepos, waitFor } from "@crosscode/test-fixtures";
 import { createServiceServer, PgStore } from "../../service/src/index.js";
 import { writeDaemonConfig } from "./runtime.js";
-import { legacyEnroll } from "./test-legacy-enroll.js";
+import { provisionTestPrincipal, TEST_JWT_SECRET, TEST_SUPABASE_URL } from "./test-supabase-session.js";
 import { spawnDaemon, stopDaemon, stopAllDaemons } from "./test-helpers.js";
 
 const databaseUrl = process.env.CROSSCODE_TEST_DATABASE_URL;
@@ -23,19 +23,19 @@ describe.skipIf(!databaseUrl)("PostgreSQL live handoff and intent coordination",
   it("fans out handoffs and intents live between two daemons and recovers losslessly through the poll fallback", async () => {
     const store = new PgStore(databaseUrl!);
     await store.migrate();
-    const owner = await store.provisionAdmin({ workspaceName: "live-handoff-intent-test", actorId: "alice" });
-    const bob = await store.provisionEnrollment({ workspaceId: owner.workspaceId, actorId: "bob" });
-    const server = createServiceServer({ store, jwtSecret: "live-handoff-intent-secret-with-at-least-32-bytes" });
+    const owner = await provisionTestPrincipal(store, { workspaceName: "live-handoff-intent-test", actorId: "alice" });
+    const bob = await provisionTestPrincipal(store, { workspaceId: owner.principal.workspaceId, actorId: "bob" });
+    const server = createServiceServer({ store, jwtSecret: TEST_JWT_SECRET, supabaseUrl: TEST_SUPABASE_URL });
     await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
     const port = (server.address() as AddressInfo).port;
     const url = `http://127.0.0.1:${port}`;
     try {
-      const enrollA = await legacyEnroll(url, owner.enrollmentToken);
-      const enrollB = await legacyEnroll(url, bob.enrollmentToken);
+      const enrollA = owner;
+      const enrollB = bob;
       const rootA = await repository();
       const rootB = await repository();
-      await writeDaemonConfig(rootA, { workspaceId: enrollA.principal.workspaceId, replicaId: enrollA.principal.replicaId, actorId: enrollA.principal.actorId, service: { url, session: { accessToken: enrollA.accessToken, refreshToken: "legacy-bridge-unused", expiresAt: enrollA.expiresAt } } });
-      await writeDaemonConfig(rootB, { workspaceId: enrollB.principal.workspaceId, replicaId: enrollB.principal.replicaId, actorId: enrollB.principal.actorId, service: { url, session: { accessToken: enrollB.accessToken, refreshToken: "legacy-bridge-unused", expiresAt: enrollB.expiresAt } } });
+      await writeDaemonConfig(rootA, { workspaceId: enrollA.principal.workspaceId, replicaId: enrollA.principal.replicaId, actorId: enrollA.principal.actorId, service: { url, session: { accessToken: enrollA.accessToken, refreshToken: "test-unused", expiresAt: enrollA.expiresAt } } });
+      await writeDaemonConfig(rootB, { workspaceId: enrollB.principal.workspaceId, replicaId: enrollB.principal.replicaId, actorId: enrollB.principal.actorId, service: { url, session: { accessToken: enrollB.accessToken, refreshToken: "test-unused", expiresAt: enrollB.expiresAt } } });
 
       // A uploads quickly (short poll); B polls slowly so fast delivery to B can only have
       // arrived over the live WebSocket path, proving live fan-out rather than eventual poll consistency.
@@ -86,8 +86,8 @@ describe.skipIf(!databaseUrl)("PostgreSQL live handoff and intent coordination",
       // stopped first or server.close() never resolves.
       await stopAllDaemons();
       await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
-      await store.pool.query("DELETE FROM audit_events WHERE workspace_id = $1", [owner.workspaceId]);
-      await store.pool.query("DELETE FROM workspaces WHERE id = $1", [owner.workspaceId]);
+      await store.pool.query("DELETE FROM audit_events WHERE workspace_id = $1", [owner.principal.workspaceId]);
+      await store.pool.query("DELETE FROM workspaces WHERE id = $1", [owner.principal.workspaceId]);
       await store.close();
     }
   }, 45_000);

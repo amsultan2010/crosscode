@@ -15,6 +15,7 @@
   },
   "devDependencies": {
     "@crosscode/test-fixtures": "workspace:*",
-    "@types/ws": "^8.18.1"
+    "@types/ws": "^8.18.1",
+    "jose": "^6.2.4"
   }
 }

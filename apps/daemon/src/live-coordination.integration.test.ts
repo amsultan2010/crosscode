@@ -6,7 +6,7 @@ import type { PresenceUpdate } from "@crosscode/protocol";
 import { createTempRepo, cleanupTempRepos, waitFor } from "@crosscode/test-fixtures";
 import { createServiceServer, PgStore } from "../../service/src/index.js";
 import { writeDaemonConfig } from "./runtime.js";
-import { legacyEnroll } from "./test-legacy-enroll.js";
+import { provisionTestPrincipal, TEST_JWT_SECRET, TEST_SUPABASE_URL } from "./test-supabase-session.js";
 import { spawnDaemon, stopDaemon, stopAllDaemons, type ManagedDaemon } from "./test-helpers.js";
 import type { StoredOperation } from "./types.js";
 
@@ -29,23 +29,23 @@ describe.skipIf(!databaseUrl)("PostgreSQL live WebSocket coordination", () => {
   it("fans out presence and proposals live to three daemons and still recovers via poll after a WebSocket outage", async () => {
     const store = new PgStore(databaseUrl!);
     await store.migrate();
-    const owner = await store.provisionAdmin({ workspaceName: "live-coordination-test", actorId: "alice" });
-    const bob = await store.provisionEnrollment({ workspaceId: owner.workspaceId, actorId: "bob" });
-    const carol = await store.provisionEnrollment({ workspaceId: owner.workspaceId, actorId: "carol" });
-    let server = createServiceServer({ store, jwtSecret: "live-coordination-secret-with-at-least-32-bytes" });
+    const owner = await provisionTestPrincipal(store, { workspaceName: "live-coordination-test", actorId: "alice" });
+    const bob = await provisionTestPrincipal(store, { workspaceId: owner.principal.workspaceId, actorId: "bob" });
+    const carol = await provisionTestPrincipal(store, { workspaceId: owner.principal.workspaceId, actorId: "carol" });
+    let server = createServiceServer({ store, jwtSecret: TEST_JWT_SECRET, supabaseUrl: TEST_SUPABASE_URL });
     await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
     const port = (server.address() as AddressInfo).port;
     const url = `http://127.0.0.1:${port}`;
     try {
-      const enrollA = await legacyEnroll(url, owner.enrollmentToken);
-      const enrollB = await legacyEnroll(url, bob.enrollmentToken);
-      const enrollC = await legacyEnroll(url, carol.enrollmentToken);
+      const enrollA = owner;
+      const enrollB = bob;
+      const enrollC = carol;
       const rootA = await repository();
       const rootB = await repository();
       const rootC = await repository();
-      await writeDaemonConfig(rootA, { workspaceId: enrollA.principal.workspaceId, replicaId: enrollA.principal.replicaId, actorId: enrollA.principal.actorId, service: { url, session: { accessToken: enrollA.accessToken, refreshToken: "legacy-bridge-unused", expiresAt: enrollA.expiresAt } } });
-      await writeDaemonConfig(rootB, { workspaceId: enrollB.principal.workspaceId, replicaId: enrollB.principal.replicaId, actorId: enrollB.principal.actorId, service: { url, session: { accessToken: enrollB.accessToken, refreshToken: "legacy-bridge-unused", expiresAt: enrollB.expiresAt } } });
-      await writeDaemonConfig(rootC, { workspaceId: enrollC.principal.workspaceId, replicaId: enrollC.principal.replicaId, actorId: enrollC.principal.actorId, service: { url, session: { accessToken: enrollC.accessToken, refreshToken: "legacy-bridge-unused", expiresAt: enrollC.expiresAt } } });
+      await writeDaemonConfig(rootA, { workspaceId: enrollA.principal.workspaceId, replicaId: enrollA.principal.replicaId, actorId: enrollA.principal.actorId, service: { url, session: { accessToken: enrollA.accessToken, refreshToken: "test-unused", expiresAt: enrollA.expiresAt } } });
+      await writeDaemonConfig(rootB, { workspaceId: enrollB.principal.workspaceId, replicaId: enrollB.principal.replicaId, actorId: enrollB.principal.actorId, service: { url, session: { accessToken: enrollB.accessToken, refreshToken: "test-unused", expiresAt: enrollB.expiresAt } } });
+      await writeDaemonConfig(rootC, { workspaceId: enrollC.principal.workspaceId, replicaId: enrollC.principal.replicaId, actorId: enrollC.principal.actorId, service: { url, session: { accessToken: enrollC.accessToken, refreshToken: "test-unused", expiresAt: enrollC.expiresAt } } });
 
       const presenceLogA: PresenceUpdate[] = [];
       const presenceLogB: PresenceUpdate[] = [];
@@ -135,8 +135,8 @@ describe.skipIf(!databaseUrl)("PostgreSQL live WebSocket coordination", () => {
       // stopped first or server.close() never resolves.
       await stopAllDaemons();
       await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
-      await store.pool.query("DELETE FROM audit_events WHERE workspace_id = $1", [owner.workspaceId]);
-      await store.pool.query("DELETE FROM workspaces WHERE id = $1", [owner.workspaceId]);
+      await store.pool.query("DELETE FROM audit_events WHERE workspace_id = $1", [owner.principal.workspaceId]);
+      await store.pool.query("DELETE FROM workspaces WHERE id = $1", [owner.principal.workspaceId]);
       await store.close();
     }
   }, 45_000);

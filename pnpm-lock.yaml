@@ -75,6 +75,9 @@ importers:
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
+      jose:
+        specifier: ^6.2.4
+        version: 6.2.4
 
   apps/docs-site:
     devDependencies:
