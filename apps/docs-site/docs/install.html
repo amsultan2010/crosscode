@@ -14,6 +14,10 @@
       <a href="/docs/install.html">Install &amp; quickstart</a>
       <a href="/docs/cli.html">CLI reference</a>
       <a href="/docs/limitations.html">Limitations</a>
+      <a class="nav-github" href="https://github.com/amsultan2010/crosscode" rel="noopener">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
     </nav>
   </header>
 
@@ -51,8 +55,9 @@
     <div class="docs-content">
       <h1>Install &amp; quickstart</h1>
       <p class="subtitle">
-        Crosscode is run entirely on your own machines. There is no hosted
-        coordination service. You run PostgreSQL and the service yourself.
+        Crosscode is run entirely on your own machines. The coordination service
+        is not hosted for you today: you host it yourself, backed by a Supabase
+        project (or a plain Postgres instance for local-only testing).
       </p>
 
       <h2>Prerequisites</h2>
@@ -60,7 +65,7 @@
         <li>Node.js 24 or newer</li>
         <li>pnpm 11</li>
         <li>Git</li>
-        <li>PostgreSQL 17, or Docker Desktop/another Docker-compatible runtime</li>
+        <li>A Supabase project, or Docker Desktop/another Docker-compatible runtime for local-only testing against a plain Postgres instance</li>
       </ul>
 
       <h2>Install dependencies</h2>
@@ -68,27 +73,30 @@
 pnpm build
 pnpm test</code></pre>
 
-      <h2>Run the PostgreSQL coordination service</h2>
-      <p>The included Compose configuration binds PostgreSQL to local port <code>5432</code>.</p>
-      <pre><code>export POSTGRES_PASSWORD="$(openssl rand -base64 32)"
-docker compose -f infra/docker-compose.yml up -d postgres
-
-docker compose -f infra/docker-compose.yml exec -T postgres \
-  psql -U crosscode -d crosscode \
-  -c "CREATE ROLE crosscode_runtime LOGIN PASSWORD 'crosscode-runtime-local-only';"
-
-export MIGRATION_DATABASE_URL="postgresql://crosscode:${POSTGRES_PASSWORD}@127.0.0.1:5432/crosscode"
-export CROSSCODE_RUNTIME_DB_ROLE="crosscode_runtime"
-export DATABASE_URL="postgresql://crosscode_runtime:crosscode-runtime-local-only@127.0.0.1:5432/crosscode"
-export CROSSCODE_JWT_SECRET="$(openssl rand -base64 48)"
+      <h2>Set up Supabase and run the coordination service</h2>
+      <p>
+        The coordination service verifies Supabase-issued JWTs and stores
+        workspace/operation state in Supabase-hosted PostgreSQL. Create a
+        Supabase project (or use an existing one), then from its dashboard
+        collect the project URL, the <code>anon</code> public key, the
+        <code>service_role</code> key, and the pooled Postgres connection
+        string (Project Settings &rarr; API / Database).
+      </p>
+      <pre><code>export SUPABASE_URL="https://&lt;project-ref&gt;.supabase.co"
+export SUPABASE_SERVICE_ROLE_KEY="&lt;project service_role key&gt;"
+export DATABASE_URL="&lt;Supabase pooled connection string&gt;"
+export MIGRATION_DATABASE_URL="${DATABASE_URL}"
 pnpm service:migrate
 pnpm service</code></pre>
 
       <p>
-        The service defaults to <code>http://127.0.0.1:8788</code>. Plain HTTP is
-        allowed only on loopback. To bind to another interface, configure both
-        <code>CROSSCODE_TLS_KEY</code> and <code>CROSSCODE_TLS_CERT</code>; startup
-        refuses non-loopback plaintext HTTP.
+        Supabase signs access tokens with an asymmetric key (ES256 by default),
+        verified via the project's public JWKS endpoint
+        (<code>&lt;SUPABASE_URL&gt;/auth/v1/.well-known/jwks.json</code>) &mdash;
+        there is no shared JWT secret to configure. The service defaults to
+        <code>http://127.0.0.1:8788</code>. Plain HTTP is allowed only on
+        loopback; to bind to another interface, configure both
+        <code>CROSSCODE_TLS_KEY</code> and <code>CROSSCODE_TLS_CERT</code>.
       </p>
 
       <table>
@@ -96,8 +104,9 @@ pnpm service</code></pre>
           <tr><th>Variable</th><th>Purpose</th><th>Default</th></tr>
         </thead>
         <tbody>
-          <tr><td><code>DATABASE_URL</code></td><td>PostgreSQL connection string</td><td>required</td></tr>
-          <tr><td><code>CROSSCODE_JWT_SECRET</code></td><td>HS256 signing secret, at least 32 bytes</td><td>required</td></tr>
+          <tr><td><code>SUPABASE_URL</code></td><td>Supabase project URL, used to verify access tokens</td><td>required</td></tr>
+          <tr><td><code>DATABASE_URL</code></td><td>Supabase-hosted PostgreSQL connection string</td><td>required</td></tr>
+          <tr><td><code>SUPABASE_SERVICE_ROLE_KEY</code></td><td>Used only by admin-side <code>service:provision</code>; never distribute to members</td><td>required for provisioning</td></tr>
           <tr><td><code>CROSSCODE_SERVICE_HOST</code></td><td>Listen address</td><td><code>127.0.0.1</code></td></tr>
           <tr><td><code>CROSSCODE_SERVICE_PORT</code></td><td>Listen port</td><td><code>8788</code></td></tr>
           <tr><td><code>CROSSCODE_TLS_KEY</code></td><td>TLS private-key path</td><td>unset</td></tr>
@@ -107,39 +116,41 @@ pnpm service</code></pre>
 
       <p>
         Run <code>pnpm service:migrate</code> with a migration-owner connection
-        before starting a new service version. The checked-in migration is at
-        <code>apps/service/migrations/001_initial.sql</code>.
+        before starting a new service version. Migration
+        <code>004_supabase_auth.sql</code> enables Row Level Security and maps
+        members to Supabase's <code>auth.users</code>; <code>005_rls_hardening.sql</code>
+        adds the remaining RLS policies. <code>infra/docker-compose.yml</code> is
+        for local/CI testing against a plain Postgres instance only &mdash;
+        production points <code>DATABASE_URL</code> at Supabase.
       </p>
 
-      <h2>Create a workspace and enroll replicas</h2>
+      <h2>Sign in and enroll a replica</h2>
       <p>
-        Provisioning is an administrator-side command that writes a one-time
-        enrollment record directly to PostgreSQL. The raw enrollment token is
-        printed once and is never stored by the service.
+        Workspace and member provisioning is still an administrator-side command,
+        but it now creates or invites a Supabase Auth user by email
+        (<code>pnpm service:provision</code>, using
+        <code>SUPABASE_SERVICE_ROLE_KEY</code>) instead of writing a one-time
+        enrollment token.
       </p>
-      <pre><code>export MIGRATION_DATABASE_URL="postgresql://crosscode:${POSTGRES_PASSWORD}@127.0.0.1:5432/crosscode"
-OWNER_ENROLLMENT_JSON="$(pnpm --silent service:provision create my-workspace alice)"
-echo "${OWNER_ENROLLMENT_JSON}"</code></pre>
-
-      <p>The JSON contains <code>workspaceId</code> and <code>enrollmentToken</code>. In Alice's checkout:</p>
       <pre><code>pnpm crosscode -- init --json
-export CROSSCODE_ENROLLMENT_TOKEN="&lt;owner enrollmentToken&gt;"
-pnpm crosscode -- join --service http://127.0.0.1:8788 --json
+pnpm crosscode -- login --email alice@example.com --password &lt;password&gt; --service http://127.0.0.1:8788
 pnpm daemon</code></pre>
 
-      <p>Provision another member in the same workspace:</p>
-      <pre><code>MEMBER_ENROLLMENT_JSON="$(pnpm --silent service:provision join &lt;workspaceId&gt; bob member)"
-echo "${MEMBER_ENROLLMENT_JSON}"</code></pre>
+      <p>
+        <code>login</code> authenticates directly against Supabase Auth and
+        stores the resulting session (access token in memory, refresh token in
+        the OS keychain when available, otherwise the local mode-<code>0600</code>
+        daemon config). A replica is then self-registered automatically the
+        first time the daemon starts with a logged-in session and no
+        <code>replicaId</code> yet &mdash; there is no separate enrollment step
+        or token to distribute. To join a specific workspace explicitly:
+      </p>
+      <pre><code>pnpm crosscode -- join --workspace &lt;workspaceId&gt;</code></pre>
 
       <p>
-        Then run the same <code>init</code>, <code>CROSSCODE_ENROLLMENT_TOKEN</code>,
-        <code>join</code>, and <code>daemon</code> commands in Bob's separate
-        checkout. Enrollment tokens are one-time and expire after 15 minutes. Do not
-        put them in shell history, committed files, chat, or logs.
-      </p>
-      <p>
         To create a read-only service member, use <code>viewer</code> instead of
-        <code>member</code>. Viewers may download operations but cannot upload them.
+        <code>member</code> when provisioning. Viewers may download operations
+        but cannot upload them.
       </p>
 
       <h2>Normal workflow</h2>
@@ -212,7 +223,8 @@ pnpm audit --audit-level high</code></pre>
   </main>
 
   <footer class="site-footer">
-    Crosscode: local-first Git coordination.
+    <p>Crosscode: local-first Git coordination.</p>
+    <p><a href="/">Home</a> &middot; <a href="https://github.com/amsultan2010/crosscode" rel="noopener">View on GitHub</a></p>
   </footer>
 </body>
 </html>

@@ -14,6 +14,10 @@
       <a href="/docs/install.html">Install &amp; quickstart</a>
       <a href="/docs/cli.html">CLI reference</a>
       <a href="/docs/limitations.html">Limitations</a>
+      <a class="nav-github" href="https://github.com/amsultan2010/crosscode" rel="noopener">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
     </nav>
   </header>
 
@@ -54,12 +58,12 @@
 
       <ul>
         <li>Production PostgreSQL role grants and retention policies still need environment-specific deployment hardening.</li>
-        <li>Replica secrets are stored in the OS keychain when available (macOS Keychain, Linux Secret Service); otherwise, including on Windows, the protected Git-directory configuration file is used.</li>
+        <li>Supabase session refresh tokens are stored in the OS keychain when available (macOS Keychain, Linux Secret Service); otherwise, including on Windows, the protected Git-directory configuration file is used.</li>
         <li>Binary files are shared base64-encoded with byte-exact materialization; any conflict involving a binary file requires human approval, since deterministic hunk/merge analysis is text-only.</li>
         <li>Renames are tracked as first-class rename changes; a rename conflicting with pending work on either path, or touching a critical path under either name, always requires approval.</li>
         <li>Dependency-impact analysis for <code>.ts</code>/<code>.tsx</code> is a syntactic AST walk, not a type-checker-backed analysis.</li>
-        <li>There is no hosted or managed coordination service yet. You run PostgreSQL and the service yourself.</li>
-        <li>Team-workspace enrollment requires a running coordination service and a manually issued enrollment token; there is no self-serve signup or billing yet.</li>
+        <li>There is no hosted or managed coordination service yet. You run a Supabase project (or a plain Postgres instance for local-only testing) and the service yourself.</li>
+        <li>Workspace and member provisioning is still an administrator-side command (<code>service:provision</code>); there is no self-serve signup or billing yet.</li>
         <li>Deliberately not published to npm or any editor marketplace — the supported surface is the daemon + MCP server, run from a cloned checkout. Editors like VS Code and Cursor connect via MCP; there is no supported editor extension.</li>
       </ul>
 
@@ -72,7 +76,8 @@
   </main>
 
   <footer class="site-footer">
-    Crosscode: local-first Git coordination.
+    <p>Crosscode: local-first Git coordination.</p>
+    <p><a href="/">Home</a> &middot; <a href="https://github.com/amsultan2010/crosscode" rel="noopener">View on GitHub</a></p>
   </footer>
 </body>
 </html>
