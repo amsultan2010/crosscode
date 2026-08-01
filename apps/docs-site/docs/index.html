@@ -34,6 +34,7 @@
         <div class="docs-sidebar-links">
           <a href="/docs/architecture.html">Architecture</a>
           <a href="/docs/safety.html">Safety model</a>
+          <a href="/docs/protocol.html">Network protocol</a>
         </div>
       </div>
       <div>
@@ -78,6 +79,10 @@
           <p>The rules that govern when Crosscode is allowed to touch your working tree.</p>
         </div>
         <div class="card">
+          <h3><a href="/docs/protocol.html">Network protocol</a></h3>
+          <p>The wire schema shared by the daemon, CLI, MCP server, and coordination service.</p>
+        </div>
+        <div class="card">
           <h3><a href="/docs/mcp-clients.html">MCP client setup</a></h3>
           <p>Connecting Claude Code, Codex CLI, and OpenCode to the local <code>crosscode-mcp</code> server.</p>
         </div>
@@ -85,6 +90,17 @@
           <h3><a href="/docs/limitations.html">Current limitations</a></h3>
           <p>What is still in progress, taken directly from the project README.</p>
         </div>
+      </div>
+
+      <div class="callout">
+        <strong>If you're an agent:</strong> you generally don't need this website
+        for day-to-day work &mdash; status, claim, publish, accept/reject all happen
+        over the <code>crosscode</code> CLI or the local MCP server. Fetch
+        <a href="/llms.txt">/llms.txt</a> for a curated markdown index of this site,
+        or <a href="/docs/mcp-clients.html#available-tools">the MCP tool catalog</a>
+        for the exact tool surface. The capability ladder and trust model for
+        agent-delegated actions live in this repository's root
+        <a href="https://github.com/amsultan2010/crosscode/blob/main/AGENTS.md">AGENTS.md</a>.
       </div>
 
       <h2>What Crosscode is</h2>

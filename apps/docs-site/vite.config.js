@@ -17,6 +17,7 @@ export default defineConfig({
         install: resolve(root, "docs/install.html"),
         cli: resolve(root, "docs/cli.html"),
         safety: resolve(root, "docs/safety.html"),
+        protocol: resolve(root, "docs/protocol.html"),
         mcp: resolve(root, "docs/mcp-clients.html"),
         limitations: resolve(root, "docs/limitations.html")
       }

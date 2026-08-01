@@ -13,6 +13,7 @@
       <a class="brand" href="/">Crosscode</a>
       <a href="#benefits">Why Crosscode</a>
       <a href="#how-it-works">How it works</a>
+      <a href="#terminal-vs-site">Terminal vs. this site</a>
       <a href="#safety">Safety model</a>
       <a href="/docs/index.html">Docs</a>
       <button class="nav-copy-btn" data-copy-target="install-prompt-text" type="button">Copy install prompt</button>
@@ -60,6 +61,45 @@
     <span class="muted">3 files &middot; not yet applied &middot; awaiting your review</span>
 
 <span class="muted">&gt; </span><span class="cursor">▌</span></code></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="terminal-vs-site" class="alt">
+      <div class="inner">
+        <div class="section-heading reveal">
+          <h2>Two ways to use Crosscode</h2>
+          <p>Day-to-day work never requires this website. It's where you come to go deeper.</p>
+        </div>
+
+        <div class="today-grid stagger">
+          <div class="today-card reveal">
+            <h3>Your terminal <span class="badge live">Day-to-day</span></h3>
+            <p>
+              Status, claiming work, publishing, and accepting or rejecting a
+              proposal all happen through the <code>crosscode</code> CLI or the
+              MCP tools your coding agent already has connected. There's nothing
+              to look up here for routine work.
+            </p>
+            <ul style="margin-top:0.9rem;">
+              <li><a href="/docs/install-prompt.md">The install prompt</a>, straight from the source markdown</li>
+              <li><a href="/docs/mcp-clients.html#available-tools">MCP tool catalog</a>: every tool your agent can call</li>
+              <li><a href="https://github.com/amsultan2010/crosscode/blob/main/AGENTS.md">AGENTS.md</a>: the capability ladder and trust model for agent-delegated actions</li>
+            </ul>
+          </div>
+          <div class="today-card reveal">
+            <h3>This website <span class="badge soon">Going deeper</span></h3>
+            <p>
+              Come here when you want to browse the full documentation, understand
+              a setting before you change it, or read the safety model end to end
+              instead of trusting a summary.
+            </p>
+            <ul style="margin-top:0.9rem;">
+              <li><a href="/docs/architecture.html">Architecture</a> and <a href="/docs/protocol.html">network protocol</a> reference</li>
+              <li><a href="/docs/install.html">Install &amp; quickstart</a> for configuring the coordination service</li>
+              <li><a href="/docs/safety.html">Safety model</a> and <a href="/docs/limitations.html">current limitations</a> in full</li>
+            </ul>
           </div>
         </div>
       </div>
@@ -169,7 +209,7 @@ other checkouts of this same repository. Do the following:
 6. Tell me the config was written and that I need to restart/reload you (or
    reconnect MCP servers) for the new "crosscode" server to be picked up.
 7. Once reconnected, call the `get_workspace_state` tool once to confirm it works.
-   You do not need to run any install/init command yourself first &mdash; the first tool
+   You do not need to run any install/init command yourself first — the first tool
    call automatically creates a local Crosscode identity for this checkout and
    starts its background daemon if one isn't already running. If the call fails,
    report the exact error back to me instead of guessing at a fix.</code></pre>
@@ -350,11 +390,13 @@ other checkouts of this same repository. Do the following:
     <p>
       <a href="/docs/index.html">Docs</a> &middot;
       <a href="/docs/architecture.html">Architecture</a> &middot;
+      <a href="/docs/protocol.html">Protocol</a> &middot;
       <a href="/docs/install.html">Install &amp; quickstart</a> &middot;
       <a href="/docs/mcp-clients.html">MCP clients</a> &middot;
       <a href="/docs/cli.html">CLI reference</a> &middot;
       <a href="/docs/safety.html">Safety model</a> &middot;
       <a href="/docs/limitations.html">Limitations</a> &middot;
+      <a href="/llms.txt">llms.txt</a> &middot;
       <a href="https://github.com/amsultan2010/crosscode" rel="noopener">View on GitHub</a>
     </p>
   </footer>
