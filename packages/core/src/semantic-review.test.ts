@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AGENT_DELEGATED_PROVIDER_ID,
   applyRiskSafetyGate,
   authorizeSemanticReview,
   buildSemanticReviewBundle,
@@ -104,6 +105,12 @@ describe("strict output schema handling", () => {
     const result = validateSemanticReview({ classification: "compatible", confidence: 0.9, requiresHumanApproval: false, proposedResolution: { patch: "rm -rf /" } });
     expect(result.classification).toBe("uncertain");
     expect(result.proposedResolution).toBeUndefined();
+  });
+});
+
+describe("agent-delegated provider id", () => {
+  it("is the fixed string used both for on-demand and daemon-side auto-triggered reviews", () => {
+    expect(AGENT_DELEGATED_PROVIDER_ID).toBe("agent-delegated");
   });
 });
 

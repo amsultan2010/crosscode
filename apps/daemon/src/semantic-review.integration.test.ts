@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { CoordinationService } from "../../service/src/index.js";
-import { AgentDelegatedReviewer, contentHash, MockSemanticReviewer, type SemanticReview } from "@crosscode/core";
+import { AgentDelegatedReviewer, contentHash, MockSemanticReviewer, type SemanticReview, type SemanticReviewer } from "@crosscode/core";
 import { LocalDaemon, startDaemon } from "./index.js";
 
 const exec = promisify(execFile); const directories: string[] = [];
@@ -21,6 +21,20 @@ async function repo(): Promise<string> {
   await mkdir(join(path, ".crosscode"), { recursive: true });
   await writeFile(join(path, ".crosscode", "config.yaml"),
     "version: 1\nvalidation:\n  profiles:\n    fast:\n      commands:\n        - node --version\naiReview:\n  externalAiReview: approved\n  allowedProviders:\n    - mock-provider\n  requireLocalConfirmation: true\n");
+  await exec("git", ["-C", path, "add", "."]);
+  await exec("git", ["-C", path, "commit", "-qm", "initial"]);
+  return path;
+}
+async function repoWithAgentDelegated(): Promise<string> {
+  const path = await mkdtemp(join(tmpdir(), "crosscode-daemon-review-auto-"));
+  directories.push(path);
+  await exec("git", ["init", "-q", "-b", "main", path]);
+  await exec("git", ["-C", path, "config", "user.email", "test@example.com"]);
+  await exec("git", ["-C", path, "config", "user.name", "Test"]);
+  await writeFile(join(path, "a.txt"), "one\n");
+  await mkdir(join(path, ".crosscode"), { recursive: true });
+  await writeFile(join(path, ".crosscode", "config.yaml"),
+    "version: 1\nvalidation:\n  profiles:\n    fast:\n      commands:\n        - node --version\naiReview:\n  externalAiReview: approved\n  allowedProviders:\n    - agent-delegated\n  requireLocalConfirmation: true\n");
   await exec("git", ["-C", path, "add", "."]);
   await exec("git", ["-C", path, "commit", "-qm", "initial"]);
   return path;
@@ -52,6 +66,29 @@ async function likelyCompatibleProposal(senderRoot: string, receiverRoot: string
   const pendingLocal = { id: "fake-local-op", workspaceId: "w", senderReplicaId: "receiver", transaction: { id: "fake-local-op", base: { files: [] }, changes: [modifyChange], provenance: { source: "filesystem" as const, confidence: "known" as const }, safety: { risk: "low" as const, requiresApproval: false } }, sequence: 1, createdAt: new Date().toISOString(), status: "local" as const };
   receiver.operations.set(pendingLocal.id, pendingLocal);
   return operation;
+}
+
+/**
+ * Unlike `likelyCompatibleProposal` (which adds the overlapping local change only after
+ * `sync()` has run, so on-demand review requests see the overlap but sync-time auto-trigger
+ * would not), this seeds the conflicting local change first so the incoming remote proposal
+ * is already classified "likely-compatible" at the moment `sync()`/`syncRemote()` stores it.
+ */
+function receiverWithOverlappingLocalChange(receiver: LocalDaemon): void {
+  const modifyChange = { path: "a.txt", kind: "modify" as const, beforeHash: contentHash("one\n"), afterHash: contentHash("receiver-edit\n"), afterContent: "receiver-edit\n" };
+  const pendingLocal = { id: "fake-local-op", workspaceId: "w", senderReplicaId: "receiver", transaction: { id: "fake-local-op", base: { files: [] }, changes: [modifyChange], provenance: { source: "filesystem" as const, confidence: "known" as const }, safety: { risk: "low" as const, requiresApproval: false } }, sequence: 1, createdAt: new Date().toISOString(), status: "local" as const };
+  receiver.operations.set(pendingLocal.id, pendingLocal);
+}
+
+/** Never resolves -- stands in for a reviewer whose review() call is still in flight. */
+class HangingReviewer implements SemanticReviewer {
+  review(): Promise<SemanticReview> {
+    return new Promise(() => { /* intentionally never resolves */ });
+  }
+}
+
+async function pollUntil(check: () => boolean, attempts = 50): Promise<void> {
+  for (let attempt = 0; attempt < attempts && !check(); attempt += 1) await new Promise((resolveWait) => setTimeout(resolveWait, 10));
 }
 
 describe("AI semantic reviewer", () => {
@@ -255,5 +292,81 @@ describe("agent-delegated semantic review over the local HTTP API", () => {
 
     const pendingResponse = await fetch(`${url}/v1/semantic-reviews/pending`, { headers: { authorization } });
     expect((await pendingResponse.json()).data).toEqual([]);
+  });
+});
+
+describe("auto-triggered semantic review on incoming remote proposals", () => {
+  it("auto-creates a review-eligible review after sync(), with providerId agent-delegated, without any explicit request", async () => {
+    const senderRoot = await repoWithAgentDelegated(); const receiverRoot = await repoWithAgentDelegated(); const service = new CoordinationService();
+    const reviewer = new MockSemanticReviewer();
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b", reviewer });
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    receiverWithOverlappingLocalChange(receiver);
+    await writeFile(join(senderRoot, "a.txt"), "sender-edit\n");
+    const operation = await sender.capture("edit", service);
+    reviewer.queueResponseFor(operation.id, { classification: "compatible", confidence: 0.9, affectedSymbols: [], evidence: [], invariantsToPreserve: [], requiresHumanApproval: false });
+
+    await receiver.sync(service);
+
+    await pollUntil(() => receiver.listSemanticReviewsFor(operation.id).length > 0);
+    const reviews = receiver.listSemanticReviewsFor(operation.id);
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]!.providerId).toBe("agent-delegated");
+    expect(reviews[0]!.path).toBe("a.txt");
+    expect(reviews[0]!.deterministicClassification).toBe("likely-compatible");
+  });
+
+  it("does not auto-create a review when workspace policy disables external AI review or omits agent-delegated from the allow list", async () => {
+    const senderRoot = await repoWithDisabledReview(); const receiverRoot = await repoWithDisabledReview(); const service = new CoordinationService();
+    const reviewer = new MockSemanticReviewer();
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b", reviewer });
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    receiverWithOverlappingLocalChange(receiver);
+    await writeFile(join(senderRoot, "a.txt"), "sender-edit\n");
+    const operation = await sender.capture("edit", service);
+
+    await receiver.sync(service);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+
+    expect(receiver.listSemanticReviewsFor(operation.id)).toEqual([]);
+  });
+
+  it("does not create a duplicate auto-triggered review when the trigger path runs again for the same operation/path", async () => {
+    const senderRoot = await repoWithAgentDelegated(); const receiverRoot = await repoWithAgentDelegated(); const service = new CoordinationService();
+    const reviewer = new MockSemanticReviewer();
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b", reviewer });
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    receiverWithOverlappingLocalChange(receiver);
+    await writeFile(join(senderRoot, "a.txt"), "sender-edit\n");
+    const operation = await sender.capture("edit", service);
+    reviewer.queueResponseFor(operation.id, { classification: "compatible", confidence: 0.9, affectedSymbols: [], evidence: [], invariantsToPreserve: [], requiresHumanApproval: false });
+
+    await receiver.sync(service);
+    await pollUntil(() => receiver.listSemanticReviewsFor(operation.id).length > 0);
+    expect(receiver.listSemanticReviewsFor(operation.id)).toHaveLength(1);
+
+    // Re-run the same private trigger path directly for the same operation id, simulating a
+    // repeated sync that observes the operation still "proposed" -- must not duplicate.
+    await (receiver as unknown as { autoTriggerSemanticReviews(ids: string[]): Promise<void> }).autoTriggerSemanticReviews([operation.id]);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+    expect(receiver.listSemanticReviewsFor(operation.id)).toHaveLength(1);
+  });
+
+  it("never blocks sync()/syncRemote() on a slow reviewer -- auto-trigger is fire-and-forget", async () => {
+    const senderRoot = await repoWithAgentDelegated(); const receiverRoot = await repoWithAgentDelegated(); const service = new CoordinationService();
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b", reviewer: new HangingReviewer() });
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    receiverWithOverlappingLocalChange(receiver);
+    await writeFile(join(senderRoot, "a.txt"), "sender-edit\n");
+    const operation = await sender.capture("edit", service);
+
+    const startedAt = Date.now();
+    const proposals = await receiver.sync(service);
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+    expect(proposals.some((proposal) => proposal.id === operation.id)).toBe(true);
+
+    // The review request is in flight (the reviewer never resolves) but sync() already returned.
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+    expect(receiver.listSemanticReviewsFor(operation.id)).toEqual([]);
   });
 });

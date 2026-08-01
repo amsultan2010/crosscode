@@ -6,7 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import chokidar, { type FSWatcher } from "chokidar";
 import {
-  AgentDelegatedReviewer, analyzeOperation, applyRiskSafetyGate, authorizeSemanticReview, buildSemanticReviewBundle, changedExportedSymbols, contentHash, exportedSymbolNames, hunksOverlap,
+  AGENT_DELEGATED_PROVIDER_ID, AgentDelegatedReviewer, analyzeOperation, applyRiskSafetyGate, authorizeSemanticReview, buildSemanticReviewBundle, changedExportedSymbols, contentHash, exportedSymbolNames, hunksOverlap,
   isReviewEligible, looksLikeInterfaceChange, pathOverlaps, redactPath, riskRank, transactionRisk, validateSemanticReview,
   type OperationAnalysis, type SemanticReviewer
 } from "@crosscode/core";
@@ -395,6 +395,7 @@ export class LocalDaemon {
       }
     }
     await this.autoApplyEligibleProposals(insertedIds);
+    await this.autoTriggerSemanticReviews(insertedIds);
     this.serviceStatus = { configured: true, online: true, lastSyncAt: now() };
     return { uploaded, downloaded, cursor: this.remoteCursor };
   }
@@ -521,6 +522,7 @@ export class LocalDaemon {
     });
     await this.persist("transaction.proposed", { proposals, remoteCursor: this.remoteCursor });
     await this.autoApplyEligibleProposals(proposals.map((proposal) => proposal.id));
+    await this.autoTriggerSemanticReviews(proposals.map((proposal) => proposal.id));
     return proposals;
   }
   async accept(id: string, options: { reviewApprovals?: Record<string, string> } = {}): Promise<StoredOperation> {
@@ -670,6 +672,36 @@ export class LocalDaemon {
         await this.accept(id);
         await this.persist("transaction.auto_applied", { id, autoApplyRisk: threshold });
       } catch { /* not eligible for auto-apply under the current classification; left as a normal proposal */ }
+    }
+  }
+
+  /**
+   * Auto-triggers a semantic review the moment deterministic analysis first classifies a change
+   * as review-eligible ("likely-compatible" / "semantic-overlap") on a proposal freshly arrived
+   * from a remote peer, so a review is already in flight (or done) by the time a human looks at
+   * it instead of only being available on demand. Always uses AGENT_DELEGATED_PROVIDER_ID -- the
+   * fixed label for the default AgentDelegatedReviewer -- and only runs when workspace policy has
+   * opted into it via the existing externalAiReview/allowedProviders mechanism. The actual
+   * `reviewer.review()` call is never awaited here: it can legitimately take up to 10 minutes
+   * (BUILD_INSTRUCTIONS.md section 20), so triggering it must never block sync/ingestion. Failures
+   * are swallowed -- this is best-effort, and on-demand review remains available regardless.
+   */
+  private async autoTriggerSemanticReviews(ids: string[]): Promise<void> {
+    if (!ids.length || !this.options.reviewer) return;
+    const policy = await configuredAiReviewPolicy(this.root).catch(() => undefined);
+    if (!policy || policy.externalAiReview !== "approved" || !policy.allowedProviders.includes(AGENT_DELEGATED_PROVIDER_ID)) return;
+    for (const id of ids) {
+      const operation = this.operations.get(id);
+      if (!operation || operation.status !== "proposed") continue;
+      const existingReviews = this.listSemanticReviewsFor(id);
+      for (const change of operation.transaction.changes) {
+        if (existingReviews.some((review) => review.path === change.path && review.providerId === AGENT_DELEGATED_PROVIDER_ID)) continue;
+        let analysis: OperationAnalysis;
+        try { ({ analysis } = await this.analyzeChange(id, change)); }
+        catch { continue; }
+        if (!isReviewEligible(analysis.classification)) continue;
+        void this.requestSemanticReview(id, change.path, AGENT_DELEGATED_PROVIDER_ID).catch(() => { /* auto-trigger is best-effort; on-demand review remains available */ });
+      }
     }
   }
 

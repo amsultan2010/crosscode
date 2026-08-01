@@ -56,6 +56,14 @@ export const UNCERTAIN_FALLBACK: SemanticReview = {
   requiresHumanApproval: true
 };
 
+/**
+ * Fixed provider id for the default `AgentDelegatedReviewer` (packages/core/src/agent-delegated-reviewer.ts),
+ * which delegates review to the user's own connected coding agent over MCP rather than an external
+ * AI vendor. Used both for on-demand review requests routed through the delegated reviewer and as
+ * the sole `providerId` for daemon-side auto-triggered reviews (BUILD_INSTRUCTIONS.md section 20).
+ */
+export const AGENT_DELEGATED_PROVIDER_ID = "agent-delegated";
+
 /** Malformed provider output is never trusted with a patch; it degrades to `uncertain`. */
 export function validateSemanticReview(raw: unknown): SemanticReview {
   const parsed = semanticReviewSchema.safeParse(raw);
