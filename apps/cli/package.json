@@ -3,5 +3,5 @@
   "private": true,
   "type": "module",
   "bin": { "crosscode": "./src/index.ts" },
-  "dependencies": { "@crosscode/daemon": "workspace:*", "@crosscode/git": "workspace:*", "@crosscode/protocol": "workspace:*" }
+  "dependencies": { "@crosscode/daemon": "workspace:*", "@crosscode/git": "workspace:*", "@crosscode/protocol": "workspace:*", "commander": "^15.0.0" }
 }
