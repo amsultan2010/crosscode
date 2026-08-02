@@ -9,11 +9,13 @@ calls `ensureDaemonRunning` (`apps/mcp-server/src/bootstrap.ts`): if no daemon i
 already listening for the worktree, it writes a local replica identity if one
 doesn't exist yet, spawns the daemon as a detached background process, and waits
 for it to come up before serving any tool calls. If `CROSSCODE_SERVICE_URL` is set
-in the server's `env` but the worktree has no logged-in Supabase session yet
-(no prior `crosscode -- login`), bootstrap fails fast with an explicit error
-asking you to log in first rather than guessing at a fix. The daemon keeps
-running in the background after the MCP client disconnects, so it survives
-individual agent sessions.
+in the server's `env` but the worktree has no logged-in Supabase session yet,
+bootstrap fails fast with an explicit error asking you to log in first rather
+than guessing at a fix. From an agent, resolve that with the headless sign-in
+(`crosscode login --email <e> --password <p>`) or a pairing code
+(`crosscode join --pair <code>`) — not the browser flow, which needs a TTY and
+a human. The daemon keeps running in the background after the MCP client
+disconnects, so it survives individual agent sessions.
 
 The server takes no arguments; it discovers the repository from its working
 directory, so each client must launch it with `cwd` set to the worktree root.

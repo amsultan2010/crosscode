@@ -13,10 +13,12 @@ milestone-by-milestone status of what's implemented and tested.
   touches the daemon/service trust boundary — open an issue first so the
   approach can be discussed before you invest time in an implementation.
 - Check [BUILD_INSTRUCTIONS.md](./BUILD_INSTRUCTIONS.md) for current scope
-  decisions. In particular: the supported product surface is the daemon + MCP
-  server (plus the CLI as the daemon's local tool). `apps/vscode-extension` is
-  frozen and unsupported by decision — it stays in the repo, built and tested,
-  but does not receive new feature work.
+  decisions. In particular: Crosscode is CLI-first. The supported product
+  surface is the daemon + MCP server, plus the CLI as the daemon's local tool.
+  There is no web UI for coordination work and no editor extension — PRs adding
+  either will be declined. The multi-tenant backend in `apps/service`
+  (workspaces, memberships, invites, pairing codes, billing) is very much alive;
+  it just has no browser front end.
 
 ## Development setup
 
@@ -53,9 +55,9 @@ This is a pnpm workspace. The apps under `apps/` are:
   (`pnpm mcp`)
 - `apps/service` — the coordination service: Supabase-hosted PostgreSQL
   operations, auth, and audit records (`pnpm service`)
-- `apps/docs-site` — the documentation site (`pnpm docs:dev` / `docs:build`)
-- `apps/vscode-extension` — frozen and unsupported (see above); do not send PRs
-  adding features here
+- `apps/docs-site` — the website: landing page, auth pages (sign-up, sign-in,
+  password reset, and the `crosscode login` callback), and the docs pages
+  generated from the root `docs/*.md` (`pnpm docs:dev` / `docs:build`)
 
 ## Running tests
 
@@ -79,8 +81,9 @@ and pull request.
 
 ## Before opening a PR
 
-- `pnpm build` (`tsc --noEmit` plus the extension build) and `pnpm test` pass
-  locally.
+- `pnpm build` and `pnpm test` pass locally. If your change touches
+  `apps/docs-site`, also run `pnpm docs:build` — the root `tsc` does not cover
+  it.
 - Keep PRs focused — one change per PR.
 - Describe what changed and why in the PR description; use the PR template.
 - If your change touches the daemon/service trust boundary (auth, RLS,
