@@ -54,7 +54,7 @@ The website sits beside this, not inside it: it originates accounts (sign-up/sig
 This is a frozen contract. The CLI side and the site side are implemented against it independently and neither may renegotiate it.
 
 - `crosscode login` with no flags and a TTY present starts a loopback HTTP server on `127.0.0.1` on an ephemeral port with the route `/callback`, and generates a 32-character random `state`.
-- It opens the browser at `${WEB_URL}/auth/cli.html?port=<port>&state=<state>`, where `WEB_URL` comes from `--web <url>`, else `CROSSCODE_WEB_URL`, else the production default.
+- It opens the browser at `${WEB_URL}/auth/cli.html?port=<port>&state=<state>`, where `WEB_URL` comes from `--web <url>`, else `CROSSCODE_WEB_URL`, else the legacy `CROSSCODE_DASHBOARD_URL` the MCP server already reads. There is no hosted default yet: with none of the three set, `crosscode login` fails fast with `WEB_URL_REQUIRED` rather than guessing a domain. Once a production domain exists, that default belongs in `resolveWebUrl` (`apps/daemon/src/browser-login.ts`) and this line should change with it.
 - `/auth/cli.html` is a page on the marketing site. If the visitor is not signed in it renders the normal sign-in form. After a successful Supabase sign-in it POSTs JSON to `http://127.0.0.1:<port>/callback`:
 
   ```jsonc
@@ -86,7 +86,16 @@ Threat model for this flow — why loopback-only, why `state`, why nothing is pr
 
 **Daemon test flakiness — fixed (2026-08-01).** Root causes were: `DaemonClient`'s HTTP request timeout was a hardcoded 3s (too tight for a real daemon under load — also a latent production fragility, not just a test artifact — now 10s); vitest ran daemon-spawning integration/e2e tests with unbounded fork concurrency, so real child daemon processes starved each other for CPU (now capped at `maxForks: 4`); and the heaviest test cases in `process.test.ts`/`three-participant.e2e.test.ts` had tighter per-test timeouts than lighter cases in the same files — an inverted budget, not just contention — now rebalanced to match real cost.
 
-**Verification baseline:** TypeScript build passes; full vitest suite passes cleanly and repeatably (24 test files, 204 tests, 6 skipped pending `CROSSCODE_TEST_DATABASE_URL`); `pnpm audit --audit-level high` clean; docs-site builds; CLI/MCP manually smoke-tested.
+**CLI-only pass — merged (2026-08-02).** The web dashboard was deleted outright and the product re-centred on the CLI. Four parallel workstreams, merged together with zero conflicts:
+
+- **Website reduced** to landing + auth + docs. `apps/docs-site/dashboard/` is gone (~4,400 lines: dashboard, onboarding, spotlight tour, analytics, settings, invite redemption, live-feed WebSocket client and their tests). In its place, `apps/docs-site/auth/` serves `signin`, `signup`, `reset`, and the `cli.html` login-callback page. (`apps/docs-site`)
+- **`crosscode login` became a browser flow** against the frozen contract above, with `--no-browser` and `--email`/`--password` preserved as the headless paths agents and CI use. New `apps/daemon/src/browser-login.ts` owns the loopback server, `state` check, CORS preflight, and timeout. (`apps/cli`, `apps/daemon`, `apps/mcp-server`)
+- **VS Code extension deleted** along with its build wiring — root `build` script, `pnpm-workspace.yaml` build allowances for `@vscode/vsce-sign` and `keytar`, and 2,078 lines of lockfile. (`apps/vscode-extension`, removed)
+- **Docs rewritten CLI-first** across `README.md`, this file, `AGENTS.md`, `CONTRIBUTING.md`, and `docs/`. (`docs/`)
+
+What did **not** change, deliberately: the coordination service and every migration. Workspaces, memberships, invites, pairing codes, roles, RLS, presence, and billing are all still there and still tested — they lost their browser UI, not their existence. Known residue from this pass is tracked in [`docs/status/2026-08-02-cli-only-pass.md`](./docs/status/2026-08-02-cli-only-pass.md).
+
+**Verification baseline (re-measured 2026-08-02, post-CLI-only merge):** `pnpm build` (`tsc --noEmit`) passes; `pnpm test` passes — **25 test files passed, 6 skipped (31); 231 tests passed, 11 skipped (242)**, the skips pending `CROSSCODE_TEST_DATABASE_URL`; `pnpm docs:build` passes and emits the landing page, four auth pages, and eight docs pages. The count dropped from 204→231 passing tests despite deleting the dashboard's ~750 lines of tests because the CLI-login workstream added browser-login and CLI coverage. Local node is v22.22.2 against a declared `"node": ">=24"` — pnpm warns and proceeds; unrelated to this work.
 
 **Phases 8/9/10 v1 — implemented (2026-08-02).** Invite-by-code/link, self-serve workspace creation, the autonomy slider, and a billing placeholder all landed together against the same hosted Supabase project this repo already used for dev. Detail and remaining gaps are under each phase below — none is fully "done" against its original exit criteria yet, but each has a working v1.
 
