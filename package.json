@@ -19,9 +19,7 @@
     "service:provision": "tsx apps/service/src/provision-admin.ts",
     "docs:dev": "pnpm --filter @crosscode/docs-site dev",
     "docs:build": "pnpm --filter @crosscode/docs-site build",
-    "docs:preview": "pnpm --filter @crosscode/docs-site preview",
-    "dashboard:dev": "pnpm --filter @crosscode/dashboard dev",
-    "dashboard:build": "pnpm --filter @crosscode/dashboard build"
+    "docs:preview": "pnpm --filter @crosscode/docs-site preview"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

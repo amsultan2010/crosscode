@@ -25,12 +25,13 @@
 
 html {
   scrollbar-color: var(--border-strong) transparent;
+  font-size: 19px;
 }
 
 body {
   margin: 0;
   font-family: var(--font-sans);
-  font-size: 0.94rem;
+  font-size: 1.05rem;
   color: var(--fg);
   background:
     radial-gradient(ellipse 55rem 28rem at 50% -12%, rgba(255, 255, 255, 0.05), transparent 60%),
@@ -45,7 +46,7 @@ header.site-header {
   top: 0;
   z-index: 20;
   border-bottom: 1px solid var(--border);
-  padding: 0.85rem 1.25rem;
+  padding: 0.85rem 20px;
   background: rgba(5, 5, 5, 0.78);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -57,7 +58,7 @@ header.site-header nav {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 1.6rem;
+  gap: 1.1rem;
 }
 
 header.site-header .brand {
@@ -82,7 +83,7 @@ header.site-header .brand::before {
 header.site-header a {
   color: var(--muted);
   text-decoration: none;
-  font-size: 0.86rem;
+  font-size: 1.05rem;
   letter-spacing: -0.005em;
   transition: color 0.15s ease;
 }
@@ -93,14 +94,14 @@ header.site-header a:hover {
 
 .nav-copy-btn {
   font: inherit;
-  font-size: 0.62rem;
+  font-size: 1.05rem;
   font-weight: 600;
   letter-spacing: -0.005em;
   cursor: pointer;
   border: 1px solid var(--border-strong);
   background: transparent;
   color: var(--fg);
-  border-radius: 3px;
+  border-radius: 999px;
   padding: 0.32rem 0.75rem;
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
@@ -122,9 +123,9 @@ header.site-header a:hover {
   align-items: center;
   gap: 0.4rem;
   border: 1px solid var(--border-strong);
-  border-radius: 3px;
+  border-radius: 999px;
   padding: 0.32rem 0.75rem;
-  font-size: 0.9rem;
+  font-size: 1.05rem;
   font-weight: 600;
   color: var(--fg) !important;
   text-decoration: none !important;
@@ -145,7 +146,7 @@ header.site-header a:hover {
 main {
   max-width: var(--max-width);
   margin: 0 auto;
-  padding: 4.5rem 1.25rem 5rem;
+  padding: 4.5rem 20px 5rem;
 }
 
 main.wide {
@@ -154,10 +155,10 @@ main.wide {
 
 h1 {
   font-size: clamp(2.3rem, 5vw, 3.6rem);
-  line-height: 1.05;
-  letter-spacing: -0.04em;
+  line-height: 1.02;
+  letter-spacing: -0.045em;
   margin-bottom: 0.9rem;
-  font-weight: 750;
+  font-weight: 800;
   background: linear-gradient(180deg, #ffffff, #b4b4b1);
   -webkit-background-clip: text;
   background-clip: text;
@@ -210,11 +211,11 @@ a:hover {
   align-items: center;
   gap: 0.5rem;
   font-family: var(--font-mono);
-  font-size: 0.92rem;
+  font-size: 1.05rem;
   color: var(--fg-dim);
   background: transparent;
   border: 1px solid var(--border-strong);
-  border-radius: 3px;
+  border-radius: 999px;
   padding: 0.32rem 0.8rem;
   margin-bottom: 1.4rem;
   letter-spacing: 0.02em;
@@ -232,7 +233,7 @@ code {
   border: 1px solid var(--border);
   border-radius: 3px;
   padding: 0.1rem 0.4rem;
-  font-size: 0.88em;
+  font-size: 0.95em;
   font-family: var(--font-mono);
   color: #d6d6d2;
 }
@@ -257,7 +258,7 @@ table {
   border-collapse: collapse;
   width: 100%;
   margin: 1.2rem 0;
-  font-size: 0.92rem;
+  font-size: 1.05rem;
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
@@ -294,7 +295,7 @@ blockquote {
 
 .card {
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 10px;
   padding: 1.25rem;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent);
   transition: border-color 0.15s ease, transform 0.15s ease, background 0.15s ease;
@@ -317,7 +318,7 @@ blockquote {
 }
 
 .card p {
-  font-size: 0.92rem;
+  font-size: 1.05rem;
   margin-bottom: 0;
 }
 
@@ -333,8 +334,8 @@ blockquote {
 footer.site-footer {
   border-top: 1px solid var(--border);
   color: var(--muted);
-  font-size: 0.92rem;
-  padding: 2rem 1.25rem;
+  font-size: 1.05rem;
+  padding: 2rem 20px;
   text-align: center;
 }
 
@@ -361,13 +362,13 @@ footer.site-footer a:hover {
   align-items: center;
   gap: 0.4rem;
   margin-top: 0.4rem;
-  padding: 0.75rem 1.4rem;
+  padding: 0.85rem 1.7rem;
   background: var(--accent);
   color: var(--accent-fg);
   text-decoration: none;
-  border-radius: 4px;
+  border-radius: 999px;
   font-weight: 650;
-  font-size: 0.62rem;
+  font-size: 1.05rem;
   letter-spacing: -0.005em;
   transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
   box-shadow: 0 10px 24px -14px rgba(0, 0, 0, 0.9);
@@ -433,7 +434,7 @@ footer.site-footer a:hover {
   border-radius: 0;
   background: none;
   font-family: var(--font-mono);
-  font-size: 0.88rem;
+  font-size: 1.05rem;
   color: var(--muted);
 }
 
@@ -452,7 +453,7 @@ footer.site-footer a:hover {
   border-radius: 0;
   box-shadow: none;
   margin: 0;
-  font-size: 0.86rem;
+  font-size: 1.05rem;
 }
 
 .terminal pre .muted {
@@ -480,7 +481,7 @@ footer.site-footer a:hover {
 }
 
 .stat-row .stat span {
-  font-size: 0.9rem;
+  font-size: 1.05rem;
   color: var(--muted);
 }
 
@@ -492,7 +493,7 @@ footer.site-footer a:hover {
 }
 
 .landing section {
-  padding: 5rem 1.25rem;
+  padding: 5rem 20px;
 }
 
 .landing section.alt {
@@ -502,7 +503,7 @@ footer.site-footer a:hover {
 }
 
 .landing .inner {
-  max-width: 62rem;
+  max-width: 80rem;
   margin: 0 auto;
 }
 
@@ -510,26 +511,28 @@ footer.site-footer a:hover {
   padding-top: 5.5rem;
   padding-bottom: 4rem;
   text-align: center;
-  background: linear-gradient(180deg, var(--code-bg) 0%, var(--bg) 100%);
+  background:
+    radial-gradient(circle, rgba(255, 255, 255, 0.06) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(180deg, var(--code-bg) 0%, var(--bg) 100%);
   border-bottom: 1px solid var(--border);
 }
 
 .hero .eyebrow {
   display: inline-block;
-  font-size: 0.92rem;
+  font-size: 1.05rem;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--fg-dim);
   border: 1px solid var(--border-strong);
-  border-radius: 3px;
+  border-radius: 999px;
   padding: 0.28rem 0.75rem;
   margin-bottom: 1.4rem;
 }
 
 .hero h1 {
-  font-size: clamp(2.2rem, 4.6vw, 3.4rem);
-  line-height: 1.08;
+  font-size: clamp(2.4rem, 5.2vw, 4rem);
+  line-height: 1.03;
   max-width: 46rem;
   margin: 0 auto 1rem;
 }
@@ -568,7 +571,7 @@ footer.site-footer a:hover {
 .hero-microcopy {
   margin: 0.9rem 0 0;
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 1.05rem;
   font-family: var(--font-mono);
 }
 
@@ -622,7 +625,7 @@ footer.site-footer a:hover {
 
 .benefit {
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 10px;
   padding: 1.6rem;
   background: var(--bg);
   position: relative;
@@ -650,7 +653,7 @@ footer.site-footer a:hover {
 
 .benefit p {
   margin: 0;
-  font-size: 0.92rem;
+  font-size: 1.05rem;
   position: relative;
 }
 
@@ -705,14 +708,14 @@ footer.site-footer a:hover {
 
 .feature {
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 10px;
   padding: 1.4rem;
   background: var(--bg);
 }
 
 .feature .icon {
   font-family: var(--font-mono);
-  font-size: 0.9rem;
+  font-size: 1.05rem;
   font-weight: 700;
   letter-spacing: 0.04em;
   color: var(--muted);
@@ -735,15 +738,28 @@ footer.site-footer a:hover {
 .flow-steps {
   counter-reset: step;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
-  gap: 1.5rem;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1.25rem;
   margin-top: 2rem;
+  padding: 0;
+}
+
+@media (max-width: 56rem) {
+  .flow-steps {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 30rem) {
+  .flow-steps {
+    grid-template-columns: 1fr;
+  }
 }
 
 .flow-steps li {
   list-style: none;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 10px;
   padding: 1.4rem 1.25rem;
   position: relative;
 }
@@ -760,7 +776,7 @@ footer.site-footer a:hover {
   background: var(--accent);
   color: var(--accent-fg);
   font-weight: 700;
-  font-size: 0.85rem;
+  font-size: 1.05rem;
   margin-bottom: 0.75rem;
 }
 
@@ -772,7 +788,7 @@ footer.site-footer a:hover {
 .flow-steps p {
   margin: 0;
   color: var(--muted);
-  font-size: 0.92rem;
+  font-size: 1.05rem;
 }
 
 .install-panel {
@@ -790,20 +806,20 @@ footer.site-footer a:hover {
 }
 
 .install-panel .code-toolbar span {
-  font-size: 0.9rem;
+  font-size: 1.05rem;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .copy-btn {
   font: inherit;
-  font-size: 0.92rem;
+  font-size: 1.05rem;
   font-weight: 650;
   cursor: pointer;
   border: 1px solid var(--accent);
   background: var(--accent);
   color: var(--accent-fg);
-  border-radius: 4px;
+  border-radius: 999px;
   padding: 0.4rem 0.85rem;
   transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
 }
@@ -825,7 +841,7 @@ footer.site-footer a:hover {
 }
 
 .install-panel pre code {
-  font-size: 0.88rem;
+  font-size: 1.05rem;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -850,7 +866,7 @@ footer.site-footer a:hover {
   display: flex;
   gap: 1rem;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 10px;
   padding: 1.1rem 1.25rem;
   background: var(--bg);
   transition: border-color 0.2s ease, transform 0.2s ease;
@@ -873,7 +889,7 @@ footer.site-footer a:hover {
   border: 1px solid var(--fg-dim);
   color: var(--fg);
   font-weight: 700;
-  font-size: 0.9rem;
+  font-size: 1.05rem;
 }
 
 .safety-rules p {
@@ -886,7 +902,7 @@ footer.site-footer a:hover {
 
 .today-card {
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 10px;
   padding: 1.5rem;
 }
 
@@ -902,12 +918,12 @@ footer.site-footer a:hover {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  font-size: 0.9rem;
+  font-size: 1.05rem;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   border: 1px solid var(--border-strong);
-  border-radius: 3px;
+  border-radius: 999px;
   padding: 0.2rem 0.6rem;
   color: var(--fg-dim);
 }
@@ -934,7 +950,7 @@ footer.site-footer a:hover {
   margin: 0;
   padding-left: 1.1rem;
   color: var(--muted);
-  font-size: 0.92rem;
+  font-size: 1.05rem;
 }
 
 .today-card ul li {
@@ -949,7 +965,7 @@ footer.site-footer a:hover {
 
 .faq-item {
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 10px;
   padding: 1rem 1.25rem;
   background: var(--bg);
 }
@@ -983,7 +999,7 @@ footer.site-footer a:hover {
 
 .faq-item p {
   margin: 0.85rem 0 0 1.1rem;
-  font-size: 0.92rem;
+  font-size: 1.05rem;
 }
 
 .landing-footer-cta {
@@ -1025,7 +1041,7 @@ footer.site-footer a:hover {
 
 @media (max-width: 40rem) {
   .landing section {
-    padding: 3.5rem 1.1rem;
+    padding: 3.5rem 16px;
   }
 
   .hero {
@@ -1048,11 +1064,11 @@ main.docs-layout {
   display: flex;
   flex-direction: column;
   gap: 1.6rem;
-  font-size: 0.88rem;
+  font-size: 1.05rem;
 }
 
 .docs-sidebar-label {
-  font-size: 0.88rem;
+  font-size: 1.05rem;
   font-weight: 700;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -1125,7 +1141,7 @@ main.docs-layout {
   padding-top: 1.5rem;
   border-top: 1px solid var(--border);
   text-align: right;
-  font-size: 0.92rem;
+  font-size: 1.05rem;
 }
 
 .docs-next a {
@@ -1151,4 +1167,116 @@ main.docs-layout {
   .docs-next {
     text-align: left;
   }
+}
+
+.usecase-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.25rem;
+  margin-top: 2.5rem;
+}
+
+.usecase-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.6rem;
+  background: var(--bg);
+  transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.usecase-card h3 {
+  margin-top: 0;
+  font-size: 1.1rem;
+}
+
+.usecase-card-list {
+  list-style: none;
+  margin: 0.9rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.usecase-card-list li {
+  position: relative;
+  padding-left: 1.1rem;
+  font-size: 1.05rem;
+  color: var(--muted);
+}
+
+.usecase-card-list li::before {
+  content: "\2013";
+  position: absolute;
+  left: 0;
+  color: var(--fg-dim);
+}
+
+.usecase-card--featured,
+.usecase-card--wide {
+  grid-column: span 2;
+}
+
+.usecase-card--featured {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 2rem;
+  align-items: center;
+}
+
+.usecase-card--wide .usecase-card-list {
+  grid-template-columns: repeat(2, 1fr);
+  column-gap: 2rem;
+}
+
+.usecase-card--featured h3 {
+  font-size: 1.3rem;
+}
+
+.usecase-card-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 1.2rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--fg);
+}
+
+.usecase-arrow {
+  transition: transform 0.15s ease;
+}
+
+.usecase-card-cta:hover .usecase-arrow {
+  transform: translateX(3px);
+}
+
+.usecase-card-media .terminal {
+  margin-top: 0;
+}
+
+@media (max-width: 56rem) {
+  .usecase-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .usecase-card--featured,
+  .usecase-card--wide {
+    grid-column: span 1;
+  }
+
+  .usecase-card--featured {
+    grid-template-columns: 1fr;
+  }
+
+  .usecase-card--wide .usecase-card-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+.usecase-card:hover,
+.usecase-card.reveal.is-visible:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 20px 40px -30px rgba(255, 255, 255, 0.12), 0 0 0 1px var(--border-strong);
+  transform: translateY(-3px);
 }

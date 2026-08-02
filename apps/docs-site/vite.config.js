@@ -19,7 +19,8 @@ export default defineConfig({
         safety: resolve(root, "docs/safety.html"),
         protocol: resolve(root, "docs/protocol.html"),
         mcp: resolve(root, "docs/mcp-clients.html"),
-        limitations: resolve(root, "docs/limitations.html")
+        limitations: resolve(root, "docs/limitations.html"),
+        dashboard: resolve(root, "dashboard/index.html")
       }
     }
   }

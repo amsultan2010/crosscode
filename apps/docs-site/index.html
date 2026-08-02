@@ -11,6 +11,7 @@
   <header class="site-header">
     <nav>
       <a class="brand" href="/">Crosscode</a>
+      <a href="#use-cases">Use cases</a>
       <a href="#benefits">Why Crosscode</a>
       <a href="#how-it-works">How it works</a>
       <a href="#terminal-vs-site">Terminal vs. this site</a>
@@ -61,6 +62,70 @@
     <span class="muted">3 files &middot; not yet applied &middot; awaiting your review</span>
 
 <span class="muted">&gt; </span><span class="cursor">▌</span></code></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="use-cases">
+      <div class="inner">
+        <div class="section-heading reveal">
+          <h2>Use cases</h2>
+          <p>Real scenarios teams run into once more than one agent touches a repo.</p>
+        </div>
+
+        <div class="usecase-grid stagger">
+          <div class="usecase-card usecase-card--featured reveal">
+            <div class="usecase-card-main">
+              <h3>Run multiple agents on one repo, in parallel</h3>
+              <ul class="usecase-card-list">
+                <li>Claude Code and Codex CLI can work the same checkout without clobbering each other's edits</li>
+                <li>Every settled change becomes a durable transaction the instant it lands</li>
+                <li>Ask "who else is working on this repo right now?" and get a real answer</li>
+              </ul>
+              <a class="usecase-card-cta" href="#how-it-works">
+                <span>See how coordination works</span>
+                <span class="usecase-arrow" aria-hidden="true">&rarr;</span>
+              </a>
+            </div>
+            <div class="usecase-card-media">
+              <div class="terminal">
+                <div class="terminal-bar">
+                  <span></span><span></span><span></span>
+                  <span class="terminal-title">codex &middot; crosscode MCP</span>
+                </div>
+                <pre><code><span class="muted">&gt; get_workspace_state()</span>
+
+<span class="accent">✓</span> peers online: 2 <span class="muted">(alicja, claude-code)</span>
+<span class="accent">✓</span> your edits: 4 files settled, synced
+
+<span class="muted">&gt; </span><span class="cursor">▌</span></code></pre>
+              </div>
+            </div>
+          </div>
+
+          <div class="usecase-card reveal">
+            <h3>Review agent output like a pull request</h3>
+            <ul class="usecase-card-list">
+              <li>Every remote change arrives as a proposal, never auto-applied</li>
+              <li>Diff, accept, or reject before it touches your branch</li>
+            </ul>
+          </div>
+
+          <div class="usecase-card reveal">
+            <h3>Hand off work across machines or people</h3>
+            <ul class="usecase-card-list">
+              <li>Start on your laptop, hand off to a cloud agent in another worktree</li>
+              <li>Live presence, claims, and handoffs over the same MCP connection</li>
+            </ul>
+          </div>
+
+          <div class="usecase-card usecase-card--wide reveal">
+            <h3>Recover instantly from a bad edit</h3>
+            <ul class="usecase-card-list">
+              <li>Checkpoints live under <code>refs/crosscode/checkpoints/...</code></li>
+              <li>Roll back an agent's change without touching your branch history</li>
+            </ul>
           </div>
         </div>
       </div>
