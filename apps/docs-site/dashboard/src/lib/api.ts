@@ -53,6 +53,13 @@ export class ApiError extends Error {
   }
 }
 
+/** The request never reached the service: wrong URL, service down, CORS, or mixed content. */
+export class ServiceUnreachableError extends Error {
+  constructor(readonly serviceUrl: string, readonly cause?: unknown) {
+    super(`Can't reach the Crosscode service at ${serviceUrl}`);
+  }
+}
+
 export type AuthContext = {
   serviceUrl: string;
   accessToken: string;
@@ -68,11 +75,19 @@ async function request<T>(session: SessionContext, method: string, path: string,
   const headers: Record<string, string> = { authorization: `Bearer ${session.accessToken}` };
   if (options?.workspaceId) headers[WORKSPACE_HEADER] = options.workspaceId;
   if (options?.body !== undefined) headers["content-type"] = "application/json";
-  const response = await fetch(new URL(path, session.serviceUrl), {
-    method,
-    headers,
-    body: options?.body !== undefined ? JSON.stringify(options.body) : undefined
-  });
+  let response: Response;
+  try {
+    response = await fetch(new URL(path, session.serviceUrl), {
+      method,
+      headers,
+      body: options?.body !== undefined ? JSON.stringify(options.body) : undefined
+    });
+  } catch (error) {
+    // fetch rejects with a bare "Failed to fetch" for every network-layer failure --
+    // wrong host, service down, CORS refusal, mixed content. Naming the URL we actually
+    // tried is the difference between a dead end and something the reader can act on.
+    throw new ServiceUnreachableError(session.serviceUrl, error);
+  }
   const payload = await response.json().catch(() => undefined);
   if (!response.ok) {
     const message = payload && typeof payload === "object" && "error" in payload ? String(payload.error) : response.statusText;

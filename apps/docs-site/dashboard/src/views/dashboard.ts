@@ -1,5 +1,5 @@
 import type { RemoteClaim, RemoteHandoff, RemoteIntent, RemoteOperation, RemoteTask, RemoteValidation, WsFanOutMessage, WorkspaceBillingResponse, ListMembershipsResponse } from "@crosscode/protocol";
-import { createWorkspace, fetchBillingStatus, fetchMemberships, fetchProjects, fetchWorkspaceSnapshot, registerReplica, type AuthContext, type PresenceSession, type Project } from "../lib/api.js";
+import { createWorkspace, fetchBillingStatus, fetchMemberships, fetchProjects, fetchWorkspaceSnapshot, registerReplica, ServiceUnreachableError, type AuthContext, type PresenceSession, type Project } from "../lib/api.js";
 import { riskMix, riskMixEntries, rollUpProjects, summarizeValidations, type ProjectRollup } from "../lib/analytics.js";
 import { maybeStartDashboardTour } from "../lib/tour.js";
 import { connectStream } from "../lib/ws.js";
@@ -86,7 +86,10 @@ export function renderDashboard(container: HTMLElement, session: { serviceUrl: s
     } catch (error) {
       // A network/auth failure is not the same thing as "this user has no team" --
       // conflating them would offer to create a workspace the user probably already has.
-      showMembershipsError(error instanceof Error ? error.message : "Could not load your teams");
+      showMembershipsError(
+        error instanceof Error ? error.message : "Could not load your teams",
+        error instanceof ServiceUnreachableError
+      );
       return;
     }
     membershipsError.hidden = true;
@@ -95,9 +98,11 @@ export function renderDashboard(container: HTMLElement, session: { serviceUrl: s
     initTeamSwitcher(memberships);
   }
 
-  function showMembershipsError(message: string): void {
+  function showMembershipsError(message: string, unreachable = false): void {
     membershipsError.hidden = false;
-    membershipsError.textContent = `Could not load your teams: ${message}`;
+    membershipsError.textContent = unreachable
+      ? `${message}. The dashboard is deployed but its coordination service is not answering at that address, so there is no live data to show. Nothing is wrong with your account.`
+      : `Could not load your teams: ${message}`;
     // Deliberately left hidden: offering "create a team" here would misread a transient
     // failure as an empty account.
     createTeamToggle.hidden = true;

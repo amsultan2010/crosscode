@@ -13,7 +13,14 @@ const fetchBillingStatus = vi.fn();
 const registerReplica = vi.fn();
 const createWorkspace = vi.fn();
 
+class FakeServiceUnreachableError extends Error {
+  constructor(readonly serviceUrl: string) {
+    super(`Can't reach the Crosscode service at ${serviceUrl}`);
+  }
+}
+
 vi.mock("../lib/api.js", () => ({
+  ServiceUnreachableError: FakeServiceUnreachableError,
   fetchMemberships: (...args: unknown[]) => fetchMemberships(...args),
   fetchWorkspaceSnapshot: (...args: unknown[]) => fetchWorkspaceSnapshot(...args),
   fetchProjects: (...args: unknown[]) => fetchProjects(...args),
@@ -132,6 +139,17 @@ describe("dashboard shell", () => {
     expect(visible(container, "#memberships-error")).toBe(false);
     expect(visible(container, "#create-team-toggle")).toBe(true);
     expect(visible(container, "#workspace-form")).toBe(true);
+  });
+
+  it("names the unreachable service instead of blaming the user's account", async () => {
+    fetchMemberships.mockRejectedValue(new FakeServiceUnreachableError("https://service.example"));
+    const container = mount();
+    await settle();
+
+    const error = container.querySelector<HTMLElement>("#memberships-error")!;
+    expect(error.hidden).toBe(false);
+    expect(error.textContent).toContain("https://service.example");
+    expect(error.textContent).toContain("Nothing is wrong with your account");
   });
 
   it("shows the whole dashboard -- empty, not gated -- for a user with no team", async () => {
