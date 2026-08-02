@@ -316,7 +316,7 @@ other checkouts of this same repository. Do the following:
     <section>
       <div class="inner">
         <div class="section-heading reveal">
-          <h2>What's here today vs. coming soon</h2>
+          <h2>What's here today vs. in active development</h2>
           <p>Pre-1.0, but the daemon-to-coordination-service loop works today.</p>
         </div>
 
@@ -330,14 +330,15 @@ other checkouts of this same repository. Do the following:
               <li>Self-hosted coordination service (PostgreSQL + included Docker Compose)</li>
               <li>Live WebSocket presence, tasks, claims, and handoffs</li>
               <li><code>publish --branch</code> for accepted work, plus binary file sharing and true rename tracking</li>
+              <li>A real AI semantic reviewer for ambiguous conflicts, delegating to your own connected MCP agent (gated behind workspace policy and human approval)</li>
             </ul>
           </div>
           <div class="today-card reveal">
-            <h3>Coming soon <span class="badge soon">Planned</span></h3>
+            <h3>In active development <span class="badge soon">Building now</span></h3>
             <ul>
-              <li>Hosted, managed coordination service: no self-hosted PostgreSQL required</li>
-              <li>Self-serve team workspaces with a paid hosted tier and billing</li>
-              <li>A real external AI provider behind the built-in semantic-review interface</li>
+              <li>Hosted, multi-tenant coordination service with self-serve workspace creation and invite-by-link, plus a web dashboard for presence/tasks/proposals</li>
+              <li>An autonomy slider: configurable per-workspace policy for when a clean proposal auto-applies instead of always requiring an explicit accept</li>
+              <li>Tiered pricing and billing on top of the hosted service</li>
             </ul>
           </div>
         </div>
@@ -354,7 +355,7 @@ other checkouts of this same repository. Do the following:
         <div class="faq-list stagger">
           <details class="faq-item reveal">
             <summary>Do I need a hosted account to try it?</summary>
-            <p>No. Clone the repo and run the included Docker Compose coordination service yourself. A hosted, managed service is planned but not required today.</p>
+            <p>No. Clone the repo and run the included Docker Compose coordination service yourself. A hosted, managed service is in active development but not required today.</p>
           </details>
           <details class="faq-item reveal">
             <summary>Which coding agents does this work with?</summary>
