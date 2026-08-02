@@ -1,0 +1,261 @@
+:root {
+  color-scheme: dark;
+  --fg: #f5f5f4;
+  --fg-dim: #a3a3a1;
+  --bg: #050505;
+  --bg-alt: #0a0a0a;
+  --bg-raised: #0d0d0c;
+  --muted: #75746f;
+  --border: #1e1e1c;
+  --border-strong: #38372f;
+  --accent: #ffffff;
+  --accent-strong: #d8d8d4;
+  --accent-fg: #050505;
+  --danger: #f0b25e;
+  --ok: #7fd694;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--fg);
+  background: var(--bg);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  border-bottom: 1px solid var(--border);
+  padding: 0.85rem 1.25rem;
+  position: sticky;
+  top: 0;
+  background: rgba(5, 5, 5, 0.9);
+  backdrop-filter: blur(10px);
+  z-index: 10;
+}
+
+.app-header .brand {
+  font-weight: 700;
+  color: var(--fg);
+  text-decoration: none;
+  letter-spacing: -0.02em;
+}
+
+#app-nav {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  margin-left: auto;
+}
+
+#app-nav a {
+  color: var(--fg-dim);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+#app-nav a.active,
+#app-nav a:hover {
+  color: var(--fg);
+}
+
+#app-nav button {
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--fg);
+  border-radius: 4px;
+  padding: 0.35rem 0.75rem;
+}
+
+#app-nav button:hover {
+  background: var(--bg-raised);
+}
+
+main#app {
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+}
+
+.auth-card {
+  max-width: 24rem;
+  margin: 3rem auto 0;
+}
+
+.auth-card h1 {
+  font-size: 1.6rem;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.4rem;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  margin-top: 1.25rem;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--fg-dim);
+}
+
+input[type="email"],
+input[type="password"],
+input[type="text"] {
+  font: inherit;
+  background: var(--bg-alt);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 0.55rem 0.7rem;
+  color: var(--fg);
+}
+
+input:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+button[type="submit"] {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--fg);
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-radius: 4px;
+  padding: 0.6rem 1rem;
+  font-weight: 600;
+}
+
+button[type="submit"]:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.error {
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+
+.workspace-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 1rem;
+  margin-bottom: 1.75rem;
+}
+
+.workspace-bar form {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+}
+
+.workspace-bar label {
+  min-width: 18rem;
+}
+
+.workspace-bar button {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+  color: var(--fg);
+  border-radius: 4px;
+  padding: 0.55rem 0.9rem;
+}
+
+.status-pill {
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 0.3rem 0.7rem;
+  color: var(--fg-dim);
+}
+
+.status-pill[data-kind="online"] {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.status-pill[data-kind="error"],
+.status-pill[data-kind="offline"] {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1rem;
+}
+
+.panel {
+  border: 1px solid var(--border);
+  background: var(--bg-alt);
+  border-radius: 6px;
+  padding: 1rem 1.1rem;
+}
+
+.panel h2 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 0.7rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.panel ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--muted);
+  margin-right: 0.3rem;
+}
+
+.dot.online {
+  background: var(--ok);
+}
+
+.dot.offline {
+  background: var(--muted);
+}
+
+.dot.error {
+  background: var(--danger);
+}
