@@ -55,7 +55,9 @@ export function mcpTools(client: DaemonClient) {
       client.accept(input.operationId, input.reviewApprovals ? { reviewApprovals: input.reviewApprovals } : undefined),
     reject_proposal: (input: { operationId: string }) => client.reject(input.operationId),
     publish_branch: (input: { branch: string; profile: string; message?: string; dryRun?: boolean; confirm: true }) =>
-      client.publish({ branch: input.branch, profile: input.profile, message: input.message, dryRun: input.dryRun })
+      client.publish({ branch: input.branch, profile: input.profile, message: input.message, dryRun: input.dryRun }),
+    get_workspace_autonomy: () => client.workspaceAutonomy(),
+    set_workspace_autonomy: (input: { tier: 0 | 1 | 2 }) => client.setWorkspaceAutonomy(input.tier)
   };
 }
 

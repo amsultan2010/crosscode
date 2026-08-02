@@ -160,6 +160,7 @@ describe("MCP daemon boundary", () => {
       "claim_task",
       "create_checkpoint",
       "diff_proposal",
+      "get_workspace_autonomy",
       "get_workspace_state",
       "inspect_proposal",
       "list_pending_semantic_reviews",
@@ -171,6 +172,7 @@ describe("MCP daemon boundary", () => {
       "reject_proposal",
       "request_handoff",
       "request_validation",
+      "set_workspace_autonomy",
       "submit_change_summary",
       "submit_semantic_review"
     ]);

@@ -174,6 +174,23 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
       result = { value: await (await client()).status() };
     });
 
+  const workspace = program.command("workspace").description("manage workspace-level settings");
+  const autonomy = workspace.command("autonomy").description("get or set this workspace's autonomy tier (0=always_ask, 1=auto_if_clean, 2=auto_always)");
+  autonomy
+    .command("get")
+    .description("show the current autonomy tier")
+    .action(async () => {
+      result = { value: await (await client()).workspaceAutonomy() };
+    });
+  autonomy
+    .command("set")
+    .description("set the autonomy tier (owner/admin only)")
+    .argument("<tier>", "0, 1, or 2")
+    .action(async (tierArg: string) => {
+      if (!/^[0-2]$/.test(tierArg)) throw new CliError("USAGE_ERROR", "Usage: crosscode workspace autonomy set <0|1|2>");
+      result = { value: await (await client()).setWorkspaceAutonomy(Number(tierArg) as 0 | 1 | 2) };
+    });
+
   const checkpoint = program
     .command("checkpoint")
     .description("create a checkpoint")

@@ -30,6 +30,7 @@ html {
 body {
   margin: 0;
   font-family: var(--font-sans);
+  font-size: 0.94rem;
   color: var(--fg);
   background:
     radial-gradient(ellipse 55rem 28rem at 50% -12%, rgba(255, 255, 255, 0.05), transparent 60%),
@@ -665,6 +666,22 @@ footer.site-footer a:hover {
   gap: 1.25rem;
 }
 
+.feature-grid {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+@media (max-width: 56rem) {
+  .feature-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 30rem) {
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .feature,
 .today-card,
 .flow-steps li,
@@ -972,6 +989,11 @@ footer.site-footer a:hover {
   text-align: center;
   border-top: 1px solid var(--border);
   background: var(--code-bg);
+}
+
+.landing-footer-cta .subtitle {
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .reveal {

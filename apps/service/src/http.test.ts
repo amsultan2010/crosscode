@@ -236,6 +236,35 @@ describe("service HTTP boundary", () => {
     expect((await redeem("REDEEMED", accessToken)).status).toBe(409);
     expect((await redeem("ANY")).status).toBe(401);
   });
+
+  it("reads the workspace autonomy tier for any member but only lets the owner set it", async () => {
+    let storedTier: 0 | 1 | 2 = 0;
+    const ownerMembership: Membership = { ...membership, role: "owner" };
+    const store = {
+      resolveMembership: async (_userId: string, workspaceId: string) => (workspaceId === "owner-workspace" ? ownerMembership : membership),
+      getWorkspaceAutonomyTier: async () => storedTier,
+      setWorkspaceAutonomyTier: async (identity: Membership, tier: 0 | 1 | 2) => {
+        if (identity.role !== "owner") throw new Error("unreachable: http.ts should have already rejected non-owners");
+        storedTier = tier;
+        return storedTier;
+      }
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken(membership.userId);
+
+    const initial = await fetch(`${base}/v1/workspace/autonomy`, { headers: { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId } });
+    expect(await initial.json()).toEqual({ ok: true, data: { tier: 0 } });
+
+    const rejected = await put(base, "/v1/workspace/autonomy", { tier: 2 }, accessToken, membership.workspaceId);
+    expect(rejected.status).toBe(403);
+    expect(storedTier).toBe(0);
+
+    const accepted = await put(base, "/v1/workspace/autonomy", { tier: 2 }, accessToken, "owner-workspace");
+    expect(await accepted.json()).toEqual({ ok: true, data: { tier: 2 } });
+    expect(storedTier).toBe(2);
+
+    expect((await put(base, "/v1/workspace/autonomy", { tier: 3 }, accessToken, "owner-workspace")).status).toBe(400);
+  });
 });
 
 async function signToken(userId: string): Promise<string> {
@@ -252,6 +281,18 @@ async function listen(store: PgStore, bodyLimitBytes?: number): Promise<string> 
 function post(base: string, path: string, body: unknown, accessToken?: string, workspaceId?: string) {
   return fetch(`${base}${path}`, {
     method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+      ...(workspaceId ? { [WORKSPACE_HEADER]: workspaceId } : {})
+    },
+    body: JSON.stringify(body)
+  });
+}
+
+function put(base: string, path: string, body: unknown, accessToken?: string, workspaceId?: string) {
+  return fetch(`${base}${path}`, {
+    method: "PUT",
     headers: {
       "content-type": "application/json",
       ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),

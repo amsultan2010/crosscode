@@ -27,6 +27,7 @@ import {
   intentSchema,
   publishRequestSchema,
   semanticReviewRequestBodySchema,
+  setWorkspaceAutonomyRequestSchema,
   taskRequestSchema,
   taskSchema,
   validationRequestSchema,
@@ -86,7 +87,8 @@ function changesOverlap(left: ChangeTransaction["changes"][number], right: Chang
   if (left.kind === "delete" || right.kind === "delete") return true;
   return hunksOverlap(left.unifiedPatch, right.unifiedPatch);
 }
-export type DaemonOptions = { workspaceId: string; replicaId: string; actorId: string; reviewer?: SemanticReviewer };
+export type AutonomyTier = 0 | 1 | 2;
+export type DaemonOptions = { workspaceId: string; replicaId: string; actorId: string; reviewer?: SemanticReviewer; transport?: RemoteSyncTransport };
 export type RemoteSyncTransport = {
   upload(record: OutboundRecord): Promise<import("../../service/src/index.js").RemoteOperation>;
   list(after: number): Promise<{ operations: import("../../service/src/index.js").RemoteOperation[]; nextCursor: number }>;
@@ -100,6 +102,13 @@ export type RemoteSyncTransport = {
   listIntents(after: string): Promise<{ intents: RemoteIntent[]; nextCursor: string }>;
   uploadValidation(record: ValidationOutboundRecord): Promise<RemoteValidation>;
   listValidations(after: string): Promise<{ validations: RemoteValidation[]; nextCursor: string }>;
+  /**
+   * Optional so existing test fakes and transports that predate Phase 9 keep
+   * type-checking unchanged; the daemon simply keeps its last-cached tier
+   * (default 0) when a transport does not implement these.
+   */
+  getAutonomyTier?(): Promise<AutonomyTier>;
+  setAutonomyTier?(tier: AutonomyTier): Promise<AutonomyTier>;
 };
 
 export class LocalDaemon {
@@ -119,6 +128,7 @@ export class LocalDaemon {
   private gitState: GitState;
   private materializationPaused = false;
   private serviceStatus: { configured: boolean; online: boolean; lastSyncAt?: string; lastSyncError?: string } = { configured: false, online: false };
+  private autonomyTier: AutonomyTier = 0;
   private mutationTail: Promise<void> = Promise.resolve();
   private readonly transactionListeners = new Set<(operation: StoredOperation) => void>();
   private constructor(readonly root: string, readonly options: DaemonOptions, private readonly state: DaemonStateStore, gitState: GitState) { this.gitState = gitState; }
@@ -135,6 +145,24 @@ export class LocalDaemon {
   }
   async status() { const repository = await discoverRepository(this.root); return { ...repository, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, tasks: this.tasks.size, claims: this.claims.size, proposals: [...this.operations.values()].filter((operation) => operation.status === "proposed").length, materializationPaused: this.materializationPaused, eventSequence: this.eventSequence, remoteCursor: this.remoteCursor, pendingOutbound: [...this.outbound.values()].filter((record) => record.acknowledgedServerSequence === undefined).length, remoteValidations: [...this.remoteValidations.values()], service: { ...this.serviceStatus } }; }
   configureRemoteSync(): void { this.serviceStatus = { ...this.serviceStatus, configured: true }; }
+  currentAutonomyTier(): AutonomyTier { return this.autonomyTier; }
+  /**
+   * Tier changes are set through the coordination service (single source of truth,
+   * consistent with how other workspace-level policy already flows), then cached
+   * here and refreshed every sync cycle -- never persisted as an override that
+   * could drift from the service. Tier >= 1 reuses the same externalAiReview gate
+   * that already governs semantic review (configuredAiReviewPolicy), rather than
+   * inventing a second policy flag.
+   */
+  async setAutonomyTier(tier: AutonomyTier): Promise<AutonomyTier> {
+    if (tier >= 1) {
+      const policy = await configuredAiReviewPolicy(this.root);
+      if (policy.externalAiReview !== "approved") throw new Error("Autonomy tier 1 or higher requires policy.aiReview.externalAiReview: approved in .crosscode/config.yaml");
+    }
+    if (!this.options.transport?.setAutonomyTier) throw new Error("No coordination service is configured for this daemon");
+    this.autonomyTier = await this.options.transport.setAutonomyTier(tier);
+    return this.autonomyTier;
+  }
   recordRemoteSyncFailure(): void { this.serviceStatus = { ...this.serviceStatus, configured: true, online: false, lastSyncError: "Coordination service is unavailable" }; }
   async createTask(input: Pick<Task, "title"> & Partial<Pick<Task, "intent" | "paths" | "status">>): Promise<Task> {
     const task = taskSchema.parse({ id: randomUUID(), title: input.title, ownerId: this.options.actorId, status: input.status ?? "active", intent: input.intent, paths: input.paths ?? [], createdAt: now(), updatedAt: now() });
@@ -349,6 +377,7 @@ export class LocalDaemon {
   }
 
   async syncRemote(transport: RemoteSyncTransport): Promise<{ uploaded: number; downloaded: number; cursor: number }> {
+    if (transport.getAutonomyTier) this.autonomyTier = await transport.getAutonomyTier().catch(() => this.autonomyTier);
     await this.syncTasks(transport);
     await this.syncClaims(transport);
     await this.syncHandoffs(transport);
@@ -512,6 +541,7 @@ export class LocalDaemon {
   }
 
   async sync(service: CoordinationService): Promise<StoredOperation[]> {
+    this.autonomyTier = service.getAutonomyTier(this.options.workspaceId);
     const incoming = service.list(this.options.workspaceId, this.remoteCursor); this.remoteCursor = Math.max(this.remoteCursor, ...incoming.map((operation) => operation.sequence), 0);
     const proposals = incoming.filter((operation) => operation.senderReplicaId !== this.options.replicaId).map((operation) => {
       const transaction = changeTransactionSchema.parse(operation.transaction);
@@ -653,26 +683,63 @@ export class LocalDaemon {
   }
 
   /**
-   * Speculatively accepts newly-arrived proposals through the ordinary accept() path when a
-   * committed .crosscode/config.yaml explicitly configures policy.autoApplyRisk. accept()'s own
-   * assertApplicable/assertChangeApplicable gates are the only thing deciding eligibility here --
-   * this never bypasses them. A proposal that still requires approval throws inside accept()
-   * before any checkpoint/materialization mutation, so it is left exactly as an ordinary pending
-   * proposal. Absence of a configured policy (undefined) preserves today's always-explicit-accept
-   * behavior unchanged.
+   * Speculatively accepts newly-arrived proposals through the ordinary accept() path when
+   * either (a) a committed .crosscode/config.yaml explicitly configures policy.autoApplyRisk,
+   * or (b) the workspace's service-synced autonomy tier (Phase 9) is 1 or 2. In every case,
+   * accept()'s own assertApplicable/assertChangeApplicable gates are the only thing deciding
+   * eligibility here -- this never bypasses them; a proposal that still requires approval
+   * throws inside accept() before any checkpoint/materialization mutation, so it is left
+   * exactly as an ordinary pending proposal. Tier 0 with no configured autoApplyRisk preserves
+   * today's always-explicit-accept behavior unchanged -- this is exactly how Fundamental Rule 4
+   * ("high/critical risk always requires approval, no exceptions") stays enforced regardless of
+   * autonomy tier.
    */
   private async autoApplyEligibleProposals(ids: string[]): Promise<void> {
     if (!ids.length) return;
     const threshold = await configuredAutoApplyRisk(this.root).catch(() => undefined);
-    if (!threshold) return;
+    const tier = this.autonomyTier;
+    if (threshold === undefined && tier === 0) return;
     for (const id of ids) {
       const operation = this.operations.get(id);
-      if (!operation || operation.status !== "proposed" || riskRank(operation.transaction.safety.risk) > riskRank(threshold)) continue;
+      if (!operation || operation.status !== "proposed") continue;
+      const eligibleByThreshold = threshold !== undefined && riskRank(operation.transaction.safety.risk) <= riskRank(threshold);
+      const eligibleByTier = tier === 2 || (tier === 1 && await this.tier1AutoApplyEligible(operation));
+      if (!eligibleByThreshold && !eligibleByTier) continue;
       try {
         await this.accept(id);
-        await this.persist("transaction.auto_applied", { id, autoApplyRisk: threshold });
+        await this.persist("transaction.auto_applied", { id, autoApplyRisk: threshold, autonomyTier: tier });
       } catch { /* not eligible for auto-apply under the current classification; left as a normal proposal */ }
     }
+  }
+
+  /**
+   * Tier 1 (auto_if_clean) pre-filter: only attempt auto-apply when every change in the
+   * proposal is independent or likely-compatible, a validation has already passed against
+   * the current working tree, and no other actor holds an active exclusive path claim
+   * overlapping the change. This is strictly a pre-filter -- accept()'s own gates still
+   * decide final eligibility, so a "likely-compatible" change (which always requiresApproval)
+   * is attempted here but rejected there, leaving it as a normal pending proposal.
+   */
+  private async tier1AutoApplyEligible(operation: StoredOperation): Promise<boolean> {
+    const tree = await snapshotWorktreeTree(this.root).catch(() => undefined);
+    if (tree === undefined || !this.validations.some((validation) => validation.exitCode === 0 && validation.tree === tree)) return false;
+    for (const change of operation.transaction.changes) {
+      if (this.hasConflictingClaim(change.path)) return false;
+      const { analysis } = await this.analyzeChange(operation.id, change).catch(() => ({ analysis: undefined }));
+      if (!analysis || (analysis.classification !== "independent" && analysis.classification !== "likely-compatible")) return false;
+    }
+    return true;
+  }
+
+  private hasConflictingClaim(path: string): boolean {
+    const nowIso = now();
+    for (const claim of this.claims.values()) {
+      if (claim.kind !== "path" || claim.mode !== "exclusive-preferred") continue;
+      if (claim.ownerId === this.options.actorId) continue;
+      if (claim.expiresAt && claim.expiresAt <= nowIso) continue;
+      if (pathOverlaps(path, claim.target)) return true;
+    }
+    return false;
   }
 
   /**
@@ -1076,7 +1143,7 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
     try {
       const method = request.method ?? "GET";
       const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-      const payload = method === "POST" ? await readJsonBody(request) : undefined;
+      const payload = method === "POST" || method === "PUT" ? await readJsonBody(request) : undefined;
       const acceptId = operationId(pathname, "accept");
       const rejectId = operationId(pathname, "reject");
       const analysisId = operationId(pathname, "analysis");
@@ -1111,7 +1178,9 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
         let status = 200;
         let data: unknown;
         if (method === "GET" && pathname === "/v1/status") data = await daemon.status();
-        else if (method === "GET" && pathname === "/v1/workspace") data = { root: daemon.root, ...daemon.options };
+        else if (method === "GET" && pathname === "/v1/workspace") data = { root: daemon.root, workspaceId: daemon.options.workspaceId, replicaId: daemon.options.replicaId, actorId: daemon.options.actorId };
+        else if (method === "GET" && pathname === "/v1/workspace/autonomy") data = { tier: daemon.currentAutonomyTier() };
+        else if (method === "PUT" && pathname === "/v1/workspace/autonomy") data = { tier: await daemon.setAutonomyTier(setWorkspaceAutonomyRequestSchema.parse(payload).tier) };
         else if (method === "GET" && pathname === "/v1/tasks") data = [...daemon.tasks.values()];
         else if (method === "POST" && pathname === "/v1/tasks") { data = await daemon.createTask(taskRequestSchema.parse(payload)); status = 201; }
         else if (method === "POST" && updateTaskId) data = await daemon.updateTask(updateTaskId, taskRequestSchema.parse(payload));

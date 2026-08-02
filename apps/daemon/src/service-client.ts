@@ -12,11 +12,13 @@ import {
   registerReplicaResponseSchema,
   remoteOperationSchema,
   serviceIngestReceiptSchema,
+  setWorkspaceAutonomyRequestSchema,
   taskIngestReceiptSchema,
   taskCursorResponseSchema,
   transactionCreatedEventSchema,
   validationCursorResponseSchema,
   validationIngestReceiptSchema,
+  workspaceAutonomyResponseSchema,
   type DaemonConfig,
   type RemoteClaim,
   type RemoteHandoff,
@@ -192,12 +194,22 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
     return { validations: data.validations, nextCursor: data.nextCursor };
   }
 
+  async getAutonomyTier(): Promise<0 | 1 | 2> {
+    const data = workspaceAutonomyResponseSchema.parse(await this.authorizedRequest("/v1/workspace/autonomy", "GET"));
+    return data.tier;
+  }
+
+  async setAutonomyTier(tier: 0 | 1 | 2): Promise<0 | 1 | 2> {
+    const data = workspaceAutonomyResponseSchema.parse(await this.authorizedRequest("/v1/workspace/autonomy", "PUT", setWorkspaceAutonomyRequestSchema.parse({ tier })));
+    return data.tier;
+  }
+
   private requireReplicaId(): string {
     if (!this.identity.replicaId) throw new Error("Replica is not registered yet; call ensureReplicaRegistered() first");
     return this.identity.replicaId;
   }
 
-  private async authorizedRequest(path: string, method: "GET" | "POST", body?: unknown): Promise<unknown> {
+  private async authorizedRequest(path: string, method: "GET" | "POST" | "PUT", body?: unknown): Promise<unknown> {
     try {
       return await request(this.service.url, path, method, this.session.accessToken, body, true, this.identity.workspaceId);
     } catch (error) {
@@ -223,7 +235,7 @@ class ServiceHttpError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
 }
 
-async function request(url: string, path: string, method: "GET" | "POST", token?: string, body?: unknown, retryNetwork = true, workspaceId?: string): Promise<unknown> {
+async function request(url: string, path: string, method: "GET" | "POST" | "PUT", token?: string, body?: unknown, retryNetwork = true, workspaceId?: string): Promise<unknown> {
   let response: Response | undefined;
   let lastError: unknown;
   for (let attempt = 0; attempt < (retryNetwork ? 2 : 1); attempt += 1) {

@@ -18,11 +18,13 @@ import {
   registerReplicaResponseSchema,
   serviceIngestReceiptSchema,
   serviceIngestRequestSchema,
+  setWorkspaceAutonomyRequestSchema,
   taskIngestRequestSchema,
   taskIngestReceiptSchema,
   timeCursorQuerySchema,
   validationIngestRequestSchema,
   validationIngestReceiptSchema,
+  workspaceAutonomyResponseSchema,
   EPOCH_CURSOR,
   type RemoteOperation
 } from "@crosscode/protocol";
@@ -313,6 +315,20 @@ async function handleRequest(
     return;
   }
 
+  if (method === "GET" && url.pathname === "/v1/workspace/autonomy") {
+    const tier = await options.store.getWorkspaceAutonomyTier(identity.workspaceId);
+    send(response, 200, workspaceAutonomyResponseSchema.parse({ tier }));
+    return;
+  }
+
+  if (method === "PUT" && url.pathname === "/v1/workspace/autonomy") {
+    if (identity.role !== "owner") throw new HttpError(403, "Only the workspace owner can change the autonomy tier");
+    const body = setWorkspaceAutonomyRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
+    const tier = await options.store.setWorkspaceAutonomyTier(identity, body.tier);
+    send(response, 200, workspaceAutonomyResponseSchema.parse({ tier }));
+    return;
+  }
+
   if (method === "GET" && url.pathname === "/v1/presence") {
     const sessions = await options.store.listPresence(identity.workspaceId);
     send(response, 200, { sessions });
@@ -453,7 +469,9 @@ function rateLimitRoute(method: string, pathname: string): string {
     "GET /v1/presence",
     "POST /v1/workspaces",
     "POST /v1/invites",
-    "GET /v1/invites"
+    "GET /v1/invites",
+    "GET /v1/workspace/autonomy",
+    "PUT /v1/workspace/autonomy"
   ]).has(route) ? route : "unknown";
 }
 

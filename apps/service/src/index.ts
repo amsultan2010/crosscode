@@ -6,6 +6,7 @@ export type RemoteOperation = { id: string; workspaceId: string; senderReplicaId
 export class CoordinationService {
   private readonly operations = new Map<string, RemoteOperation[]>();
   private readonly seen = new Set<string>();
+  private readonly autonomyTiers = new Map<string, 0 | 1 | 2>();
   private sequence = 0;
 
   receive(event: EventEnvelope, transaction: ChangeTransaction): RemoteOperation {
@@ -21,6 +22,9 @@ export class CoordinationService {
   }
 
   list(workspaceId: string, afterSequence = 0): RemoteOperation[] { return (this.operations.get(workspaceId) ?? []).filter((operation) => operation.sequence > afterSequence); }
+
+  getAutonomyTier(workspaceId: string): 0 | 1 | 2 { return this.autonomyTiers.get(workspaceId) ?? 0; }
+  setAutonomyTier(workspaceId: string, tier: 0 | 1 | 2): 0 | 1 | 2 { this.autonomyTiers.set(workspaceId, tier); return tier; }
 }
 
 export * from "./auth.js";
