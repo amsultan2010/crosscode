@@ -161,6 +161,35 @@ export async function createWorkspace(session: SessionContext, name: string): Pr
   return request<{ workspaceId: string }>(session, "POST", "/v1/workspaces", { body: { name } });
 }
 
+// --- Pairing (Contract A) ---------------------------------------------------
+// A pairing code is a short-lived, single-use bearer secret: the dashboard mints
+// one, the user hands it to their coding agent, and the daemon redeems it
+// unauthenticated. The dashboard never sees the claim endpoint -- it only mints
+// and polls, so the plaintext code lives in this tab and nowhere else.
+
+export type PairingCodeResponse = {
+  code: string;
+  expiresAt: string;
+  pairingId: string;
+};
+
+export type PairingStatusResponse = {
+  status: "pending" | "claimed" | "expired";
+  claimedAt: string | null;
+  replicaId: string | null;
+  actorId: string | null;
+};
+
+export async function mintPairingCode(auth: AuthContext): Promise<PairingCodeResponse> {
+  return request<PairingCodeResponse>(auth, "POST", "/v1/pairing-codes", { workspaceId: auth.workspaceId, body: {} });
+}
+
+export async function fetchPairingStatus(auth: AuthContext, pairingId: string): Promise<PairingStatusResponse> {
+  return request<PairingStatusResponse>(auth, "GET", `/v1/pairing-codes/${encodeURIComponent(pairingId)}`, {
+    workspaceId: auth.workspaceId
+  });
+}
+
 // Every workspace ("team") the signed-in user belongs to -- powers the dashboard's
 // team switcher instead of asking someone to paste a raw workspace ID.
 export async function fetchMemberships(session: SessionContext): Promise<ListMembershipsResponse["memberships"]> {

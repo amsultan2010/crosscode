@@ -60,7 +60,10 @@ function renderAuthedView(session: Session): void {
   const route = currentRoute();
   if (route === "onboarding") {
     nav.hidden = true;
-    renderOnboarding(app, () => {
+    // Onboarding mints and polls a pairing code, so it needs the service context
+    // too -- not just the session. It hands off to #/dashboard, where workstream
+    // 4's spotlight tour picks up.
+    renderOnboarding(app, { serviceUrl: SERVICE_URL, accessToken: session.access_token }, () => {
       window.location.hash = "#/dashboard";
     });
     return;

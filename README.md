@@ -32,6 +32,7 @@ Paste the prompt in [`docs/install-prompt.md`](./docs/install-prompt.md) into an
 - A bounded, non-authoritative AI semantic reviewer for ambiguous conflicts, gated behind explicit workspace policy and human approval
 - Self-serve `crosscode -- signup`, invite-by-code/link (create/list/revoke/redeem), and self-serve workspace creation — no admin `service:provision` step required for the common case
 - A read-only web dashboard (`/dashboard` on the docs site) for live presence/tasks/claims/proposals/validation status, plus invite redemption
+- First-run onboarding that connects an agent before anything else: welcome → connect MCP (install prompt plus a one-time pairing code) → verify (polls until the daemon claims the code, with an expiry countdown and a re-mint action) → dashboard. Verification is skippable, and creating a team is an optional action afterwards rather than a gate
 - A per-workspace autonomy tier (always-ask / auto-if-clean / auto-always) that extends the existing accept-gated auto-apply mechanism without weakening it
 - A billing data model and plan-gating helpers behind a `BillingProvider` interface, with a stub implementation pending a real Stripe account
 
