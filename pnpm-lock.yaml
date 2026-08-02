@@ -38,6 +38,9 @@ importers:
       '@crosscode/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@crosscode/service':
+        specifier: workspace:*
+        version: link:../service
       commander:
         specifier: ^15.0.0
         version: 15.0.0
