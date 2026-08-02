@@ -20,7 +20,10 @@ export default defineConfig({
         protocol: resolve(root, "docs/protocol.html"),
         mcp: resolve(root, "docs/mcp-clients.html"),
         limitations: resolve(root, "docs/limitations.html"),
-        dashboard: resolve(root, "dashboard/index.html")
+        signin: resolve(root, "auth/signin.html"),
+        signup: resolve(root, "auth/signup.html"),
+        passwordReset: resolve(root, "auth/reset.html"),
+        cliLogin: resolve(root, "auth/cli.html")
       }
     }
   }

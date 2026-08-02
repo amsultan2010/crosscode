@@ -1285,3 +1285,202 @@ main.docs-layout {
   box-shadow: 0 20px 40px -30px rgba(255, 255, 255, 0.12), 0 0 0 1px var(--border-strong);
   transform: translateY(-3px);
 }
+
+/* Auth pages (/auth/*.html). Scoped to .auth-shell so the form controls here
+   never leak into the landing or docs pages, which have no forms. */
+
+.auth-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.25rem;
+}
+
+.auth-card {
+  max-width: 25rem;
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--bg-alt);
+  border-radius: 10px;
+  padding: 2rem 1.9rem;
+}
+
+.auth-card .auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+  text-decoration: none;
+  margin-bottom: 1.5rem;
+}
+
+.auth-card .auth-brand::before {
+  content: "";
+  width: 1.35rem;
+  height: 1.35rem;
+  background: var(--fg);
+  -webkit-mask: url("/brand/logo.svg") center / contain no-repeat;
+  mask: url("/brand/logo.svg") center / contain no-repeat;
+}
+
+.auth-tabs {
+  display: flex;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 0.2rem;
+  margin-bottom: 1.5rem;
+}
+
+.auth-tabs button {
+  flex: 1;
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  border-radius: 999px;
+  padding: 0.45rem 0.75rem;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.auth-tabs button.active {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.auth-card h1 {
+  font-size: 1.55rem;
+  letter-spacing: -0.02em;
+  margin: 0 0 0.35rem;
+}
+
+.auth-card .auth-subtitle {
+  color: var(--muted);
+  font-size: 0.95rem;
+  margin: 0 0 0.4rem;
+}
+
+.auth-card .muted {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.auth-card .error {
+  color: var(--danger);
+  font-size: 0.95rem;
+}
+
+.auth-card .stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  margin-top: 1.25rem;
+}
+
+.auth-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.95rem;
+  color: var(--fg-dim);
+}
+
+.auth-card input {
+  font: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 0.55rem 0.7rem;
+  color: var(--fg);
+}
+
+.auth-card input:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.auth-card button[type="submit"] {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--fg);
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-radius: 4px;
+  padding: 0.6rem 1rem;
+  font-weight: 600;
+}
+
+.auth-card button[type="submit"]:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.auth-alt {
+  margin: 0.9rem 0 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.auth-linklike {
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--muted);
+  text-decoration: underline;
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1.25rem 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.auth-oauth-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.auth-oauth-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  width: 100%;
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 0.6rem 1rem;
+}
+
+.auth-oauth-btn svg {
+  flex-shrink: 0;
+}
+
+.auth-oauth-btn:hover {
+  background: var(--bg-alt);
+}
