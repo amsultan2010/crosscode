@@ -22,8 +22,10 @@
     "docs:preview": "pnpm --filter @crosscode/docs-site preview"
   },
   "devDependencies": {
+    "@types/jsdom": "^28.0.3",
     "@types/node": "^24.0.0",
     "@vitest/coverage-v8": "^3.2.4",
+    "jsdom": "^30.0.1",
     "tsx": "^4.19.3",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
