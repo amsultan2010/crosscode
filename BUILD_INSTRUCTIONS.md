@@ -99,6 +99,55 @@ Student tier requires real verification (e.g. SheerID or `.edu`-gated flow) to a
 
 **Shipped (v1, placeholder):** `workspaces.plan` (free/essential/pro/unlimited/student) plus unused-until-real-key `stripe_customer_id`/`stripe_subscription_id` columns, a `usage_counters` table metering semantic review calls/month, a `BillingProvider` interface with a `StubBillingProvider` (no real Stripe account exists yet, so no `stripe` package dependency was added), and `assertSeatCapAvailable`/`assertSemanticReviewCallAvailable`/`assertPlanAllowsAutonomyTier` enforcement helpers plus a read-only `crosscode billing status`. **Not yet done:** wiring those assert helpers into the actual invite-redeem/workspace-creation/autonomy-tier-set call sites (they exist and are unit-tested in isolation but aren't enforced end-to-end yet), and the Stripe account itself.
 
+### Phase 11 — Projects (repository entity) (backend shipped)
+
+Until now `workspaces` was the only container, so the dashboard had no way to attribute
+activity to the repository it came from. A **project** is a repository inside a workspace,
+keyed by its normalized git remote when the checkout has one and by its absolute repo root
+otherwise (see Contract B in `docs/onboarding-contracts.md`).
+
+**Endpoints (service, all workspace-scoped via the `x-crosscode-workspace-id` header):**
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| `GET` | `/v1/projects` | `{ projects: Project[] }`, newest activity first. |
+| `POST` | `/v1/projects` | Idempotent upsert from `{ repoRoot?, repoRemote? }` (at least one required); returns the `Project` with 200. |
+| `GET` | `/v1/projects/:id` | The single `Project`; 404 for an unknown id **and** for one belonging to another workspace. |
+
+`POST /v1/replicas` additionally accepts optional `repoRoot`/`repoRemote` and returns
+`projectId`, so a daemon is attributed to its repository at registration time. The daemon
+reports both automatically from the checkout it was started in.
+
+**`projectId` on the existing read paths.** Storing the attribution is only half of it —
+consumers group activity per project, so every read path that carries a replica or an
+operation carries a nullable `projectId` too:
+
+| Path | Field |
+| --- | --- |
+| `GET /v1/operations` | `operations[].projectId` (`remoteOperationSchema`) |
+| `GET /v1/presence` | `sessions[].projectId` (`PresenceSummary`) |
+| `/v1/stream` operation frame | `operation.projectId` |
+| `/v1/stream` presence frame | `presence.projectId` (`presenceUpdateSchema`) |
+| `POST /v1/replicas` | `projectId` |
+
+Null everywhere means "unattributed" — pre-projects data, or a replica that reported no
+repository — and consumers group those under "Unassigned". The presence frame carries it
+because a consumer merges live updates into the `GET /v1/presence` snapshot; without it a
+replica that connects after the initial load would silently lose its attribution.
+
+**Schema (`010_projects.sql`):** a `projects` table with two partial unique indexes
+(`(workspace_id, repo_remote)` when a remote exists, `(workspace_id, repo_root)` when it
+does not — a plain `UNIQUE` would treat NULL remotes as distinct and allow unlimited
+duplicates), plus nullable `project_id` columns on `replicas` and `operations`. Backfill is
+deliberately skipped: NULL means "recorded before projects existed" and the dashboard groups
+those under "Unassigned". `operations.project_id` is derived server-side from the sending
+replica, never from the client.
+
+**Normalization** (`apps/service/src/projects.ts`, the dedup key): lowercase host, drop
+credentials and port, convert `git@host:owner/repo` to `host/owner/repo`, strip a trailing
+`.git` and trailing slashes. Path case is preserved, since repository paths are
+case-sensitive.
+
 ## Non-goals (still true)
 
 - A new code editor/IDE, or a replacement Git host/implementation.

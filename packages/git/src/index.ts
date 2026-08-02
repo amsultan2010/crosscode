@@ -38,6 +38,11 @@ export async function discoverRepository(directory: string): Promise<RepositoryS
   const operation = merge ? "merge" : cherryPick ? "cherry-pick" : revert ? "revert" : rebaseMerge || rebaseApply ? "rebase" : undefined;
   return { root, head, headReflog, branch, worktree: root, remotes, dirty: Boolean(porcelain), indexTree, operation };
 }
+/** Fetch URL of a remote, or undefined when the checkout has no such remote configured. */
+export async function remoteUrl(root: string, name = "origin"): Promise<string | undefined> {
+  const url = await git(root, ["remote", "get-url", name]).catch(() => undefined);
+  return url ? url : undefined;
+}
 export async function blobHash(root: string, path: string): Promise<string | undefined> { return git(root, ["hash-object", path]).catch(() => undefined); }
 export async function resolveGitPath(root: string, path: string): Promise<string> { return resolve(root, await git(root, ["rev-parse", "--git-path", path])); }
 export async function snapshotWorktreeTree(root: string): Promise<string> {

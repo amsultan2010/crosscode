@@ -60,9 +60,18 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
     return this.identity.replicaId;
   }
 
-  async ensureReplicaRegistered(name?: string): Promise<string> {
+  /**
+   * `repo` tells the service which repository this replica is a checkout of, so it can
+   * upsert the matching project (Contract B). It is optional: a daemon started outside a
+   * git repository simply registers without one and its replica stays unattributed.
+   */
+  async ensureReplicaRegistered(name?: string, repo?: { repoRoot?: string | null; repoRemote?: string | null }): Promise<string> {
     if (this.identity.replicaId) return this.identity.replicaId;
-    const data = await this.authorizedRequest("/v1/replicas", "POST", registerReplicaRequestSchema.parse({ name: name ?? defaultReplicaName() }));
+    const data = await this.authorizedRequest("/v1/replicas", "POST", registerReplicaRequestSchema.parse({
+      name: name ?? defaultReplicaName(),
+      repoRoot: repo?.repoRoot ?? undefined,
+      repoRemote: repo?.repoRemote ?? undefined
+    }));
     const response = registerReplicaResponseSchema.parse(data);
     this.identity.replicaId = response.replicaId;
     await this.hooks.onReplicaRegistered?.(response.replicaId);

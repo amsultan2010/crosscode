@@ -3,10 +3,11 @@ import { readFile } from "node:fs/promises";
 import type {
   ChangeTransaction, Claim, ClaimCreatedEvent, ClaimReleasedEvent, EventEnvelope, Handoff, HandoffRequestedEvent,
   HandoffRespondedEvent, Intent, IntentPublishedEvent, RemoteClaim, RemoteHandoff, RemoteIntent, RemoteOperation,
-  RemoteTask, RemoteValidation, Task, TaskCreatedEvent, TaskUpdatedEvent, TransactionCreatedEvent, Validation, ValidationCompletedEvent
+  Project, RemoteTask, RemoteValidation, Task, TaskCreatedEvent, TaskUpdatedEvent, TransactionCreatedEvent, Validation, ValidationCompletedEvent
 } from "@crosscode/protocol";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
 import { hashCanonicalPayload } from "./crypto.js";
+import { normalizeRepoRemote, normalizeRepoRoot, projectNameFrom } from "./projects.js";
 
 export class StoreConflictError extends Error {}
 export class StoreUnauthorizedError extends Error {}
@@ -21,6 +22,9 @@ export type PresenceSummary = {
   status: "online" | "offline";
   lastSeenAt: string | null;
   cursor: number | null;
+  // Which project this replica is a checkout of (Contract B); null when it registered
+  // before projects existed or reported no repository.
+  projectId: string | null;
 };
 
 export type Membership = {
@@ -77,6 +81,8 @@ export class PgStore {
       await client.query(autonomyPolicySql);
       const billingSql = await readFile(new URL("../migrations/008_billing.sql", import.meta.url), "utf8");
       await client.query(billingSql);
+      const projectsSql = await readFile(new URL("../migrations/010_projects.sql", import.meta.url), "utf8");
+      await client.query(projectsSql);
     } finally {
       await client.query("SELECT pg_advisory_unlock(hashtext('crosscode_migrate'))");
       client.release();
@@ -263,29 +269,116 @@ export class PgStore {
     });
   }
 
-  async registerReplica(userId: string, workspaceId: string, name: string): Promise<{ replicaId: string; createdAt: string }> {
+  /**
+   * Idempotent upsert of a project (Contract B), keyed by the normalized git remote when
+   * the checkout has one and by the absolute repo root otherwise. Returns null when the
+   * caller reported neither usable key, so every call site can safely do
+   * `(await store.upsertProject(...))?.id ?? null`.
+   *
+   * Safe to call on every registration/claim/pairing: repeat calls only bump
+   * last_activity_at and refresh the advisory repo_root.
+   */
+  async upsertProject(
+    workspaceId: string,
+    input: { repoRoot?: string | null; repoRemote?: string | null }
+  ): Promise<Project | null> {
+    const repoRemote = normalizeRepoRemote(input.repoRemote);
+    const repoRoot = normalizeRepoRoot(input.repoRoot);
+    if (!repoRemote && !repoRoot) return null;
+    const name = projectNameFrom(repoRemote, repoRoot);
+    // Two partial unique indexes back the two-tiered key (see 010_projects.sql), so the
+    // conflict target has to name the matching one -- Postgres cannot infer a partial
+    // index without its predicate.
+    const conflictTarget = repoRemote
+      ? "(workspace_id, repo_remote) WHERE repo_remote IS NOT NULL"
+      : "(workspace_id, repo_root) WHERE repo_remote IS NULL AND repo_root IS NOT NULL";
+    const result = await this.pool.query<ProjectRow>(
+      `INSERT INTO projects (id, workspace_id, name, repo_remote, repo_root, last_activity_at)
+       VALUES ($1, $2, $3, $4, $5, now())
+       ON CONFLICT ${conflictTarget} DO UPDATE
+         SET repo_root = COALESCE(excluded.repo_root, projects.repo_root), last_activity_at = now()
+       RETURNING id, workspace_id, name, repo_remote, repo_root, created_at, last_activity_at`,
+      [randomUUID(), workspaceId, name, repoRemote, repoRoot]
+    );
+    return mapProject(result.rows[0]!);
+  }
+
+  async listProjects(workspaceId: string): Promise<Project[]> {
+    const result = await this.pool.query<ProjectRow>(
+      `SELECT id, workspace_id, name, repo_remote, repo_root, created_at, last_activity_at
+         FROM projects
+        WHERE workspace_id = $1
+        ORDER BY last_activity_at DESC NULLS LAST, created_at DESC`,
+      [workspaceId]
+    );
+    return result.rows.map(mapProject);
+  }
+
+  // Workspace-scoped on purpose: a project id from another workspace must be
+  // indistinguishable from one that does not exist (http.ts turns null into a 404).
+  async getProject(workspaceId: string, projectId: string): Promise<Project | null> {
+    const result = await this.pool.query<ProjectRow>(
+      `SELECT id, workspace_id, name, repo_remote, repo_root, created_at, last_activity_at
+         FROM projects WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId, projectId]
+    );
+    return result.rows[0] ? mapProject(result.rows[0]) : null;
+  }
+
+  /**
+   * Upserts the project for a reported checkout and links an already-registered replica to
+   * it, returning the project id (null when the caller reported no usable key).
+   *
+   * This is the single call the pairing claim handler needs to populate Contract A's
+   * `projectId` -- it registers its replica first, then attributes it here -- so the
+   * projects logic stays entirely on this side of the ownership seam.
+   */
+  async attachReplicaToProject(
+    workspaceId: string, replicaId: string,
+    repo: { repoRoot?: string | null; repoRemote?: string | null }
+  ): Promise<string | null> {
+    const project = await this.upsertProject(workspaceId, repo);
+    if (!project) return null;
+    await this.pool.query(
+      "UPDATE replicas SET project_id = $3 WHERE id = $1 AND workspace_id = $2",
+      [replicaId, workspaceId, project.id]
+    );
+    return project.id;
+  }
+
+  async registerReplica(
+    userId: string, workspaceId: string, name: string,
+    repo: { repoRoot?: string | null; repoRemote?: string | null } = {}
+  ): Promise<{ replicaId: string; createdAt: string; projectId: string | null }> {
     const membership = await this.resolveMembership(userId, workspaceId);
+    const project = await this.upsertProject(workspaceId, repo);
     const replicaId = randomUUID();
     try {
       const result = await this.pool.query<{ created_at: Date }>(
-        `INSERT INTO replicas (id, workspace_id, member_id, name) VALUES ($1, $2, $3, $4) RETURNING created_at`,
-        [replicaId, workspaceId, membership.memberId, name]
+        `INSERT INTO replicas (id, workspace_id, member_id, name, project_id) VALUES ($1, $2, $3, $4, $5) RETURNING created_at`,
+        [replicaId, workspaceId, membership.memberId, name, project?.id ?? null]
       );
-      return { replicaId, createdAt: new Date(result.rows[0]!.created_at).toISOString() };
+      return { replicaId, createdAt: new Date(result.rows[0]!.created_at).toISOString(), projectId: project?.id ?? null };
     } catch (error) {
       if (isUniqueViolation(error)) throw new StoreConflictError("Replica name is already registered");
       throw error;
     }
   }
 
-  async assertReplicaOwnership(workspaceId: string, memberId: string, replicaId: string): Promise<void> {
-    const result = await this.pool.query(
+  /**
+   * Returns the replica's project id (null when unattributed) so callers that already pay
+   * for this round-trip -- the WebSocket handshake in particular -- can attribute live
+   * presence without a second query. Ingest call sites ignore the return value.
+   */
+  async assertReplicaOwnership(workspaceId: string, memberId: string, replicaId: string): Promise<string | null> {
+    const result = await this.pool.query<{ project_id: string | null }>(
       `UPDATE replicas SET last_seen_at = now()
         WHERE id = $1 AND workspace_id = $2 AND member_id = $3 AND disabled_at IS NULL
-        RETURNING id`,
+        RETURNING project_id`,
       [replicaId, workspaceId, memberId]
     );
     if (!result.rows[0]) throw new StoreUnauthorizedError("Replica is not registered to this member");
+    return result.rows[0].project_id;
   }
 
   async appendOperation(identity: Membership, event: TransactionCreatedEvent): Promise<StoredOperation> {
@@ -302,7 +395,7 @@ export class PgStore {
       if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
 
       const duplicate = await client.query<OperationRow>(
-        `SELECT id, workspace_id, replica_id, event, transaction, server_sequence, created_at, payload_hash
+        `SELECT id, workspace_id, replica_id, project_id, event, transaction, server_sequence, created_at, payload_hash
            FROM operations
           WHERE workspace_id = $1
             AND (id = $2 OR event_id = $3 OR (replica_id = $4 AND client_sequence = $5))`,
@@ -322,11 +415,16 @@ export class PgStore {
       const sequence = Number(workspace.rows[0].next_sequence) + 1;
       const storedEvent = { ...event, serverSequence: sequence };
       const inserted = await client.query<OperationRow>(
+        // project_id is derived from the sending replica rather than sent by the client:
+        // the replica already declared its repository at registration, and a client must
+        // not be able to attribute its edits to an arbitrary project. NULL when the
+        // replica registered before projects existed.
         `INSERT INTO operations
           (id, workspace_id, event_id, client_sequence, server_sequence, replica_id, member_id,
-           actor_id, payload_hash, event, transaction)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb)
-         RETURNING id, workspace_id, replica_id, event, transaction, server_sequence, created_at, payload_hash`,
+           actor_id, payload_hash, event, transaction, project_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb,
+                 (SELECT project_id FROM replicas WHERE id = $6 AND workspace_id = $2))
+         RETURNING id, workspace_id, replica_id, project_id, event, transaction, server_sequence, created_at, payload_hash`,
         [
           transaction.id, identity.workspaceId, event.id, event.clientSequence, sequence, event.replicaId,
           identity.memberId, identity.actorId, payloadHash, JSON.stringify(storedEvent), JSON.stringify(transaction)
@@ -385,7 +483,7 @@ export class PgStore {
     items: StoredOperation[]; nextCursor: number; hasMore: boolean;
   }> {
     const result = await this.pool.query<OperationRow>(
-      `SELECT id, workspace_id, replica_id, event, transaction, server_sequence, created_at
+      `SELECT id, workspace_id, replica_id, project_id, event, transaction, server_sequence, created_at
          FROM operations
         WHERE workspace_id = $1 AND server_sequence > $2
         ORDER BY server_sequence ASC
@@ -565,9 +663,9 @@ export class PgStore {
 
   async listPresence(workspaceId: string): Promise<PresenceSummary[]> {
     const result = await this.pool.query<{
-      replica_id: string; actor_id: string; started_at: Date | null; ended_at: Date | null; summary: { cursor?: number } | null;
+      replica_id: string; actor_id: string; project_id: string | null; started_at: Date | null; ended_at: Date | null; summary: { cursor?: number } | null;
     }>(
-      `SELECT DISTINCT ON (r.id) r.id AS replica_id, m.actor_id, s.started_at, s.ended_at, s.summary
+      `SELECT DISTINCT ON (r.id) r.id AS replica_id, m.actor_id, r.project_id, s.started_at, s.ended_at, s.summary
          FROM replicas r
          JOIN members m ON m.id = r.member_id
          LEFT JOIN sessions s ON s.workspace_id = r.workspace_id AND s.replica_id = r.id
@@ -582,7 +680,8 @@ export class PgStore {
         actorId: row.actor_id,
         status: row.started_at !== null && row.ended_at === null ? "online" : "offline",
         lastSeenAt: lastSeenAt ? new Date(lastSeenAt).toISOString() : null,
-        cursor: typeof row.summary?.cursor === "number" ? row.summary.cursor : null
+        cursor: typeof row.summary?.cursor === "number" ? row.summary.cursor : null,
+        projectId: row.project_id
       };
     });
   }
@@ -654,6 +753,7 @@ type OperationRow = {
   id: string;
   workspace_id: string;
   replica_id: string;
+  project_id: string | null;
   event: EventEnvelope;
   transaction: ChangeTransaction;
   server_sequence: string;
@@ -667,6 +767,7 @@ function mapOperation(row: OperationRow): StoredOperation {
     eventId: row.event.id,
     workspaceId: row.workspace_id,
     senderReplicaId: row.replica_id,
+    projectId: row.project_id,
     event: row.event,
     transaction: row.transaction,
     serverSequence: Number(row.server_sequence),
@@ -769,6 +870,28 @@ function mapValidation(row: ValidationRow): RemoteValidation {
     senderReplicaId: row.replica_id,
     validation: row.payload,
     createdAt: new Date(row.created_at).toISOString()
+  };
+}
+
+type ProjectRow = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  repo_remote: string | null;
+  repo_root: string | null;
+  created_at: Date;
+  last_activity_at: Date | null;
+};
+
+function mapProject(row: ProjectRow): Project {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    name: row.name,
+    repoRemote: row.repo_remote,
+    repoRoot: row.repo_root,
+    createdAt: new Date(row.created_at).toISOString(),
+    lastActivityAt: row.last_activity_at ? new Date(row.last_activity_at).toISOString() : null
   };
 }
 

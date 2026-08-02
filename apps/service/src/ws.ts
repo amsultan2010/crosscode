@@ -42,6 +42,9 @@ type Connection = {
   workspaceId: string;
   replicaId: string;
   actorId: string;
+  // Captured at handshake so the offline broadcast on close can still attribute this
+  // replica to its project without another database round-trip.
+  projectId: string | null;
   isAlive: boolean;
 };
 
@@ -119,11 +122,11 @@ function handleConnection(
         const request = wsSubscribeRequestSchema.parse(JSON.parse(data.toString()));
         const claims = await verifySupabaseAccessToken(request.accessToken, options.jwks, options.supabaseUrl);
         const membership = await options.store.resolveMembership(claims.userId, request.workspaceId);
-        await options.store.assertReplicaOwnership(membership.workspaceId, membership.memberId, request.replicaId);
-        connection = register(connectionsByWorkspace, socket, membership.workspaceId, request.replicaId, membership.actorId);
+        const projectId = await options.store.assertReplicaOwnership(membership.workspaceId, membership.memberId, request.replicaId);
+        connection = register(connectionsByWorkspace, socket, membership.workspaceId, request.replicaId, membership.actorId, projectId);
         const cursor = await options.store.getCursor(membership.workspaceId);
         send(socket, wsSubscribeAckSchema.parse({ type: "subscribed", cursor }));
-        broadcastPresence(connectionsByWorkspace, membership.workspaceId, request.replicaId, membership.actorId, "online");
+        broadcastPresence(connectionsByWorkspace, membership.workspaceId, request.replicaId, membership.actorId, projectId, "online");
         await options.store.recordSessionStart(membership.workspaceId, request.replicaId, cursor);
       } catch {
         send(socket, wsErrorMessageSchema.parse({ type: "error", message: "Subscription rejected" }));
@@ -143,7 +146,7 @@ function handleConnection(
     if (registry?.get(connection.replicaId) === connection) {
       registry.delete(connection.replicaId);
       if (registry.size === 0) connectionsByWorkspace.delete(connection.workspaceId);
-      broadcastPresence(connectionsByWorkspace, connection.workspaceId, connection.replicaId, connection.actorId, "offline");
+      broadcastPresence(connectionsByWorkspace, connection.workspaceId, connection.replicaId, connection.actorId, connection.projectId, "offline");
       void (async () => {
         const cursor = await options.store.getCursor(connection!.workspaceId);
         await options.store.recordSessionEnd(connection!.workspaceId, connection!.replicaId, cursor);
@@ -157,7 +160,8 @@ function register(
   socket: WebSocket,
   workspaceId: string,
   replicaId: string,
-  actorId: string
+  actorId: string,
+  projectId: string | null
 ): Connection {
   let registry = connectionsByWorkspace.get(workspaceId);
   if (!registry) {
@@ -165,7 +169,7 @@ function register(
     connectionsByWorkspace.set(workspaceId, registry);
   }
   registry.get(replicaId)?.socket.terminate();
-  const connection: Connection = { socket, workspaceId, replicaId, actorId, isAlive: true };
+  const connection: Connection = { socket, workspaceId, replicaId, actorId, projectId, isAlive: true };
   registry.set(replicaId, connection);
   return connection;
 }
@@ -175,11 +179,12 @@ function broadcastPresence(
   workspaceId: string,
   replicaId: string,
   actorId: string,
+  projectId: string | null,
   status: PresenceStatus
 ): void {
   broadcast(connectionsByWorkspace, workspaceId, {
     type: "presence",
-    presence: { replicaId, actorId, status, lastSeenAt: new Date().toISOString() }
+    presence: { replicaId, actorId, status, lastSeenAt: new Date().toISOString(), projectId }
   }, replicaId);
 }
 

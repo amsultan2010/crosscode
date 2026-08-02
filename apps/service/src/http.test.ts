@@ -28,7 +28,7 @@ describe("service HTTP boundary", () => {
     const operation = storedOperation(makeEvent());
     const store = {
       resolveMembership: async () => membership,
-      registerReplica: async () => ({ replicaId: "replica-1", createdAt: "2026-01-01T00:00:00.000Z" }),
+      registerReplica: async () => ({ replicaId: "replica-1", createdAt: "2026-01-01T00:00:00.000Z", projectId: null }),
       assertReplicaOwnership: async () => {},
       appendOperation: async () => operation,
       listOperations: async () => ({ items: [operation], nextCursor: 1, hasMore: false })
@@ -102,7 +102,7 @@ describe("service HTTP boundary", () => {
       listHandoffs: async () => ({ items: [remoteHandoff], nextCursor: remoteHandoff.updatedAt }),
       upsertIntent: async () => remoteIntent,
       listIntents: async () => ({ items: [remoteIntent], nextCursor: remoteIntent.updatedAt }),
-      listPresence: async () => [{ replicaId: "replica-1", actorId: membership.actorId, status: "online", lastSeenAt: "2026-01-01T00:00:00.000Z", cursor: 0 }]
+      listPresence: async () => [{ replicaId: "replica-1", actorId: membership.actorId, status: "online", lastSeenAt: "2026-01-01T00:00:00.000Z", cursor: 0, projectId: null }]
     } as unknown as PgStore;
     const base = await listen(store);
     const accessToken = await signToken(membership.userId);
@@ -145,6 +145,117 @@ describe("service HTTP boundary", () => {
     })).status).toBe(415);
     expect((await post(base, "/v1/replicas", { name: "laptop", extra: true }, accessToken, membership.workspaceId)).status).toBe(400);
     expect((await post(base, "/v1/replicas", { name: "x".repeat(200) }, accessToken, membership.workspaceId)).status).toBe(413);
+  });
+
+  it("upserts, lists, and reads back projects, and 404s outside the caller's workspace", async () => {
+    const project = {
+      id: "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+      workspaceId: membership.workspaceId,
+      name: "repo",
+      repoRemote: "github.com/owner/repo",
+      repoRoot: "/Users/dev/repo",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActivityAt: "2026-01-02T00:00:00.000Z"
+    };
+    const upserts: Array<{ repoRoot?: string | null; repoRemote?: string | null }> = [];
+    const store = {
+      resolveMembership: async () => membership,
+      upsertProject: async (_workspaceId: string, input: { repoRoot?: string | null; repoRemote?: string | null }) => {
+        upserts.push(input);
+        return project;
+      },
+      listProjects: async () => [project],
+      // The store is already workspace-scoped, so "belongs to another workspace" is
+      // indistinguishable from "does not exist" -- both come back as null.
+      getProject: async (workspaceId: string, id: string) =>
+        workspaceId === membership.workspaceId && id === project.id ? project : null
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken(membership.userId);
+    const headers = { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId };
+
+    const created = await post(base, "/v1/projects", { repoRoot: "/Users/dev/repo", repoRemote: "git@github.com:owner/repo.git" }, accessToken, membership.workspaceId);
+    expect(created.status).toBe(200);
+    expect(await created.json()).toEqual({ ok: true, data: project });
+    // Idempotent at the HTTP layer too: the same body upserts rather than creating.
+    const again = await post(base, "/v1/projects", { repoRoot: "/Users/dev/repo", repoRemote: "git@github.com:owner/repo.git" }, accessToken, membership.workspaceId);
+    expect(await again.json()).toEqual({ ok: true, data: project });
+    expect(upserts).toHaveLength(2);
+
+    expect((await post(base, "/v1/projects", {}, accessToken, membership.workspaceId)).status).toBe(400);
+    expect((await post(base, "/v1/projects", { repoRoot: "/Users/dev/repo", extra: true }, accessToken, membership.workspaceId)).status).toBe(400);
+    expect((await post(base, "/v1/projects", { repoRoot: "/Users/dev/repo" })).status).toBe(401);
+
+    const listed = await fetch(`${base}/v1/projects`, { headers });
+    expect(await listed.json()).toEqual({ ok: true, data: { projects: [project] } });
+
+    const read = await fetch(`${base}/v1/projects/${project.id}`, { headers });
+    expect(await read.json()).toEqual({ ok: true, data: project });
+
+    // Another workspace's project id, and a malformed id, are both plain 404s.
+    expect((await fetch(`${base}/v1/projects/9f2504e0-4f89-11d3-9a0c-0305e82c3399`, { headers })).status).toBe(404);
+    expect((await fetch(`${base}/v1/projects/not-a-uuid`, { headers })).status).toBe(404);
+  });
+
+  // Regression: writing project_id is useless if no read path returns it. These assert on
+  // the JSON a consumer actually receives, not on the database column.
+  it("returns projectId on GET /v1/operations and GET /v1/presence, populated and null", async () => {
+    const projectId = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
+    const attributed = storedOperation(makeEvent(), projectId);
+    const unattributed = storedOperation({ ...makeEvent(), id: "operation-2", payload: { ...makeEvent().payload, id: "operation-2" } });
+    unattributed.serverSequence = 2;
+    const store = {
+      resolveMembership: async () => membership,
+      listOperations: async () => ({ items: [attributed, unattributed], nextCursor: 2, hasMore: false }),
+      listPresence: async () => [
+        { replicaId: "replica-1", actorId: membership.actorId, status: "online", lastSeenAt: "2026-01-01T00:00:00.000Z", cursor: 0, projectId },
+        { replicaId: "replica-2", actorId: membership.actorId, status: "offline", lastSeenAt: null, cursor: null, projectId: null }
+      ]
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken(membership.userId);
+    const headers = { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId };
+
+    const operations = await (await fetch(`${base}/v1/operations?afterSequence=0`, { headers })).json() as any;
+    expect(operations.data.operations.map((operation: any) => [operation.id, operation.projectId])).toEqual([
+      ["operation-1", projectId],
+      ["operation-2", null]
+    ]);
+    // The daemon parses this response with a .strict() schema, so the field must be
+    // present rather than merely undefined.
+    expect(Object.keys(operations.data.operations[0])).toContain("projectId");
+
+    const presence = await (await fetch(`${base}/v1/presence`, { headers })).json() as any;
+    expect(presence.data.sessions.map((session: any) => [session.replicaId, session.projectId])).toEqual([
+      ["replica-1", projectId],
+      ["replica-2", null]
+    ]);
+    expect(Object.keys(presence.data.sessions[1])).toContain("projectId");
+  });
+
+  it("registers a replica with its repository so the replica is attributed to a project", async () => {
+    const seen: Array<unknown[]> = [];
+    const store = {
+      resolveMembership: async () => membership,
+      registerReplica: async (...args: unknown[]) => {
+        seen.push(args);
+        return { replicaId: "replica-1", createdAt: "2026-01-01T00:00:00.000Z", projectId: "3f2504e0-4f89-11d3-9a0c-0305e82c3301" };
+      }
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken(membership.userId);
+
+    const registered = await post(
+      base, "/v1/replicas",
+      { name: "laptop", repoRoot: "/Users/dev/repo", repoRemote: "git@github.com:owner/repo.git" },
+      accessToken, membership.workspaceId
+    );
+    expect(registered.status).toBe(201);
+    expect(await registered.json()).toEqual({
+      ok: true,
+      data: { replicaId: "replica-1", createdAt: "2026-01-01T00:00:00.000Z", projectId: "3f2504e0-4f89-11d3-9a0c-0305e82c3301" }
+    });
+    expect(seen[0]?.[3]).toEqual({ repoRoot: "/Users/dev/repo", repoRemote: "git@github.com:owner/repo.git" });
   });
 
   it("self-serve creates a workspace for a token that has no membership yet", async () => {
@@ -376,12 +487,13 @@ function makeEvent(): TransactionCreatedEvent {
   };
 }
 
-function storedOperation(event: TransactionCreatedEvent): StoredOperation {
+function storedOperation(event: TransactionCreatedEvent, projectId: string | null = null): StoredOperation {
   return {
     id: event.id,
     eventId: event.id,
     workspaceId: event.workspaceId,
     senderReplicaId: event.replicaId,
+    projectId,
     transaction: event.payload,
     serverSequence: 1,
     createdAt: "2026-01-01T00:00:00.000Z",

@@ -37,7 +37,7 @@ describe("service WebSocket fan-out", () => {
   it("completes the subscribe handshake and returns the current cursor", async () => {
     const store = {
       resolveMembership: async (userId: string) => membershipByUserId(userId),
-      assertReplicaOwnership: async () => {},
+      assertReplicaOwnership: async () => null,
       getCursor: async () => 7,
       recordSessionStart: async () => {},
       recordSessionEnd: async () => {}
@@ -52,7 +52,7 @@ describe("service WebSocket fan-out", () => {
   it("rejects a subscribe handshake with an invalid access token", async () => {
     const store = {
       resolveMembership: async (userId: string) => membershipByUserId(userId),
-      assertReplicaOwnership: async () => {},
+      assertReplicaOwnership: async () => null,
       getCursor: async () => 0,
       recordSessionStart: async () => {},
       recordSessionEnd: async () => {}
@@ -71,7 +71,7 @@ describe("service WebSocket fan-out", () => {
   it("broadcasts presence online and offline to other connected replicas", async () => {
     const store = {
       resolveMembership: async (userId: string) => membershipByUserId(userId),
-      assertReplicaOwnership: async () => {},
+      assertReplicaOwnership: async () => null,
       getCursor: async () => 0,
       recordSessionStart: async () => {},
       recordSessionEnd: async () => {}
@@ -85,14 +85,14 @@ describe("service WebSocket fan-out", () => {
     const { socket: socketB } = await connect(base, membershipB, replicaB, tokenB);
     expect(await onlineMessage).toEqual({
       type: "presence",
-      presence: { replicaId: replicaB, actorId: membershipB.actorId, status: "online", lastSeenAt: expect.any(String) }
+      presence: { replicaId: replicaB, actorId: membershipB.actorId, status: "online", lastSeenAt: expect.any(String), projectId: null }
     });
 
     const offlineMessage = nextMessage(socketA);
     socketB.close();
     expect(await offlineMessage).toEqual({
       type: "presence",
-      presence: { replicaId: replicaB, actorId: membershipB.actorId, status: "offline", lastSeenAt: expect.any(String) }
+      presence: { replicaId: replicaB, actorId: membershipB.actorId, status: "offline", lastSeenAt: expect.any(String), projectId: null }
     });
   });
 
@@ -101,7 +101,7 @@ describe("service WebSocket fan-out", () => {
     const operation = storedOperation(event);
     const store = {
       resolveMembership: async (userId: string) => membershipByUserId(userId),
-      assertReplicaOwnership: async () => {},
+      assertReplicaOwnership: async () => null,
       getCursor: async () => 0,
       appendOperation: async () => operation,
       recordSessionStart: async () => {},
@@ -134,6 +134,54 @@ describe("service WebSocket fan-out", () => {
     expect(senderSawMessage).toBe(false);
   });
 
+  // Regression: project attribution has to survive the wire, not just reach the database.
+  // The consumer here is a real WebSocket client reading the fan-out frame it receives.
+  it("carries projectId through the live operation and presence fan-out", async () => {
+    const projectId = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
+    const event = makeEvent();
+    const store = {
+      resolveMembership: async (userId: string) => membershipByUserId(userId),
+      assertReplicaOwnership: async () => projectId,
+      getCursor: async () => 0,
+      appendOperation: async () => storedOperation(event, projectId),
+      recordSessionStart: async () => {},
+      recordSessionEnd: async () => {}
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const tokenA = await signToken(membershipA.userId);
+    const tokenB = await signToken(membershipB.userId);
+    const { socket: socketA } = await connect(base, membershipA, replicaA, tokenA);
+
+    // Presence: B coming online is attributed to its project for A.
+    const onlineMessage = nextMessage(socketA);
+    const { socket: socketB } = await connect(base, membershipB, replicaB, tokenB);
+    expect(await onlineMessage).toEqual({
+      type: "presence",
+      presence: { replicaId: replicaB, actorId: membershipB.actorId, status: "online", lastSeenAt: expect.any(String), projectId }
+    });
+
+    // Operation: the edit A publishes reaches B tagged with the project.
+    const receiverMessage = nextMessage(socketB);
+    const httpBase = base.replace("ws://", "http://");
+    const response = await fetch(`${httpBase}/v1/events`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${tokenA}`, [WORKSPACE_HEADER]: membershipA.workspaceId },
+      body: JSON.stringify({ event })
+    });
+    expect(response.status).toBe(200);
+    const fanOut = await receiverMessage as WsFanOutMessage;
+    expect(fanOut.type).toBe("operation");
+    expect(fanOut).toEqual({ type: "operation", operation: expect.objectContaining({ id: event.id, projectId }) });
+
+    // Offline is attributed too, from the id captured at handshake.
+    const offlineMessage = nextMessage(socketA);
+    socketB.close();
+    expect(await offlineMessage).toEqual({
+      type: "presence",
+      presence: { replicaId: replicaB, actorId: membershipB.actorId, status: "offline", lastSeenAt: expect.any(String), projectId }
+    });
+  });
+
   it("fans out a live handoff and intent to other replicas while excluding the sender", async () => {
     const handoffEvent = makeHandoffEvent();
     const remoteHandoff = { eventId: handoffEvent.id, workspaceId: membershipA.workspaceId, senderReplicaId: replicaA, handoff: handoffEvent.payload, updatedAt: "2026-01-01T00:00:01.000Z" };
@@ -141,7 +189,7 @@ describe("service WebSocket fan-out", () => {
     const remoteIntent = { eventId: intentEvent.id, workspaceId: membershipA.workspaceId, senderReplicaId: replicaA, intent: intentEvent.payload, updatedAt: "2026-01-01T00:00:01.000Z" };
     const store = {
       resolveMembership: async (userId: string) => membershipByUserId(userId),
-      assertReplicaOwnership: async () => {},
+      assertReplicaOwnership: async () => null,
       getCursor: async () => 0,
       recordSessionStart: async () => {},
       recordSessionEnd: async () => {},
@@ -231,12 +279,13 @@ function makeEvent(): TransactionCreatedEvent {
   };
 }
 
-function storedOperation(event: TransactionCreatedEvent): StoredOperation {
+function storedOperation(event: TransactionCreatedEvent, projectId: string | null = null): StoredOperation {
   return {
     id: event.id,
     eventId: event.id,
     workspaceId: event.workspaceId,
     senderReplicaId: event.replicaId,
+    projectId,
     transaction: event.payload,
     serverSequence: 1,
     createdAt: "2026-01-01T00:00:00.000Z",

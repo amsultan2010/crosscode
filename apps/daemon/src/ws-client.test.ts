@@ -188,12 +188,13 @@ function remoteIntent(id: string) {
   };
 }
 
-function remoteOperation(id: string) {
+function remoteOperation(id: string, projectId: string | null = null) {
   return {
     id,
     eventId: id,
     workspaceId: identity.workspaceId,
     senderReplicaId: "replica-b",
+    projectId,
     transaction: {
       id,
       base: { files: [] },
