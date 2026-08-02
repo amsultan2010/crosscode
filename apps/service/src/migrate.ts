@@ -14,7 +14,11 @@ async function main(): Promise<void> {
       await store.pool.query(`GRANT USAGE ON SCHEMA public TO ${role}`);
       await store.pool.query(`GRANT SELECT ON ALL TABLES IN SCHEMA public TO ${role}`);
       await store.pool.query(`GRANT INSERT ON replicas, operations, operation_files, audit_events TO ${role}`);
-      await store.pool.query(`GRANT UPDATE (last_seen_at) ON replicas TO ${role}`);
+      await store.pool.query(`GRANT INSERT ON projects TO ${role}`);
+      // upsertProject() is an INSERT ... ON CONFLICT DO UPDATE, so the runtime role needs
+      // UPDATE on exactly the two columns that upsert path touches -- and nothing else.
+      await store.pool.query(`GRANT UPDATE (repo_root, last_activity_at) ON projects TO ${role}`);
+      await store.pool.query(`GRANT UPDATE (last_seen_at, project_id) ON replicas TO ${role}`);
       await store.pool.query(`GRANT UPDATE (next_sequence) ON workspaces TO ${role}`);
     }
   }

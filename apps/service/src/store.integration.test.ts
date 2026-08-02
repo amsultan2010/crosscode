@@ -29,7 +29,8 @@ describe.skipIf(!databaseUrl)("PostgreSQL service store", () => {
       const replica = await store.registerReplica(userId, workspaceId, replicaName);
       await expect(store.registerReplica(userId, workspaceId, replicaName)).rejects.toBeInstanceOf(StoreConflictError);
       await expect(store.assertReplicaOwnership(workspaceId, randomUUID(), replica.replicaId)).rejects.toBeInstanceOf(StoreUnauthorizedError);
-      await expect(store.assertReplicaOwnership(workspaceId, membership.memberId, replica.replicaId)).resolves.toBeUndefined();
+      // assertReplicaOwnership returns the replica's project id; this replica has none.
+      await expect(store.assertReplicaOwnership(workspaceId, membership.memberId, replica.replicaId)).resolves.toBeNull();
 
       const event = makeEvent(membership, replica.replicaId, randomUUID(), 1);
       const first = await store.appendOperation(membership, event);
@@ -79,6 +80,111 @@ describe.skipIf(!databaseUrl)("PostgreSQL service store", () => {
       }
     } finally {
       if (workspaceId) {
+        await store.pool.query("DELETE FROM audit_events WHERE workspace_id = $1", [workspaceId]);
+        await store.pool.query("DELETE FROM workspaces WHERE id = $1", [workspaceId]);
+      }
+      await store.close();
+    }
+  });
+
+  it("upserts projects idempotently, falls back to the repo root, and isolates them per workspace", async () => {
+    const store = new PgStore(databaseUrl!);
+    const workspaceIds: string[] = [];
+    try {
+      await store.migrate();
+      const ownerUserId = randomUUID();
+      const owner = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId: ownerUserId, actorId: `owner-${randomUUID()}@example.com` });
+      const other = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId: randomUUID(), actorId: `owner-${randomUUID()}@example.com` });
+      workspaceIds.push(owner.workspaceId, other.workspaceId);
+
+      // Idempotency: the same repository reported twice -- in two different spellings, from
+      // two different checkouts -- must collapse onto one row.
+      const remote = `git@github.com:acme/${randomUUID()}.git`;
+      const first = await store.upsertProject(owner.workspaceId, { repoRemote: remote, repoRoot: "/Users/a/repo" });
+      const second = await store.upsertProject(owner.workspaceId, { repoRemote: remote, repoRoot: "/Users/a/repo" });
+      const third = await store.upsertProject(owner.workspaceId, {
+        repoRemote: remote.replace("git@github.com:", "https://user:token@GitHub.com/"), repoRoot: "/Users/b/repo"
+      });
+      expect(second!.id).toBe(first!.id);
+      expect(third!.id).toBe(first!.id);
+      expect(third!.repoRemote).toBe(first!.repoRemote);
+      // The advisory repo_root tracks the most recent reporter.
+      expect(third!.repoRoot).toBe("/Users/b/repo");
+      expect((await store.listProjects(owner.workspaceId)).filter((p) => p.id === first!.id)).toHaveLength(1);
+
+      // Fallback keying: a checkout with no remote is keyed by its absolute repo root, and
+      // two different rootless checkouts must not collide on NULL.
+      const rootA = `/Users/dev/${randomUUID()}`;
+      const rootB = `/Users/dev/${randomUUID()}`;
+      const local = await store.upsertProject(owner.workspaceId, { repoRoot: `${rootA}/` });
+      const localAgain = await store.upsertProject(owner.workspaceId, { repoRoot: rootA });
+      const otherLocal = await store.upsertProject(owner.workspaceId, { repoRoot: rootB });
+      expect(localAgain!.id).toBe(local!.id);
+      expect(local!.repoRemote).toBeNull();
+      expect(local!.repoRoot).toBe(rootA);
+      expect(otherLocal!.id).not.toBe(local!.id);
+
+      // Nothing usable to key on yields no project rather than an unaddressable row.
+      expect(await store.upsertProject(owner.workspaceId, {})).toBeNull();
+      expect(await store.upsertProject(owner.workspaceId, { repoRoot: "relative/path", repoRemote: "  " })).toBeNull();
+
+      // Cross-workspace isolation: the same remote in another workspace is a separate
+      // project, and neither workspace can read the other's by id.
+      const twin = await store.upsertProject(other.workspaceId, { repoRemote: remote, repoRoot: "/Users/a/repo" });
+      expect(twin!.id).not.toBe(first!.id);
+      expect(await store.getProject(owner.workspaceId, first!.id)).toMatchObject({ id: first!.id });
+      expect(await store.getProject(other.workspaceId, first!.id)).toBeNull();
+      expect(await store.getProject(owner.workspaceId, twin!.id)).toBeNull();
+      expect((await store.listProjects(other.workspaceId)).map((p) => p.id)).not.toContain(first!.id);
+
+      // Registering a replica with a repository attributes both the replica and every
+      // operation it later sends to the matching project.
+      const registered = await store.registerReplica(
+        ownerUserId, owner.workspaceId, `replica-${randomUUID()}`, { repoRemote: remote, repoRoot: "/Users/a/repo" }
+      );
+      expect(registered.projectId).toBe(first!.id);
+      const membership = await store.resolveMembership(ownerUserId, owner.workspaceId);
+      const operationId = randomUUID();
+      const operationEvent = makeEvent(membership, registered.replicaId, operationId, 1);
+      await store.appendOperation(membership, operationEvent);
+      const attributed = await store.pool.query<{ project_id: string | null }>(
+        "SELECT project_id FROM operations WHERE workspace_id = $1 AND id = $2", [owner.workspaceId, operationId]
+      );
+      expect(attributed.rows[0]?.project_id).toBe(first!.id);
+
+      // The column being right is not enough -- the read paths a consumer uses have to
+      // return it. This asserts on what listOperations/listPresence hand back, which is
+      // what GET /v1/operations and GET /v1/presence serialize verbatim.
+      const listed = (await store.listOperations(owner.workspaceId, 0, 100)).items.find((item) => item.id === operationId);
+      expect(listed?.projectId).toBe(first!.id);
+      // The same value must survive the write path's own return, since that object is
+      // what gets broadcast over the WebSocket immediately after ingest.
+      const reingested = await store.appendOperation(membership, operationEvent);
+      expect(reingested.projectId).toBe(first!.id);
+      expect(await store.assertReplicaOwnership(owner.workspaceId, membership.memberId, registered.replicaId)).toBe(first!.id);
+
+      await store.recordSessionStart(owner.workspaceId, registered.replicaId, 0);
+      const presence = await store.listPresence(owner.workspaceId);
+      expect(presence.find((session) => session.replicaId === registered.replicaId)?.projectId).toBe(first!.id);
+      // A replica registered without a repository stays null, not undefined -- consumers
+      // group those under "Unassigned".
+      const bare = await store.registerReplica(ownerUserId, owner.workspaceId, `replica-${randomUUID()}`);
+      const bareSession = (await store.listPresence(owner.workspaceId)).find((session) => session.replicaId === bare.replicaId);
+      expect(bareSession).toBeDefined();
+      expect(bareSession!.projectId).toBeNull();
+
+      // attachReplicaToProject is the seam the pairing claim handler calls: it registers a
+      // replica without repository information, then attributes it in one call afterwards.
+      const paired = await store.registerReplica(ownerUserId, owner.workspaceId, `replica-${randomUUID()}`);
+      expect(paired.projectId).toBeNull();
+      expect(await store.attachReplicaToProject(owner.workspaceId, paired.replicaId, { repoRemote: remote })).toBe(first!.id);
+      expect(await store.attachReplicaToProject(owner.workspaceId, paired.replicaId, {})).toBeNull();
+      const linked = await store.pool.query<{ project_id: string | null }>(
+        "SELECT project_id FROM replicas WHERE id = $1", [paired.replicaId]
+      );
+      expect(linked.rows[0]?.project_id).toBe(first!.id);
+    } finally {
+      for (const workspaceId of workspaceIds) {
         await store.pool.query("DELETE FROM audit_events WHERE workspace_id = $1", [workspaceId]);
         await store.pool.query("DELETE FROM workspaces WHERE id = $1", [workspaceId]);
       }

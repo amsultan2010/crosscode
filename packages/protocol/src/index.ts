@@ -157,14 +157,22 @@ export const principalSchema = z.object({
 }).strict();
 export type Principal = z.infer<typeof principalSchema>;
 
+// repoRoot/repoRemote let a daemon declare which repository it is a replica of, so the
+// service can upsert the matching project (Contract B) at registration time. Both are
+// optional: a pre-projects daemon omits them and its replica keeps a null project_id.
 export const registerReplicaRequestSchema = z.object({
-  name: z.string().min(1)
+  name: z.string().min(1),
+  repoRoot: z.string().min(1).nullable().optional(),
+  repoRemote: z.string().min(1).nullable().optional()
 }).strict();
 export type RegisterReplicaRequest = z.infer<typeof registerReplicaRequestSchema>;
 
 export const registerReplicaResponseSchema = z.object({
   replicaId: z.string().min(1),
-  createdAt: z.string().datetime()
+  createdAt: z.string().datetime(),
+  // The project the reported repoRoot/repoRemote resolved to; null when the daemon
+  // reported neither.
+  projectId: z.string().min(1).nullable()
 }).strict();
 export type RegisterReplicaResponse = z.infer<typeof registerReplicaResponseSchema>;
 
@@ -214,6 +222,35 @@ export const redeemInviteResponseSchema = z.object({
   role: workspaceRoleSchema
 }).strict();
 export type RedeemInviteResponse = z.infer<typeof redeemInviteResponseSchema>;
+
+// A project is a repository inside a workspace (Contract B). repoRemote is the normalized
+// dedup key when the checkout has a remote; repoRoot is the last absolute path a daemon
+// reported and is advisory only -- it is the dedup key solely when repoRemote is null.
+export const projectSchema = z.object({
+  id: z.string().min(1),
+  workspaceId: z.string().min(1),
+  name: z.string().min(1),
+  repoRemote: z.string().nullable(),
+  repoRoot: z.string().nullable(),
+  createdAt: z.string().datetime(),
+  lastActivityAt: z.string().datetime().nullable()
+}).strict();
+export type Project = z.infer<typeof projectSchema>;
+
+// At least one key must be present, otherwise the upsert has nothing to dedup on.
+export const upsertProjectRequestSchema = z.object({
+  repoRoot: z.string().min(1).nullable().optional(),
+  repoRemote: z.string().min(1).nullable().optional()
+}).strict().refine(
+  (body) => Boolean(body.repoRoot) || Boolean(body.repoRemote),
+  { message: "Either repoRoot or repoRemote is required" }
+);
+export type UpsertProjectRequest = z.infer<typeof upsertProjectRequestSchema>;
+
+export const listProjectsResponseSchema = z.object({
+  projects: z.array(projectSchema)
+}).strict();
+export type ListProjectsResponse = z.infer<typeof listProjectsResponseSchema>;
 
 // 0=always_ask (today's default), 1=auto_if_clean, 2=auto_always -- see BUILD_INSTRUCTIONS.md Phase 9.
 export const workspaceAutonomyTierSchema = z.union([z.literal(0), z.literal(1), z.literal(2)]);
@@ -326,7 +363,11 @@ export const remoteOperationSchema = z.object({
   senderReplicaId: z.string().min(1),
   transaction: changeTransactionSchema,
   serverSequence: z.number().int().positive(),
-  createdAt: z.string().datetime()
+  createdAt: z.string().datetime(),
+  // The project the sending replica belongs to (Contract B), so a consumer can attribute
+  // an edit to a repository. Null means the operation predates projects, or its replica
+  // registered without reporting one -- consumers group those as "Unassigned".
+  projectId: z.string().min(1).nullable()
 }).strict();
 export type RemoteOperation = z.infer<typeof remoteOperationSchema>;
 
@@ -598,7 +639,11 @@ export const presenceUpdateSchema = z.object({
   replicaId: z.string().min(1),
   actorId: z.string().min(1),
   status: presenceStatusSchema,
-  lastSeenAt: z.string().datetime()
+  lastSeenAt: z.string().datetime(),
+  // Carried live for the same reason GET /v1/presence carries it: a consumer merges these
+  // updates into its presence list, so without it a replica that connects after the
+  // initial snapshot would lose its project attribution. Null when unattributed.
+  projectId: z.string().min(1).nullable()
 }).strict();
 export type PresenceUpdate = z.infer<typeof presenceUpdateSchema>;
 

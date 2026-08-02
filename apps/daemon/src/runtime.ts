@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import type { FSWatcher } from "chokidar";
 import { AgentDelegatedReviewer } from "@crosscode/core";
-import { discoverRepository, resolveGitPath } from "@crosscode/git";
+import { discoverRepository, remoteUrl, resolveGitPath } from "@crosscode/git";
 import {
   claimPairingCodeRequestSchema, claimPairingCodeResponseSchema, daemonConfigSchema, daemonConnectionSchema,
   type DaemonConfig, type DaemonConnection, type PresenceUpdate
@@ -288,6 +288,17 @@ function createServiceClient(directory: string, config: Pick<DaemonConfig, "work
   });
 }
 
+/**
+ * Repo root + origin URL for the project this daemon belongs to (Contract B). Never
+ * throws: a daemon that cannot describe its repository should still start, just without
+ * project attribution.
+ */
+async function describeRepository(directory: string): Promise<{ repoRoot: string | null; repoRemote: string | null }> {
+  const repository = await discoverRepository(directory).catch(() => undefined);
+  if (!repository) return { repoRoot: null, repoRemote: null };
+  return { repoRoot: repository.root, repoRemote: (await remoteUrl(repository.root).catch(() => undefined)) ?? null };
+}
+
 export async function runDaemonProcess(
   directory: string,
   options: { gitPollMs?: number; syncPollMs?: number; liveSync?: boolean; replicaName?: string; onPresence?: (presence: PresenceUpdate) => void } = {}
@@ -300,7 +311,9 @@ export async function runDaemonProcess(
   try {
     if (config.service) {
       serviceClient = createServiceClient(directory, config, config.service);
-      if (!config.replicaId) config = { ...config, replicaId: await serviceClient.ensureReplicaRegistered(options.replicaName) };
+      if (!config.replicaId) {
+        config = { ...config, replicaId: await serviceClient.ensureReplicaRegistered(options.replicaName, await describeRepository(directory)) };
+      }
     } else if (!config.replicaId) {
       throw new Error("No replica identity configured; run `crosscode -- login` to enable self-service replica registration, or `crosscode init` for a local-only identity");
     }

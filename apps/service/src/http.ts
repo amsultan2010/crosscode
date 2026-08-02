@@ -17,6 +17,9 @@ import {
   intentIngestReceiptSchema,
   inviteSchema,
   listInvitesResponseSchema,
+  listProjectsResponseSchema,
+  projectSchema,
+  upsertProjectRequestSchema,
   redeemInviteResponseSchema,
   registerReplicaRequestSchema,
   registerReplicaResponseSchema,
@@ -60,6 +63,8 @@ const JSON_TYPE = "application/json";
 // workspaceId from. POST bodies still carry their own event.workspaceId, which is
 // checked against this header for a redundant principal-binding match.
 const WORKSPACE_HEADER = "x-crosscode-workspace-id";
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function assertSafeServiceBinding(host: string, tlsEnabled: boolean): void {
   if (!isLoopback(host) && !tlsEnabled) {
@@ -135,10 +140,14 @@ async function handleRequest(
     const claimed = await options.store.claimPairingCode({
       code: body.code, actorId: body.actorId, replicaName: body.replicaName
     });
-    // projectId is a literal null here on purpose: the projects workstream owns deriving
-    // it from repoRoot/repoRemote and extends this handler. See the ownership seam in
-    // docs/onboarding-contracts.md -- do not add a project upsert on this side of it.
-    send(response, 200, claimPairingCodeResponseSchema.parse({ ...claimed, projectId: null }));
+    // Attribute the freshly paired replica to the repository it is a checkout of, so the
+    // dashboard can group its activity by project from the very first pairing. Reported by
+    // the daemon rather than trusted blindly: a checkout with neither a remote nor a repo
+    // root yields null, which consumers group as "Unassigned".
+    const projectId = await options.store.attachReplicaToProject(claimed.workspaceId, claimed.replicaId, {
+      repoRoot: body.repoRoot, repoRemote: body.repoRemote
+    });
+    send(response, 200, claimPairingCodeResponseSchema.parse({ ...claimed, projectId }));
     return;
   }
 
@@ -212,8 +221,38 @@ async function handleRequest(
     const body = registerReplicaRequestSchema.parse(
       await readJson(request, Math.min(options.bodyLimitBytes ?? 1_048_576, 16_384))
     );
-    const replica = await options.store.registerReplica(identity.userId, identity.workspaceId, body.name);
+    const replica = await options.store.registerReplica(identity.userId, identity.workspaceId, body.name, {
+      repoRoot: body.repoRoot, repoRemote: body.repoRemote
+    });
     send(response, 201, registerReplicaResponseSchema.parse(replica));
+    return;
+  }
+
+  // Declaring which repository a checkout belongs to is the same class of action as
+  // registering a replica (an idempotent upsert of a checkout identity, not a content
+  // mutation), so like POST /v1/replicas it is not gated on the viewer role.
+  if (method === "POST" && url.pathname === "/v1/projects") {
+    const body = upsertProjectRequestSchema.parse(await readJson(request, Math.min(options.bodyLimitBytes ?? 1_048_576, 16_384)));
+    const project = await options.store.upsertProject(identity.workspaceId, body);
+    if (!project) throw new HttpError(400, "repoRemote or repoRoot must yield a usable project key");
+    send(response, 200, projectSchema.parse(project));
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v1/projects") {
+    const projects = await options.store.listProjects(identity.workspaceId);
+    send(response, 200, listProjectsResponseSchema.parse({ projects }));
+    return;
+  }
+
+  const projectMatch = method === "GET" ? url.pathname.match(/^\/v1\/projects\/([^/]+)$/) : null;
+  if (projectMatch) {
+    const projectId = decodeURIComponent(projectMatch[1]!);
+    // Ids are uuids; a malformed one would otherwise reach Postgres and surface as a 500.
+    // A project in another workspace and one that does not exist are both plain 404s.
+    const project = UUID_PATTERN.test(projectId) ? await options.store.getProject(identity.workspaceId, projectId) : null;
+    if (!project) throw new HttpError(404, "Project not found");
+    send(response, 200, projectSchema.parse(project));
     return;
   }
 
@@ -422,8 +461,6 @@ async function handleRequest(
 // raw header, so the check is impossible to skip by reading the token a second way.
 type Identity = Membership & { credential: "supabase" | "workspace-token" };
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 function assertSupabaseCredential(identity: Identity, surface: string): void {
   if (identity.credential !== "supabase") throw new HttpError(403, `Workspace tokens cannot access ${surface}`);
 }
@@ -509,6 +546,7 @@ function toRemoteOperation(operation: StoredOperation): RemoteOperation {
     eventId: operation.eventId,
     workspaceId: operation.workspaceId,
     senderReplicaId: operation.senderReplicaId,
+    projectId: operation.projectId,
     transaction: operation.transaction,
     serverSequence: operation.serverSequence,
     createdAt: operation.createdAt
@@ -565,6 +603,7 @@ function rateLimitRoute(method: string, pathname: string): string {
   if (method === "POST" && /^\/v1\/invites\/[^/]+\/redeem$/.test(pathname)) return "POST /v1/invites/:code/redeem";
   if (method === "DELETE" && /^\/v1\/invites\/[^/]+$/.test(pathname)) return "DELETE /v1/invites/:id";
   if (method === "GET" && /^\/v1\/pairing-codes\/[^/]+$/.test(pathname)) return "GET /v1/pairing-codes/:pairingId";
+  if (method === "GET" && /^\/v1\/projects\/[^/]+$/.test(pathname)) return "GET /v1/projects/:id";
   const route = `${method} ${pathname}`;
   return new Set([
     "GET /healthz",
@@ -584,6 +623,8 @@ function rateLimitRoute(method: string, pathname: string): string {
     "GET /v1/presence",
     "GET /v1/workspace/billing",
     "GET /v1/memberships",
+    "GET /v1/projects",
+    "POST /v1/projects",
     "POST /v1/workspaces",
     "POST /v1/invites",
     "GET /v1/invites",

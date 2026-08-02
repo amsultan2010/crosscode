@@ -13,7 +13,10 @@ import {
   daemonConfigSchema,
   daemonConnectionSchema,
   eventEnvelopeSchema,
+  listProjectsResponseSchema,
   principalSchema,
+  projectSchema,
+  upsertProjectRequestSchema,
   registerReplicaRequestSchema,
   registerReplicaResponseSchema,
   remoteOperationSchema,
@@ -88,9 +91,38 @@ describe("protocol schemas", () => {
     expect(() => registerReplicaRequestSchema.parse({ name: "" })).toThrow();
     expect(() => registerReplicaRequestSchema.parse({ name: "my-laptop", token: "x" })).toThrow();
 
-    const response = { replicaId: "replica-1", createdAt: "2026-01-01T00:00:00.000Z" };
+    // A daemon may report the repository it is a checkout of, so the service can attribute
+    // the replica to a project (Contract B); both fields are optional.
+    expect(registerReplicaRequestSchema.parse({ name: "my-laptop", repoRoot: "/Users/dev/repo", repoRemote: "git@github.com:o/r.git" }))
+      .toEqual({ name: "my-laptop", repoRoot: "/Users/dev/repo", repoRemote: "git@github.com:o/r.git" });
+    expect(registerReplicaRequestSchema.parse({ name: "my-laptop", repoRoot: null, repoRemote: null }))
+      .toEqual({ name: "my-laptop", repoRoot: null, repoRemote: null });
+
+    const response = { replicaId: "replica-1", createdAt: "2026-01-01T00:00:00.000Z", projectId: null };
     expect(registerReplicaResponseSchema.parse(response)).toEqual(response);
+    expect(registerReplicaResponseSchema.parse({ ...response, projectId: "project-1" }).projectId).toBe("project-1");
     expect(() => registerReplicaResponseSchema.parse({ ...response, createdAt: "not-a-date" })).toThrow();
+    expect(() => registerReplicaResponseSchema.parse({ replicaId: "replica-1", createdAt: "2026-01-01T00:00:00.000Z" })).toThrow();
+  });
+
+  it("validates project payloads and the two-tiered upsert key", () => {
+    const project = {
+      id: "project-1", workspaceId: "workspace-1", name: "repo",
+      repoRemote: "github.com/owner/repo", repoRoot: "/Users/dev/repo",
+      createdAt: "2026-01-01T00:00:00.000Z", lastActivityAt: "2026-01-02T00:00:00.000Z"
+    };
+    expect(projectSchema.parse(project)).toEqual(project);
+    expect(projectSchema.parse({ ...project, repoRemote: null, repoRoot: null, lastActivityAt: null }).repoRemote).toBeNull();
+    expect(() => projectSchema.parse({ ...project, extra: true })).toThrow();
+    expect(() => projectSchema.parse({ ...project, createdAt: "not-a-date" })).toThrow();
+    expect(listProjectsResponseSchema.parse({ projects: [project] }).projects).toHaveLength(1);
+
+    expect(upsertProjectRequestSchema.parse({ repoRemote: "git@github.com:o/r.git" }).repoRemote).toBe("git@github.com:o/r.git");
+    expect(upsertProjectRequestSchema.parse({ repoRoot: "/Users/dev/repo" }).repoRoot).toBe("/Users/dev/repo");
+    // Neither key present means there is nothing to dedup on.
+    expect(() => upsertProjectRequestSchema.parse({})).toThrow();
+    expect(() => upsertProjectRequestSchema.parse({ repoRoot: null, repoRemote: null })).toThrow();
+    expect(() => upsertProjectRequestSchema.parse({ repoRoot: "/Users/dev/repo", extra: true })).toThrow();
   });
 
   it("binds transaction-created event identity to its transaction payload", () => {
@@ -113,9 +145,14 @@ describe("protocol schemas", () => {
       senderReplicaId: transactionEvent.replicaId,
       transaction,
       serverSequence: 1,
-      createdAt: transactionEvent.createdAt
+      createdAt: transactionEvent.createdAt,
+      projectId: "project-1"
     };
     expect(remoteOperationSchema.parse(operation)).toEqual(operation);
+    expect(remoteOperationSchema.parse({ ...operation, projectId: null }).projectId).toBeNull();
+    const { projectId: _missing, ...withoutProjectId } = operation;
+    expect(() => remoteOperationSchema.parse(withoutProjectId)).toThrow();
+    expect(wsFanOutMessageSchema.parse({ type: "operation", operation })).toEqual({ type: "operation", operation });
     expect(cursorQuerySchema.parse({ afterSequence: 0 })).toEqual({ afterSequence: 0 });
     expect(cursorResponseSchema.parse({ operations: [operation], nextCursor: 1 }).nextCursor).toBe(1);
     expect(() => cursorQuerySchema.parse({ afterSequence: -1 })).toThrow();
@@ -144,9 +181,14 @@ describe("protocol schemas", () => {
     expect(wsSubscribeRequestSchema.parse(subscribeRequest)).toEqual(subscribeRequest);
     expect(() => wsSubscribeRequestSchema.parse({ ...subscribeRequest, unexpected: true })).toThrow();
 
-    const presence = { replicaId: "replica-1", actorId: "actor-1", status: "online" as const, lastSeenAt: "2026-01-01T00:00:00.000Z" };
+    // projectId rides along on presence so a consumer can attribute a replica that
+    // connects after the initial GET /v1/presence snapshot (Contract B).
+    const presence = { replicaId: "replica-1", actorId: "actor-1", status: "online" as const, lastSeenAt: "2026-01-01T00:00:00.000Z", projectId: "project-1" };
     expect(presenceUpdateSchema.parse(presence)).toEqual(presence);
+    expect(presenceUpdateSchema.parse({ ...presence, projectId: null }).projectId).toBeNull();
     expect(() => presenceUpdateSchema.parse({ ...presence, status: "away" })).toThrow();
+    const { projectId: _omitted, ...withoutProject } = presence;
+    expect(() => presenceUpdateSchema.parse(withoutProject)).toThrow();
 
     const operation = {
       id: transaction.id,
@@ -155,8 +197,12 @@ describe("protocol schemas", () => {
       senderReplicaId: transactionEvent.replicaId,
       transaction,
       serverSequence: 1,
-      createdAt: transactionEvent.createdAt
+      createdAt: transactionEvent.createdAt,
+      projectId: "project-1"
     };
+    // The fan-out frame must preserve projectId, not merely accept it: this is the live
+    // path the dashboard reads to attribute an edit to a project.
+    expect(wsFanOutMessageSchema.parse({ type: "operation", operation })).toEqual({ type: "operation", operation });
     expect(wsFanOutMessageSchema.parse({ type: "operation", operation }).type).toBe("operation");
     expect(wsFanOutMessageSchema.parse({ type: "presence", presence }).type).toBe("presence");
     expect(() => wsFanOutMessageSchema.parse({ type: "presence", operation })).toThrow();
