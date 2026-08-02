@@ -403,7 +403,7 @@ describe("service HTTP boundary", () => {
     });
   });
 
-  it("mints and polls a pairing code, and claims it unauthenticated with a null projectId", async () => {
+  it("mints and polls a pairing code, and claims it unauthenticated, attributing the replica to its project", async () => {
     const { StoreGoneError } = await import("./store.js");
     const pairingId = "3f1d5f1e-1e2b-4a7c-9f3d-2b6c7d8e9f01";
     const store = {
@@ -415,6 +415,15 @@ describe("service HTTP boundary", () => {
       claimPairingCode: async (input: { code: string }) => {
         if (input.code !== "K4T9-2WQZ") throw new StoreGoneError("Pairing code is no longer available");
         return { workspaceId: membership.workspaceId, replicaId: "replica-9", token: "ccw_opaque-token" };
+      },
+      // Contract A's projectId is populated by attributing the freshly registered replica
+      // to the repository it reported, so assert the handler forwards that report through
+      // rather than dropping it.
+      attachReplicaToProject: async (workspaceId: string, replicaId: string, repo: { repoRoot?: string | null }) => {
+        expect(workspaceId).toBe(membership.workspaceId);
+        expect(replicaId).toBe("replica-9");
+        expect(repo.repoRoot).toBe("/repo");
+        return "project-7";
       }
     } as unknown as PgStore;
     const base = await listen(store);
@@ -444,7 +453,7 @@ describe("service HTTP boundary", () => {
     });
     expect(await claimed.json()).toEqual({
       ok: true,
-      data: { workspaceId: membership.workspaceId, replicaId: "replica-9", token: "ccw_opaque-token", projectId: null }
+      data: { workspaceId: membership.workspaceId, replicaId: "replica-9", token: "ccw_opaque-token", projectId: "project-7" }
     });
 
     const gone = await post(base, "/v1/pairing-codes/claim", {

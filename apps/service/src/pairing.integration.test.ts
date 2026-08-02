@@ -50,8 +50,13 @@ describe.skipIf(!databaseUrl)("pairing and personal workspaces over PostgreSQL",
     const claimData = (await claimed.json() as any).data;
     expect(claimData.workspaceId).toBe(workspaceId);
     expect(claimData.token.startsWith("ccw_")).toBe(true);
-    // Ownership seam: the projects workstream populates this, the pairing side ships null.
-    expect(claimData.projectId).toBeNull();
+    // The claim attributes the replica to the repository it reported, so pairing and
+    // projects are joined up from the first claim rather than backfilled later.
+    expect(claimData.projectId).toMatch(/^[0-9a-f-]{36}$/);
+    const attributed = await store.pool.query<{ project_id: string | null }>(
+      "SELECT project_id FROM replicas WHERE id = $1", [claimData.replicaId]
+    );
+    expect(attributed.rows[0]!.project_id).toBe(claimData.projectId);
 
     const polled = await pollPairing(base, pairingId, accessToken, workspaceId);
     expect(polled.status).toBe("claimed");
