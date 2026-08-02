@@ -17,6 +17,22 @@ export type PresenceSession = {
   status: "online" | "offline";
   lastSeenAt: string | null;
   cursor: number | null;
+  // Contract B gives `replicas` a nullable `project_id`. Optional here because the
+  // dashboard has to keep rendering against a service that predates that column.
+  projectId?: string | null;
+};
+
+// Contract B. The canonical `Project` type is declared for `packages/protocol`, which the
+// projects workstream owns; this is a structurally identical local copy so the dashboard
+// can be built and tested independently. Swap it for the protocol import at merge time.
+export type Project = {
+  id: string;
+  workspaceId: string;
+  name: string;
+  repoRemote: string | null;
+  repoRoot: string | null;
+  createdAt: string;
+  lastActivityAt: string | null;
 };
 
 export type WorkspaceSnapshot = {
@@ -132,6 +148,13 @@ export async function fetchOperations(auth: AuthContext): Promise<RemoteOperatio
     { workspaceId: auth.workspaceId }
   );
   return data.operations;
+}
+
+// Contract B: workspace-scoped, newest activity first. The dashboard treats a failure here
+// as "no project data" rather than a fatal error -- the other sections still render.
+export async function fetchProjects(auth: AuthContext): Promise<Project[]> {
+  const data = await request<{ projects: Project[] }>(auth, "GET", "/v1/projects", { workspaceId: auth.workspaceId });
+  return data.projects;
 }
 
 export async function fetchBillingStatus(auth: AuthContext): Promise<WorkspaceBillingResponse> {
