@@ -385,6 +385,7 @@ button[type="submit"]:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 0.6rem;
   width: 100%;
   font: inherit;
   font-size: 0.9rem;
@@ -395,6 +396,10 @@ button[type="submit"]:disabled {
   color: var(--fg);
   border-radius: 6px;
   padding: 0.6rem 1rem;
+}
+
+.auth-oauth-btn svg {
+  flex-shrink: 0;
 }
 
 .auth-oauth-btn:hover {
