@@ -132,9 +132,12 @@ export async function fetchWorkspaceSnapshot(auth: AuthContext): Promise<Workspa
   return { presence, tasks, claims, handoffs, intents, validations };
 }
 
-// Contract for the invite-redemption endpoint being built in a parallel workstream
-// (not present in this service worktree yet): POST /v1/invites/:code/redeem, authenticated,
-// no request body. Wired against that exact shape so it's ready once the route lands.
 export async function redeemInvite(session: SessionContext, code: string): Promise<{ workspaceId: string }> {
   return request<{ workspaceId: string }>(session, "POST", `/v1/invites/${encodeURIComponent(code)}/redeem`, { body: {} });
+}
+
+// Self-serve workspace creation for a freshly signed-up account with no membership yet
+// (no `workspaceId` header: there is nothing to scope one to before this call succeeds).
+export async function createWorkspace(session: SessionContext, name: string): Promise<{ workspaceId: string }> {
+  return request<{ workspaceId: string }>(session, "POST", "/v1/workspaces", { body: { name } });
 }

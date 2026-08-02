@@ -149,8 +149,7 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
       if (!email || !password) {
         throw new CliError("USAGE_ERROR", "Usage: crosscode -- signup --email <email> --password <password> [--invite <code>] [--service <url>] (or set CROSSCODE_EMAIL/CROSSCODE_PASSWORD)");
       }
-      let updated = await signup(directory, { email, password, serviceUrl });
-      if (options.invite) updated = await redeemInvite(directory, options.invite);
+      const updated = await signup(directory, { email, password, invite: options.invite, serviceUrl });
       result = { value: { workspaceId: updated.workspaceId, actorId: updated.actorId, service: { url: updated.service!.url, loggedIn: true } } };
     });
 

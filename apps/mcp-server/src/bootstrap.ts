@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readDaemonConfig, writeDaemonConfig } from "../../daemon/src/runtime.js";
@@ -10,6 +11,28 @@ const tsxBin = join(repoRoot, "node_modules", ".bin", "tsx");
 const daemonMain = join(repoRoot, "apps", "daemon", "src", "main.ts");
 
 const LOGIN_HINT = "No Crosscode Supabase session found for this directory; run `crosscode -- login` first, then retry.";
+
+// Best-effort: opens the dashboard's sign-in/sign-up page in the user's default browser
+// the first time an MCP client bootstraps a directory with no prior local identity, so
+// installing gets them straight to an account instead of a silent local-only daemon.
+// Only fires when CROSSCODE_DASHBOARD_URL is explicitly set -- there is no fixed hosted
+// domain yet, and guessing one would point users at a page that may not exist.
+function openDashboardInBrowser(): void {
+  const dashboardUrl = process.env.CROSSCODE_DASHBOARD_URL;
+  if (!dashboardUrl) return;
+  try {
+    const os = platform();
+    const child = os === "darwin"
+      ? spawn("open", [dashboardUrl], { detached: true, stdio: "ignore" })
+      : os === "win32"
+        ? spawn("cmd", ["/c", "start", "", dashboardUrl], { detached: true, stdio: "ignore" })
+        : spawn("xdg-open", [dashboardUrl], { detached: true, stdio: "ignore" });
+    child.unref();
+  } catch {
+    // Headless environments (CI, containers, remote sessions) have nothing to open;
+    // this must never block or fail daemon bootstrap.
+  }
+}
 
 async function ensureIdentity(directory: string): Promise<void> {
   const serviceUrl = process.env.CROSSCODE_SERVICE_URL;
@@ -22,6 +45,7 @@ async function ensureIdentity(directory: string): Promise<void> {
     if (serviceUrl && !existingConfig.service?.session) throw new Error(LOGIN_HINT);
     return;
   }
+  openDashboardInBrowser();
   if (serviceUrl) throw new Error(LOGIN_HINT);
   await writeDaemonConfig(directory, {
     workspaceId: randomUUID(),

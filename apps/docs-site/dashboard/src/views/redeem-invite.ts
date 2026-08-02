@@ -40,7 +40,7 @@ export function renderRedeemInvite(container: HTMLElement, session: SessionConte
       onJoined(result.workspaceId);
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) {
-        errorEl.textContent = "Invite redemption isn't available on this service yet. Try again once it ships, or ask your workspace owner for the workspace ID.";
+        errorEl.textContent = "That invite code wasn't found. Double check it with your workspace owner.";
       } else {
         errorEl.textContent = error instanceof Error ? error.message : "Could not redeem invite";
       }

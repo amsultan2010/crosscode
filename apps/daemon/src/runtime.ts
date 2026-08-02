@@ -70,7 +70,7 @@ export async function login(directory: string, credentials: { email: string; pas
 // (no service-role key involved) instead of signing in to an existing one. Supabase Auth
 // can be configured to require email confirmation, in which case signUp() returns a user
 // but no session -- surfaced here as an error telling the caller to confirm and log in.
-export async function signup(directory: string, credentials: { email: string; password: string; serviceUrl?: string }): Promise<DaemonConfig> {
+export async function signup(directory: string, credentials: { email: string; password: string; invite?: string; workspaceName?: string; serviceUrl?: string }): Promise<DaemonConfig> {
   const config = await readDaemonConfig(directory).catch(() => undefined);
   if (!config) throw new Error("Run `crosscode init` before `crosscode -- signup`");
   const serviceUrl = credentials.serviceUrl ?? config.service?.url;
@@ -83,7 +83,36 @@ export async function signup(directory: string, credentials: { email: string; pa
   // actorId must match what the service records as the member's actor_id, which for
   // invite-redeemed and self-serve-created members is the account email (see
   // apps/service/src/http.ts's use of the verified token's email claim).
-  const updated: DaemonConfig = { ...config, actorId: credentials.email, service: { url: serviceUrl, session: toStoredSession(data.session) } };
+  let updated: DaemonConfig = { ...config, actorId: credentials.email, service: { url: serviceUrl, session: toStoredSession(data.session) } };
+  await writeDaemonConfig(directory, updated);
+  // A brand-new account has no workspace yet: redeem the given invite, or self-serve
+  // create one so `crosscode -- signup` always lands the user somewhere usable rather
+  // than leaving an authenticated-but-workspace-less account (see BUILD_INSTRUCTIONS.md
+  // Phase 8's self-serve workspace creation exit criteria).
+  updated = credentials.invite
+    ? await redeemInvite(directory, credentials.invite)
+    : await createWorkspace(directory, credentials.workspaceName ?? `${credentials.email}'s workspace`);
+  return updated;
+}
+
+export async function createWorkspace(directory: string, name: string): Promise<DaemonConfig> {
+  const config = await readDaemonConfig(directory).catch(() => undefined);
+  if (!config) throw new Error("Run `crosscode init` before creating a workspace");
+  if (!config.service?.session) throw new Error("Run `crosscode -- login` or `crosscode -- signup` before creating a workspace");
+  const response = await fetch(new URL("/v1/workspaces", config.service.url), {
+    method: "POST",
+    headers: { authorization: `Bearer ${config.service.session.accessToken}`, "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+    signal: AbortSignal.timeout(5_000)
+  });
+  const envelope = await response.json().catch(() => undefined) as
+    | { ok: true; data: { workspaceId: string; memberId: string } }
+    | { ok: false; error: string }
+    | undefined;
+  if (!response.ok || !envelope?.ok) {
+    throw new Error(envelope && !envelope.ok ? envelope.error : `Workspace creation failed with status ${response.status}`);
+  }
+  const updated: DaemonConfig = { ...config, workspaceId: envelope.data.workspaceId };
   await writeDaemonConfig(directory, updated);
   return updated;
 }

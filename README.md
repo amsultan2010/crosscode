@@ -92,6 +92,8 @@ Crosscode's coordination service verifies Supabase-issued JWTs and stores worksp
 
 Supabase projects sign access tokens with an asymmetric key (ES256 by default), verified via the project's public JWKS endpoint (`<SUPABASE_URL>/auth/v1/.well-known/jwks.json`) rather than a shared secret — there is no JWT secret to configure.
 
+Optionally set `CROSSCODE_DASHBOARD_URL` (e.g. `https://your-deployed-docs-site/dashboard/`) in the MCP server's environment: the first time an MCP client bootstraps a directory with no existing local identity, it opens that URL in the user's default browser so they land on the sign-in/sign-up page instead of a silent local-only daemon. Unset by default — there is no fixed hosted domain yet.
+
 ```bash
 export SUPABASE_URL="https://<project-ref>.supabase.co"
 export SUPABASE_SERVICE_ROLE_KEY="<project service_role key>"
