@@ -134,6 +134,19 @@ describe("dashboard shell", () => {
     expect(visible(container, "#workspace-form")).toBe(true);
   });
 
+  it("shows the whole dashboard -- empty, not gated -- for a user with no team", async () => {
+    fetchMemberships.mockResolvedValue([]);
+    const container = mount();
+    await settle();
+
+    // Every section is there, so the page explains itself instead of being blank.
+    expect(sectionAnchors(container)).toEqual(["overview", "projects", "coordination", "validation"]);
+    expect(container.querySelector("#no-team")!.textContent).toContain("aren't in a team yet");
+    expect(container.querySelector("#no-team a")!.getAttribute("href")).toBe("#/invite");
+    // Nothing was fetched for a workspace that does not exist.
+    expect(fetchWorkspaceSnapshot).not.toHaveBeenCalled();
+  });
+
   it("still renders every section when the workspace snapshot is empty", async () => {
     fetchWorkspaceSnapshot.mockResolvedValue(emptySnapshot());
     fetchProjects.mockRejectedValue(new Error("no projects endpoint"));

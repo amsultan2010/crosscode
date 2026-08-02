@@ -19,6 +19,7 @@ export function renderDashboard(container: HTMLElement, session: { serviceUrl: s
       <span id="mcp-badge" class="mcp-badge" hidden></span>
     </div>
     <p id="memberships-error" class="section-note" hidden></p>
+    <div id="no-team-note"></div>
     <form id="workspace-form" class="create-team-form" hidden>
       <label>
         Workspace name
@@ -33,6 +34,7 @@ export function renderDashboard(container: HTMLElement, session: { serviceUrl: s
   const teamSelect = container.querySelector<HTMLSelectElement>("#team-switcher")!;
   const createTeamToggle = container.querySelector<HTMLButtonElement>("#create-team-toggle")!;
   const membershipsError = container.querySelector<HTMLParagraphElement>("#memberships-error")!;
+  const noTeamNote = container.querySelector<HTMLDivElement>("#no-team-note")!;
   const form = container.querySelector<HTMLFormElement>("#workspace-form")!;
   const statusEl = container.querySelector<HTMLSpanElement>("#connection-status")!;
   const mcpBadgeEl = container.querySelector<HTMLSpanElement>("#mcp-badge")!;
@@ -89,6 +91,7 @@ export function renderDashboard(container: HTMLElement, session: { serviceUrl: s
     }
     membershipsError.hidden = true;
     createTeamToggle.hidden = false;
+    noTeamNote.innerHTML = "";
     initTeamSwitcher(memberships);
   }
 
@@ -104,9 +107,10 @@ export function renderDashboard(container: HTMLElement, session: { serviceUrl: s
 
   function initTeamSwitcher(memberships: Membership[]): void {
     if (!memberships.length) {
-      // Contract C says this cannot happen for a valid user; if it does, the create-team
-      // action is already available and there is no workspace to load analytics for.
+      // No team is not a locked door: every section still renders, just empty, so the
+      // page shows what it is for. Creating a team stays an ordinary offered action.
       form.hidden = false;
+      renderTeamlessDashboard();
       return;
     }
     teamLabel.hidden = false;
@@ -116,6 +120,14 @@ export function renderDashboard(container: HTMLElement, session: { serviceUrl: s
     teamSelect.value = initial;
     setStoredWorkspaceId(initial);
     void connect(initial);
+  }
+
+  /** The dashboard for a user who is in no workspace yet: real layout, empty numbers. */
+  function renderTeamlessDashboard(): void {
+    noTeamNote.innerHTML = `<p id="no-team" class="section-note">You aren't in a team yet, so these sections are empty. Create a team below, or <a href="#/invite">redeem an invite</a> to join one.</p>`;
+    renderSections(sectionsEl, new DashboardState(emptySnapshot(), []), undefined);
+    renderMcpBadge(mcpBadgeEl, []);
+    startTourOnce();
   }
 
   async function connect(workspaceId: string): Promise<void> {
@@ -177,6 +189,10 @@ export function renderDashboard(container: HTMLElement, session: { serviceUrl: s
     statusEl.textContent = label;
     statusEl.dataset.kind = kind;
   }
+}
+
+function emptySnapshot(): ConstructorParameters<typeof DashboardState>[0] {
+  return { presence: [], tasks: [], claims: [], handoffs: [], intents: [], validations: [], operations: [] };
 }
 
 function renderMcpBadge(el: HTMLElement, presence: PresenceSession[]): void {

@@ -42,6 +42,10 @@
 body {
   margin: 0;
   font-family: var(--font-sans);
+  /* Every font size in this app is the browser default plus 5px: this base carries
+     the bump to everything that inherits (body copy, headings, list items), and the
+     explicit rem sizes below were each raised by the same 0.3125rem. */
+  font-size: 1.3125rem;
   color: var(--fg);
   background: var(--bg);
   line-height: 1.5;
@@ -99,7 +103,7 @@ body {
 #app-nav a {
   color: var(--fg-dim);
   text-decoration: none;
-  font-size: 0.9rem;
+  font-size: 1.2125rem;
 }
 
 #app-nav a.active,
@@ -109,7 +113,7 @@ body {
 
 #app-nav button {
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 1.1625rem;
   cursor: pointer;
   border: 1px solid var(--border-strong);
   background: transparent;
@@ -134,7 +138,7 @@ main#app {
 }
 
 .auth-card h1 {
-  font-size: 1.6rem;
+  font-size: 1.9125rem;
   letter-spacing: -0.02em;
   margin-bottom: 0.4rem;
 }
@@ -150,7 +154,7 @@ label {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  font-size: 0.85rem;
+  font-size: 1.1625rem;
   color: var(--fg-dim);
 }
 
@@ -189,7 +193,7 @@ button[type="submit"]:disabled {
 
 .error {
   color: var(--danger);
-  font-size: 0.85rem;
+  font-size: 1.1625rem;
 }
 
 .workspace-bar {
@@ -220,7 +224,7 @@ button[type="submit"]:disabled {
 }
 
 .status-pill {
-  font-size: 0.8rem;
+  font-size: 1.1125rem;
   font-family: var(--font-mono);
   border: 1px solid var(--border-strong);
   border-radius: 999px;
@@ -253,7 +257,7 @@ button[type="submit"]:disabled {
 }
 
 .panel h2 {
-  font-size: 0.9rem;
+  font-size: 1.2125rem;
   font-weight: 600;
   letter-spacing: -0.01em;
   margin: 0 0 0.7rem;
@@ -269,7 +273,7 @@ button[type="submit"]:disabled {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  font-size: 0.85rem;
+  font-size: 1.1625rem;
   max-height: 16rem;
   overflow-y: auto;
 }
@@ -344,7 +348,7 @@ button[type="submit"]:disabled {
 .auth-tabs button {
   flex: 1;
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 1.1625rem;
   font-weight: 600;
   cursor: pointer;
   border: none;
@@ -361,14 +365,14 @@ button[type="submit"]:disabled {
 }
 
 .auth-card h1 {
-  font-size: 1.5rem;
+  font-size: 1.8125rem;
   letter-spacing: -0.02em;
   margin: 0 0 0.35rem;
 }
 
 .auth-card .auth-subtitle {
   color: var(--muted);
-  font-size: 0.88rem;
+  font-size: 1.1925rem;
   margin: 0;
 }
 
@@ -378,7 +382,7 @@ button[type="submit"]:disabled {
   gap: 0.75rem;
   margin: 1.25rem 0;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: 1.0925rem;
 }
 
 .auth-divider::before,
@@ -402,7 +406,7 @@ button[type="submit"]:disabled {
   gap: 0.6rem;
   width: 100%;
   font: inherit;
-  font-size: 0.9rem;
+  font-size: 1.2125rem;
   font-weight: 600;
   cursor: pointer;
   border: 1px solid var(--border-strong);
@@ -463,7 +467,7 @@ button[type="submit"].loading::after {
   align-items: center;
   gap: 0.5rem;
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 1.1625rem;
   cursor: pointer;
   border: 1px solid var(--border-strong);
   background: transparent;
@@ -482,7 +486,7 @@ button[type="submit"].loading::after {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.7rem;
+  font-size: 1.0125rem;
   font-weight: 700;
   color: var(--fg-dim);
 }
@@ -510,7 +514,7 @@ button[type="submit"].loading::after {
   width: 100%;
   text-align: left;
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 1.1625rem;
   cursor: pointer;
   border: none;
   background: transparent;
@@ -529,7 +533,7 @@ button[type="submit"].loading::after {
   display: block;
   padding: 0.4rem 0.6rem 0.6rem;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: 1.0925rem;
   border-bottom: 1px solid var(--border);
   margin-bottom: 0.3rem;
   word-break: break-all;
@@ -549,10 +553,15 @@ button[type="submit"].loading::after {
   background: var(--bg-alt);
   border-radius: 8px;
   padding: 1.1rem 1.2rem;
+  /* At this type size a label can wrap to two lines. Reserving the room keeps the
+     big numbers on one baseline across the row instead of stepping up and down. */
+  display: flex;
+  flex-direction: column;
 }
 
 .stat-card .stat-label {
-  font-size: 0.78rem;
+  min-height: 3em;
+  font-size: 1.0925rem;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -560,13 +569,13 @@ button[type="submit"].loading::after {
 }
 
 .stat-card .stat-value {
-  font-size: 1.7rem;
+  font-size: 2.0125rem;
   font-weight: 700;
   letter-spacing: -0.02em;
 }
 
 .stat-card .stat-sub {
-  font-size: 0.8rem;
+  font-size: 1.1125rem;
   color: var(--muted);
   margin-top: 0.3rem;
 }
@@ -575,7 +584,7 @@ button[type="submit"].loading::after {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  font-size: 0.8rem;
+  font-size: 1.1125rem;
   color: var(--muted);
 }
 
@@ -599,7 +608,7 @@ button[type="submit"].loading::after {
   align-items: baseline;
   justify-content: space-between;
   gap: 0.75rem;
-  font-size: 0.85rem;
+  font-size: 1.1625rem;
   padding: 0.5rem 0;
   border-bottom: 1px solid var(--border);
 }
@@ -610,11 +619,11 @@ button[type="submit"].loading::after {
 
 .history-item .history-path {
   font-family: var(--font-mono);
-  font-size: 0.8rem;
+  font-size: 1.1125rem;
 }
 
 .history-item .history-status {
-  font-size: 0.75rem;
+  font-size: 1.0625rem;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -630,7 +639,7 @@ button[type="submit"].loading::after {
 }
 
 .settings-section h2 {
-  font-size: 1rem;
+  font-size: 1.3125rem;
   margin: 0 0 1rem;
 }
 
@@ -641,10 +650,29 @@ button[type="submit"].loading::after {
   margin-bottom: 1.25rem;
 }
 
+/* Both of these were the browser's default 13px, which now reads as a mistake next
+   to the rest of the page. */
+.avatar-row input[type="file"] {
+  font: inherit;
+  font-size: 1.1625rem;
+  color: var(--fg-dim);
+}
+
+#settings-sign-out {
+  font: inherit;
+  font-size: 1.1625rem;
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 0.5rem 0.9rem;
+}
+
 .avatar-row .account-avatar {
   width: 3.5rem;
   height: 3.5rem;
-  font-size: 1.2rem;
+  font-size: 1.5125rem;
 }
 
 .theme-toggle {
@@ -654,7 +682,7 @@ button[type="submit"].loading::after {
 
 .theme-toggle button {
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 1.1625rem;
   cursor: pointer;
   border: 1px solid var(--border-strong);
   background: transparent;
@@ -695,7 +723,7 @@ button[type="submit"].loading::after {
 }
 
 .onboarding-step h1 {
-  font-size: 1.6rem;
+  font-size: 1.9125rem;
   letter-spacing: -0.02em;
 }
 
@@ -727,7 +755,7 @@ button[type="submit"].loading::after {
 
 .onboarding-install button {
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 1.1625rem;
   font-weight: 600;
   cursor: pointer;
   border: 1px solid var(--border-strong);
@@ -743,7 +771,7 @@ button[type="submit"].loading::after {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 1rem;
-  font-size: 0.78rem;
+  font-size: 1.0925rem;
   overflow-x: auto;
   max-height: 20rem;
 }
@@ -755,7 +783,7 @@ button[type="submit"].loading::after {
    --------------------------------------------------------------------------- */
 
 .onboarding-step .pairing-heading {
-  font-size: 1rem;
+  font-size: 1.3125rem;
   font-weight: 600;
   margin-top: 1.6rem;
 }
@@ -785,7 +813,7 @@ button[type="submit"].loading::after {
 
 .pairing-code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 1.5rem;
+  font-size: 1.8125rem;
   font-weight: 700;
   letter-spacing: 0.12em;
   user-select: all;
@@ -793,7 +821,7 @@ button[type="submit"].loading::after {
 
 .pairing-block button {
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 1.1625rem;
   font-weight: 600;
   cursor: pointer;
   border: 1px solid var(--border-strong);
@@ -805,7 +833,7 @@ button[type="submit"].loading::after {
 
 .pairing-block p {
   margin-top: 0.6rem;
-  font-size: 0.85rem;
+  font-size: 1.1625rem;
 }
 
 .pairing-status {
@@ -813,7 +841,7 @@ button[type="submit"].loading::after {
   align-items: center;
   gap: 0.5rem;
   margin-top: 1rem;
-  font-size: 0.9rem;
+  font-size: 1.2125rem;
   font-weight: 600;
 }
 
@@ -842,7 +870,7 @@ button[type="submit"].loading::after {
 }
 
 .dash-section .section-heading h2 {
-  font-size: 1.1rem;
+  font-size: 1.4125rem;
   letter-spacing: -0.02em;
   margin: 0;
 }
@@ -856,7 +884,7 @@ button[type="submit"].loading::after {
 }
 
 .dash-section .panel h3 {
-  font-size: 0.9rem;
+  font-size: 1.2125rem;
   font-weight: 600;
   letter-spacing: -0.01em;
   margin: 0 0 0.7rem;
@@ -870,7 +898,7 @@ button[type="submit"].loading::after {
 }
 
 .section-note {
-  font-size: 0.85rem;
+  font-size: 1.1625rem;
   color: var(--muted);
   border: 1px dashed var(--border-strong);
   border-radius: 6px;
@@ -882,7 +910,7 @@ button[type="submit"].loading::after {
 
 #create-team-toggle {
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 1.1625rem;
   cursor: pointer;
   border: 1px solid var(--border-strong);
   background: var(--bg-raised);
@@ -919,6 +947,49 @@ button[type="submit"].loading::after {
   display: none;
 }
 
+/* Redeem invite */
+
+.invite-shell {
+  display: flex;
+  justify-content: center;
+  padding: 2.5rem 0 4rem;
+}
+
+.invite-card {
+  width: 100%;
+  max-width: 34rem;
+  border: 1px solid var(--border);
+  background: var(--bg-alt);
+  border-radius: 10px;
+  padding: 2.5rem 2.25rem;
+}
+
+.invite-card h1 {
+  font-size: 2.0625rem;
+  letter-spacing: -0.02em;
+  margin: 0 0 0.5rem;
+}
+
+.invite-card .muted {
+  margin: 0;
+  font-size: 1.2125rem;
+}
+
+.invite-card .stack {
+  margin-top: 1.75rem;
+  gap: 1.1rem;
+}
+
+.invite-card input[type="text"] {
+  font-family: var(--font-mono);
+  font-size: 1.3125rem;
+  padding: 0.75rem 0.85rem;
+}
+
+.invite-card button[type="submit"] {
+  padding: 0.75rem 1rem;
+}
+
 /* Projects */
 
 .project-grid {
@@ -940,7 +1011,7 @@ button[type="submit"].loading::after {
 }
 
 .project-card h3 {
-  font-size: 0.95rem;
+  font-size: 1.2625rem;
   margin: 0;
   letter-spacing: -0.01em;
   overflow-wrap: anywhere;
@@ -948,7 +1019,7 @@ button[type="submit"].loading::after {
 
 .project-card .project-remote {
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: 1.0625rem;
   color: var(--fg-dim);
   margin: 0.3rem 0 0.9rem;
   overflow-wrap: anywhere;
@@ -968,7 +1039,7 @@ button[type="submit"].loading::after {
 }
 
 .project-meta dt {
-  font-size: 0.7rem;
+  font-size: 1.0125rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);
@@ -976,7 +1047,7 @@ button[type="submit"].loading::after {
 
 .project-meta dd {
   margin: 0;
-  font-size: 0.95rem;
+  font-size: 1.2625rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -996,7 +1067,7 @@ button[type="submit"].loading::after {
   grid-template-columns: 4.5rem 1fr 6rem;
   align-items: center;
   gap: 0.75rem;
-  font-size: 0.82rem;
+  font-size: 1.1325rem;
 }
 
 .risk-label {
@@ -1065,14 +1136,14 @@ button[type="submit"].loading::after {
 }
 
 .tour-popover h3 {
-  font-size: 1rem;
+  font-size: 1.3125rem;
   letter-spacing: -0.01em;
   margin: 0.2rem 0 0.4rem;
 }
 
 .tour-popover .tour-step-count {
   margin: 0;
-  font-size: 0.7rem;
+  font-size: 1.0125rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
@@ -1080,7 +1151,7 @@ button[type="submit"].loading::after {
 
 .tour-popover .tour-body {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: 1.1625rem;
   color: var(--fg-dim);
 }
 
@@ -1097,7 +1168,7 @@ button[type="submit"].loading::after {
 
 .tour-actions button {
   font: inherit;
-  font-size: 0.82rem;
+  font-size: 1.1325rem;
   cursor: pointer;
   border: 1px solid var(--border-strong);
   background: transparent;

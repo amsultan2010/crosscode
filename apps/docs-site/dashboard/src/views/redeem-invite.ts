@@ -3,18 +3,20 @@ import { setStoredWorkspaceId } from "../lib/workspace.js";
 
 export function renderRedeemInvite(container: HTMLElement, session: SessionContext, onJoined: (workspaceId: string) => void): void {
   container.innerHTML = `
-    <div class="auth-card">
-      <h1>Redeem an invite</h1>
-      <p class="muted">Paste the invite code a workspace owner shared with you.</p>
-      <form id="invite-form" class="stack">
-        <label>
-          Invite code
-          <input type="text" name="code" required autocomplete="off" spellcheck="false" />
-        </label>
-        <button type="submit">Join workspace</button>
-        <p id="invite-status" class="muted" hidden></p>
-        <p id="invite-error" class="error" hidden></p>
-      </form>
+    <div class="invite-shell">
+      <div class="invite-card">
+        <h1>Redeem an invite</h1>
+        <p class="muted">Paste the invite code a workspace owner shared with you. Joining a team switches your dashboard to it.</p>
+        <form id="invite-form" class="stack">
+          <label>
+            Invite code
+            <input type="text" name="code" required autocomplete="off" spellcheck="false" placeholder="e.g. 4f2c-9ab1-77de" />
+          </label>
+          <button type="submit">Join workspace</button>
+          <p id="invite-status" class="muted" hidden></p>
+          <p id="invite-error" class="error" hidden></p>
+        </form>
+      </div>
     </div>
   `;
 
