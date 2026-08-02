@@ -54,6 +54,84 @@ describe("local daemon coordination", () => {
     expect(proposal.classification).toBe("stale-base");
   });
 
+  it("never auto-applies a critical-risk proposal at autonomy tier 2, regardless of config", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo();
+    const service = new CoordinationService();
+    service.setAutonomyTier("w", 2);
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+    await mkdir(join(senderRoot, "auth"), { recursive: true });
+    await writeFile(join(senderRoot, "auth", "config.txt"), "value\n");
+    const operation = await sender.capture("add secret", service);
+    await receiver.sync(service);
+    expect(receiver.operations.get(operation.id)?.status).toBe("proposed");
+    expect(await readFile(join(receiverRoot, "auth", "config.txt"), "utf8").catch(() => undefined)).toBeUndefined();
+  });
+
+  it("autonomy tier 0 (the default) leaves auto-apply behavior byte-for-byte unchanged when no local policy is configured", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo();
+    const service = new CoordinationService();
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+    await writeFile(join(senderRoot, "b.txt"), "new\n");
+    const operation = await sender.capture("add file", service);
+    await receiver.sync(service);
+    expect(receiver.operations.get(operation.id)?.status).toBe("proposed");
+    expect(await readFile(join(receiverRoot, "b.txt"), "utf8").catch(() => undefined)).toBeUndefined();
+  });
+
+  it("at autonomy tier 1, auto-applies only an independent, validated, unclaimed proposal; anything else stays pending", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo();
+    await mkdir(join(receiverRoot, ".crosscode"), { recursive: true });
+    await writeFile(join(receiverRoot, ".crosscode", "config.yaml"), 'version: 1\nvalidation:\n  profiles:\n    fast:\n      commands: ["true"]\n');
+    await exec("git", ["-C", receiverRoot, "add", ".crosscode/config.yaml"]); await exec("git", ["-C", receiverRoot, "commit", "-qm", "config"]);
+    const service = new CoordinationService();
+    service.setAutonomyTier("w", 1);
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+
+    // Eligible: independent, validation passing against the current tree, no claim.
+    await writeFile(join(senderRoot, "clean.txt"), "clean\n");
+    const cleanOp = await sender.capture("add clean file", service);
+    await receiver.validateProfile("fast");
+    await receiver.sync(service);
+    expect(receiver.operations.get(cleanOp.id)?.status).toBe("accepted");
+    expect(await readFile(join(receiverRoot, "clean.txt"), "utf8")).toBe("clean\n");
+
+    // Not eligible: independent and unclaimed, but no passing validation against the current tree.
+    await writeFile(join(senderRoot, "unvalidated.txt"), "unvalidated\n");
+    const unvalidatedOp = await sender.capture("add unvalidated file", service);
+    await receiver.sync(service);
+    expect(receiver.operations.get(unvalidatedOp.id)?.status).toBe("proposed");
+
+    // Not eligible: independent and validated, but the path is actively claimed by another actor.
+    receiver.claims.set("claim-1", { id: "claim-1", taskId: "t1", ownerId: "someone-else", kind: "path", target: "claimed.txt", mode: "exclusive-preferred", createdAt: new Date().toISOString() });
+    await writeFile(join(senderRoot, "claimed.txt"), "claimed\n");
+    const claimedOp = await sender.capture("add claimed file", service);
+    await receiver.validateProfile("fast");
+    await receiver.sync(service);
+    expect(receiver.operations.get(claimedOp.id)?.status).toBe("proposed");
+  });
+
+  it("picks up an autonomy tier change on the next sync cycle without restarting the daemon", async () => {
+    const senderRoot = await repo(); const receiverRoot = await repo();
+    const service = new CoordinationService();
+    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
+
+    await writeFile(join(senderRoot, "first.txt"), "first\n");
+    const first = await sender.capture("add first", service);
+    await receiver.sync(service);
+    expect(receiver.operations.get(first.id)?.status).toBe("proposed");
+
+    service.setAutonomyTier("w", 2);
+    await writeFile(join(senderRoot, "second.txt"), "second\n");
+    const second = await sender.capture("add second", service);
+    await receiver.sync(service);
+    expect(receiver.operations.get(second.id)?.status).toBe("accepted");
+    expect(await readFile(join(receiverRoot, "second.txt"), "utf8")).toBe("second\n");
+  });
+
   it("refuses stale-base proposals without overwriting local work", async () => {
     const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
     const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" }); const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });

@@ -10,6 +10,7 @@ import {
   claimRequestSchema,
   handoffRequestSchema,
   publishRequestSchema,
+  setWorkspaceAutonomyRequestSchema,
   taskRequestSchema,
   validationRequestSchema
 } from "@crosscode/protocol";
@@ -49,7 +50,9 @@ export const TOOL_NAMES = [
   "list_proposal_artifacts",
   "accept_proposal",
   "reject_proposal",
-  "publish_branch"
+  "publish_branch",
+  "get_workspace_autonomy",
+  "set_workspace_autonomy"
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -74,7 +77,9 @@ export const toolInputSchemas: Record<ToolName, ZodTypeAny> = {
   list_proposal_artifacts: operationIdInputSchema,
   accept_proposal: acceptProposalInputSchema,
   reject_proposal: operationIdInputSchema,
-  publish_branch: publishBranchInputSchema
+  publish_branch: publishBranchInputSchema,
+  get_workspace_autonomy: emptyInputSchema,
+  set_workspace_autonomy: setWorkspaceAutonomyRequestSchema
 };
 
 export const toolDescriptions: Record<ToolName, string> = {
@@ -117,7 +122,11 @@ export const toolDescriptions: Record<ToolName, string> = {
   reject_proposal:
     "Reject a proposed operation, discarding it without applying it locally. Call after inspecting it with inspect_proposal/diff_proposal — this is the terminal counterpart to accept_proposal.",
   publish_branch:
-    "Publish accepted changes to a branch by running the named validation profile and pushing/committing the result; requires confirm: true since this is not easily reversible. Call request_validation first if you want a dry look at validation independent of publishing, and pass dryRun: true here to preview without publishing."
+    "Publish accepted changes to a branch by running the named validation profile and pushing/committing the result; requires confirm: true since this is not easily reversible. Call request_validation first if you want a dry look at validation independent of publishing, and pass dryRun: true here to preview without publishing.",
+  get_workspace_autonomy:
+    "Read this workspace's autonomy tier (0=always_ask, 1=auto_if_clean, 2=auto_always), which controls how eagerly the daemon auto-applies incoming proposals without an explicit accept_proposal call.",
+  set_workspace_autonomy:
+    "Set this workspace's autonomy tier (0=always_ask, 1=auto_if_clean, 2=auto_always); owner/admin only, and tier >= 1 requires semantic review (externalAiReview) already enabled for the workspace. Auto-apply always still runs through the same approval gates as accept_proposal -- this never bypasses them."
 };
 
 export interface ToolCatalogEntry {

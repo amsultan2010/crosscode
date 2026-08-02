@@ -160,7 +160,7 @@ export async function runDaemonProcess(
       throw new Error("No replica identity configured; run `crosscode -- login` to enable self-service replica registration, or `crosscode init` for a local-only identity");
     }
   } catch (error) { await removeOwnedLock(lock); throw error; }
-  const daemonOptions = { workspaceId: config.workspaceId, replicaId: config.replicaId!, actorId: config.actorId, reviewer: new AgentDelegatedReviewer() };
+  const daemonOptions = { workspaceId: config.workspaceId, replicaId: config.replicaId!, actorId: config.actorId, reviewer: new AgentDelegatedReviewer(), transport: serviceClient };
   try { running = await startDaemon(directory, daemonOptions); }
   catch (error) { await removeOwnedLock(lock); throw error; }
   let watcher: FSWatcher | undefined;

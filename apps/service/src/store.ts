@@ -57,6 +57,8 @@ export class PgStore {
       await client.query(supabaseAuthSql);
       const rlsHardeningSql = await readFile(new URL("../migrations/005_rls_hardening.sql", import.meta.url), "utf8");
       await client.query(rlsHardeningSql);
+      const autonomyPolicySql = await readFile(new URL("../migrations/007_autonomy_policy.sql", import.meta.url), "utf8");
+      await client.query(autonomyPolicySql);
     } finally {
       await client.query("SELECT pg_advisory_unlock(hashtext('crosscode_migrate'))");
       client.release();
@@ -223,6 +225,30 @@ export class PgStore {
     );
     if (!result.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
     return Number(result.rows[0].next_sequence);
+  }
+
+  async getWorkspaceAutonomyTier(workspaceId: string): Promise<0 | 1 | 2> {
+    const result = await this.pool.query<{ autonomy_tier: number }>(
+      "SELECT autonomy_tier FROM workspaces WHERE id = $1",
+      [workspaceId]
+    );
+    if (!result.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
+    return result.rows[0].autonomy_tier as 0 | 1 | 2;
+  }
+
+  /**
+   * Only the workspace owner may change the autonomy tier -- callers (http.ts) are
+   * expected to have already checked identity.role, this is a second gate at the
+   * data layer so the check can never be skipped by a new call site.
+   */
+  async setWorkspaceAutonomyTier(identity: Membership, tier: 0 | 1 | 2): Promise<0 | 1 | 2> {
+    if (identity.role !== "owner") throw new StoreUnauthorizedError("Only the workspace owner can change the autonomy tier");
+    const result = await this.pool.query<{ autonomy_tier: number }>(
+      "UPDATE workspaces SET autonomy_tier = $2 WHERE id = $1 RETURNING autonomy_tier",
+      [identity.workspaceId, tier]
+    );
+    if (!result.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
+    return result.rows[0].autonomy_tier as 0 | 1 | 2;
   }
 
   async listOperations(workspaceId: string, cursor: number, limit: number): Promise<{

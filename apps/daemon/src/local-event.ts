@@ -88,7 +88,7 @@ export const localEventSchema = z.discriminatedUnion("type", [
   event("transaction.accepted", z.union([storedOperationSchema, storedOperationWithRecoverySchema])),
   event("transaction.rejected", storedOperationSchema),
   event("transaction.safety_updated", storedOperationSchema),
-  event("transaction.auto_applied", z.object({ id: z.string(), autoApplyRisk: z.enum(["low", "medium", "high", "critical"]) }).strict()),
+  event("transaction.auto_applied", z.object({ id: z.string(), autoApplyRisk: z.enum(["low", "medium", "high", "critical"]).optional(), autonomyTier: z.union([z.literal(0), z.literal(1), z.literal(2)]) }).strict()),
   event("transaction.conflicted", z.union([storedOperationSchema, storedOperationWithRecoverySchema, z.object({ id: z.string(), checkpoint: z.string(), recovery: z.string() }).strict()])),
   event("semantic_review.requested", z.object({
     id: z.string(), operationId: z.string(), path: z.string(), providerId: z.string(), classification: z.string(),

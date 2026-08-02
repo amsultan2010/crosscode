@@ -168,6 +168,20 @@ export const registerReplicaResponseSchema = z.object({
 }).strict();
 export type RegisterReplicaResponse = z.infer<typeof registerReplicaResponseSchema>;
 
+// 0=always_ask (today's default), 1=auto_if_clean, 2=auto_always -- see BUILD_INSTRUCTIONS.md Phase 9.
+export const workspaceAutonomyTierSchema = z.union([z.literal(0), z.literal(1), z.literal(2)]);
+export type WorkspaceAutonomyTier = z.infer<typeof workspaceAutonomyTierSchema>;
+
+export const workspaceAutonomyResponseSchema = z.object({
+  tier: workspaceAutonomyTierSchema
+}).strict();
+export type WorkspaceAutonomyResponse = z.infer<typeof workspaceAutonomyResponseSchema>;
+
+export const setWorkspaceAutonomyRequestSchema = z.object({
+  tier: workspaceAutonomyTierSchema
+}).strict();
+export type SetWorkspaceAutonomyRequest = z.infer<typeof setWorkspaceAutonomyRequestSchema>;
+
 export const serviceIngestRequestSchema = z.object({
   event: transactionCreatedEventSchema
 }).strict();

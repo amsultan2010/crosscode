@@ -45,6 +45,8 @@ export class DaemonClient {
 
   status(): Promise<Status> { return this.request("GET", "/v1/status"); }
   workspace(): Promise<{ root: string; workspaceId: string; replicaId: string; actorId: string }> { return this.request("GET", "/v1/workspace"); }
+  workspaceAutonomy(): Promise<{ tier: 0 | 1 | 2 }> { return this.request("GET", "/v1/workspace/autonomy"); }
+  setWorkspaceAutonomy(tier: 0 | 1 | 2): Promise<{ tier: 0 | 1 | 2 }> { return this.request("PUT", "/v1/workspace/autonomy", { tier }); }
   tasks(): Promise<Task[]> { return this.request("GET", "/v1/tasks"); }
   createTask(input: { title: string; intent?: string; paths?: string[]; status?: Task["status"] }): Promise<Task> { return this.request("POST", "/v1/tasks", input); }
   createClaim(input: { taskId: string; kind: Claim["kind"]; target: string; mode: Claim["mode"]; expiresAt?: string }): Promise<Claim> { return this.request("POST", "/v1/claims", input); }
@@ -74,7 +76,7 @@ export class DaemonClient {
   respondHandoff(id: string, decision: "accepted" | "declined"): Promise<Handoff> { return this.request("POST", `/v1/handoffs/${encodeURIComponent(id)}/respond`, { decision }); }
   publishIntent(input: { text: string; taskId?: string }): Promise<Intent> { return this.request("POST", "/v1/intents", input); }
 
-  private async request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+  private async request<T>(method: "GET" | "POST" | "PUT", path: string, body?: unknown): Promise<T> {
     let response: Response;
     try {
       response = await fetch(`http://127.0.0.1:${this.connection.port}${path}`, {
