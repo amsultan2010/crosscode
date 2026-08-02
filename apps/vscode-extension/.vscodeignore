@@ -1,7 +1,0 @@
-src/**
-test/**
-dist/test/**
-esbuild.mjs
-dist/**/*.map
-.gitignore
-tsconfig.json
