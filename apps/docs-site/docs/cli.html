@@ -65,46 +65,107 @@
       <p class="subtitle">
         The <code>crosscode</code> CLI is minimal and scriptable. Every command
         supports a stable <code>--json</code> output mode for agents and scripts;
-        default human output is concise. From a checkout, invoke it with
-        <code>pnpm crosscode -- &lt;command&gt;</code>.
+        default human output is concise. From a cloned checkout, invoke it with
+        <code>pnpm crosscode &lt;command&gt;</code>.
       </p>
 
       <div class="callout">
-        This page lists the CLI command surface as specified in
-        <code>BUILD_INSTRUCTIONS.md</code> section 15. See
-        <a href="/docs/limitations.html">current limitations</a> for what is and
-        isn't finished, and the <a href="/docs/install.html">install &amp; quickstart
-        guide</a> for commands in context.
+        <strong>Agents:</strong> don't parse this page or <code>--help</code>. Run
+        <code>crosscode commands --json</code> for the entire command tree &mdash;
+        every command, argument, option, and description &mdash; as machine-readable
+        JSON. See the <a href="/docs/install.html">install &amp; quickstart guide</a>
+        for these commands in context.
       </div>
 
+      <h2>Getting set up</h2>
       <table>
         <thead>
           <tr><th>Command</th><th>Purpose</th></tr>
         </thead>
         <tbody>
-          <tr><td><code>crosscode init</code></td><td>Initialize local Crosscode state for this checkout.</td></tr>
-          <tr><td><code>crosscode -- login --email &lt;email&gt; --password &lt;password&gt;</code></td><td>Sign in against Supabase Auth and store the session (access token in memory, refresh token in the OS keychain when available). Self-registers this replica automatically on first daemon start.</td></tr>
-          <tr><td><code>crosscode -- logout</code></td><td>Clear the stored Supabase session for this checkout.</td></tr>
-          <tr><td><code>crosscode join --workspace &lt;workspaceId&gt;</code></td><td>Explicitly select a workspace for an already-logged-in session.</td></tr>
-          <tr><td><code>crosscode status --json</code></td><td>Show repository, daemon, outbox, cursor, and service health.</td></tr>
-          <tr><td><code>crosscode task create "Implement checkout API" --path server/routes/checkout</code></td><td>Declare a task and the paths it covers.</td></tr>
-          <tr><td><code>crosscode claim path src/checkout --task &lt;id&gt;</code></td><td>Advertise an advisory claim on a path for a task.</td></tr>
-          <tr><td><code>crosscode intent "Add paymentStatus to CheckoutResponse" --task &lt;id&gt;</code></td><td>Publish a plain-language intent for a task.</td></tr>
-          <tr><td><code>crosscode proposals list</code></td><td>List remote operations proposed to this replica.</td></tr>
-          <tr><td><code>crosscode accept &lt;operation-id&gt;</code></td><td>Materialize an accepted proposal after re-checking the local base and creating a checkpoint.</td></tr>
-          <tr><td><code>crosscode reject &lt;operation-id&gt; --reason "..."</code></td><td>Reject a proposal; no local files are changed.</td></tr>
-          <tr><td><code>crosscode checkpoint [--message "..."]</code></td><td>Create a hidden Git checkpoint without moving HEAD or the index.</td></tr>
-          <tr><td><code>crosscode validate [--profile affected]</code></td><td>Run commands from a committed <code>.crosscode/config.yaml</code> validation profile.</td></tr>
-          <tr><td><code>crosscode publish --branch &lt;branch&gt;</code></td><td>Create ordinary commits on a branch from accepted, validated state. Requires confirmation unless run noninteractively with an explicit <code>--yes</code> flag and workspace policy allows it. Never force-pushes.</td></tr>
-          <tr><td><code>crosscode run -- &lt;tool-and-arguments&gt;</code></td><td>Run an arbitrary local tool/command under the current checkout.</td></tr>
+          <tr><td><code>crosscode init</code></td><td>Initialize local Crosscode state for this checkout. Run this first; <code>signup</code> and <code>login</code> both need it.</td></tr>
+          <tr><td><code>crosscode signup --email &lt;email&gt; --password &lt;password&gt; --service &lt;url&gt;</code></td><td>Create an account, log in, and get a personal workspace in one step. Prompts for the credentials if you leave them off in a real terminal.</td></tr>
+          <tr><td><code>crosscode login --web &lt;site-url&gt;</code></td><td>Sign in through the browser; the CLI collects the session on a loopback callback. <code>--web</code> (or <code>CROSSCODE_WEB_URL</code>) is required, as there is no default site yet. Add <code>--no-browser</code> to print the URL instead.</td></tr>
+          <tr><td><code>crosscode login --email &lt;email&gt; --password &lt;password&gt;</code></td><td>The headless sign-in, for agents and CI. No browser, no TTY, no <code>--web</code>. Tokens are never printed.</td></tr>
+          <tr><td><code>crosscode logout</code></td><td>Clear the stored Supabase session for this checkout.</td></tr>
+          <tr><td><code>crosscode join --workspace &lt;id&gt; | --invite &lt;code&gt; | --pair &lt;code&gt;</code></td><td>Join someone else's workspace. <code>--pair</code> works before any login.</td></tr>
+          <tr><td><code>crosscode status</code></td><td>Show repository, daemon, outbox, cursor, and service health.</td></tr>
         </tbody>
       </table>
 
-      <h2>JSON output</h2>
+      <h2>Declaring what you're working on</h2>
+      <table>
+        <thead>
+          <tr><th>Command</th><th>Purpose</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>crosscode task create "Implement checkout API" --path server/routes/checkout</code></td><td>Declare a task and the paths it covers, so others can see it.</td></tr>
+          <tr><td><code>crosscode claim path src/checkout --task &lt;id&gt;</code></td><td>Advertise an advisory claim on a path for a task.</td></tr>
+          <tr><td><code>crosscode intent "Add paymentStatus to CheckoutResponse" --task &lt;id&gt;</code></td><td>Publish a plain-language intent for a task.</td></tr>
+          <tr><td><code>crosscode handoff request &lt;operation-id&gt; --note "..."</code></td><td>Ask someone else to take over reviewing an operation you produced.</td></tr>
+          <tr><td><code>crosscode handoff respond &lt;id&gt; --decision accepted|declined</code></td><td>Answer a handoff request.</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Reviewing incoming work</h2>
+      <table>
+        <thead>
+          <tr><th>Command</th><th>Purpose</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>crosscode proposals list</code></td><td>List remote operations awaiting review in this checkout.</td></tr>
+          <tr><td><code>crosscode proposals inspect &lt;id&gt;</code></td><td>Show a proposal and a readable analysis of what it would do.</td></tr>
+          <tr><td><code>crosscode proposals diff &lt;id&gt;</code></td><td>Show the per-path diff: base, local, and proposed content, plus classification and risk.</td></tr>
+          <tr><td><code>crosscode proposals artifacts &lt;id&gt;</code></td><td>Show conflict artifacts recorded for a proposal.</td></tr>
+          <tr><td><code>crosscode accept &lt;operation-id&gt;</code></td><td>Apply a proposal, after re-checking the local base and creating a checkpoint.</td></tr>
+          <tr><td><code>crosscode reject &lt;operation-id&gt;</code></td><td>Reject a proposal; no local files are changed.</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Safety net, validation, and publishing</h2>
+      <table>
+        <thead>
+          <tr><th>Command</th><th>Purpose</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>crosscode checkpoint [--message "..."]</code></td><td>Create a hidden Git checkpoint without moving <code>HEAD</code> or the index.</td></tr>
+          <tr><td><code>crosscode checkpoint inspect &lt;ref&gt;</code></td><td>Show what a checkpoint contains.</td></tr>
+          <tr><td><code>crosscode checkpoint restore &lt;ref&gt; &lt;path&gt;</code></td><td>Restore a single path from a checkpoint.</td></tr>
+          <tr><td><code>crosscode validate [--profile fast]</code></td><td>Run commands from a committed <code>.crosscode/config.yaml</code> validation profile. Arbitrary commands are never accepted as arguments.</td></tr>
+          <tr><td><code>crosscode publish --branch &lt;branch&gt; --profile &lt;name&gt; [--dry-run]</code></td><td>Create ordinary commits on a branch from accepted, validated state. Both flags are required. Prompts for confirmation unless you pass <code>--yes</code>. Never force-pushes.</td></tr>
+          <tr><td><code>crosscode run -- &lt;tool-and-arguments&gt;</code></td><td>Run a local command with the daemon context available. Propagates that command's own exit code.</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Workspace settings</h2>
+      <table>
+        <thead>
+          <tr><th>Command</th><th>Purpose</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>crosscode workspace autonomy get</code></td><td>Show how much this workspace applies automatically.</td></tr>
+          <tr><td><code>crosscode workspace autonomy set &lt;0|1|2&gt;</code></td><td>Set it: <code>0</code> always ask, <code>1</code> auto-apply only when clean, <code>2</code> auto-apply always. Owner/admin only.</td></tr>
+          <tr><td><code>crosscode billing status --workspace &lt;id&gt;</code></td><td>Read the workspace's plan and usage counters. Reads the service database directly, so it needs <code>DATABASE_URL</code> set. Nothing is charged today &mdash; see <a href="/docs/limitations.html">limitations</a>.</td></tr>
+          <tr><td><code>crosscode commands</code></td><td>Print the full command tree as machine-readable JSON.</td></tr>
+        </tbody>
+      </table>
+
+      <h2>JSON output and exit codes</h2>
       <p>
-        Every command accepts a <code>--json</code> flag. Scripts and agents
-        should always pass it; default (non-JSON) output is intended for humans
+        Every command accepts a position-independent <code>--json</code> flag.
+        Scripts and agents should always pass it: stdout becomes exactly one line
+        of compact JSON, <code>{"value":…}</code> on success and
+        <code>{"error":{"code":…,"message":…,"hint":…}}</code> on failure, with
+        nothing else written to stdout. Default (non-JSON) output is for humans
         reading a terminal and is not a stable interface.
+      </p>
+      <p>
+        Exit code <code>0</code> on success and <code>1</code> on any error, with
+        the failure described by <code>error.code</code>. The one exception is
+        <code>crosscode run</code>, which passes the wrapped command's exit code
+        through unchanged. The error codes worth branching on are listed in the
+        repository's
+        <a href="https://github.com/amsultan2010/crosscode/blob/main/README.md#for-coding-agents">README</a>.
       </p>
 
       <div class="docs-next">

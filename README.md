@@ -3,25 +3,49 @@
 [![CI](https://github.com/amsultan2010/crosscode/actions/workflows/ci.yml/badge.svg)](https://github.com/amsultan2010/crosscode/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-Crosscode is a local-first coordination layer for developers and coding agents working in separate checkouts of the same Git repository. It watches ordinary filesystem and Git activity, records stable edits as durable transactions, exchanges those transactions through an authenticated coordination service, and presents remote work as proposals. A remote proposal is never written into a checkout until that replica explicitly accepts it.
+**Crosscode lets several people and coding agents work on the same repository at the same time without overwriting each other.**
 
-Git remains the durable history and publishing layer. Crosscode does not replace your editor, agent, Git host, branches, worktrees, staging area, or normal commits.
+Each person (or agent) works in their own normal Git checkout. A small background program — the daemon — watches that checkout and notices whenever an edit has settled. It sends a record of that edit to a shared coordination service, which passes it on to everyone else's checkout.
 
-Crosscode is a CLI-first product. Everything you do day to day — signing in, joining a workspace, claiming work, reviewing proposals, accepting, publishing — is a `crosscode` command or an MCP tool call against your local daemon. The website is a landing page, sign-up/sign-in, and these docs; there is no web dashboard.
+The important part: those incoming edits are **never written to your files automatically**. They show up as *proposals*. You look at the diff and decide to accept or reject it, exactly like reviewing a pull request, except it happens in seconds instead of after a push.
+
+Everything stays ordinary Git. Crosscode doesn't replace your editor, your agent, your Git host, your branches, your staging area, or your commits — and if you turn it off, your repository is unchanged.
+
+**Who it's for.** Anyone running more than one coding agent against one codebase, or a small team whose agents keep colliding on the same files. Human-only teams can use it too, but the review-before-it-lands workflow pays off most once agents are in the mix.
+
+**There is no web app.** Everything you do day to day — signing in, claiming work, reviewing proposals, accepting, publishing — is a `crosscode` command or an MCP tool call your agent makes against your local daemon. The website is only a landing page, sign-up/sign-in, and these docs.
+
+### What you need before you start
+
+Crosscode is not a hosted service yet. Someone on your team has to run the coordination service (a small Node process backed by a [Supabase](https://supabase.com) project) — see [Set up Supabase and run the coordination service](#set-up-supabase-and-run-the-coordination-service). Once that exists, everyone else just points their checkout at it.
 
 ## Quickstart
 
-1. **Create an account** on the Crosscode site (sign-up page), or from a terminal with `crosscode signup --email <e> --password <p>`.
+This assumes the coordination service is already running and you know its URL (`http://127.0.0.1:8788` if you started it locally).
 
-2. **Log in from your checkout.**
+1. **Set up the checkout.** `init` writes Crosscode's local state for this worktree, and has to come first.
 
    ```bash
-   crosscode login
+   crosscode init --json
    ```
 
-   With a TTY and no flags, this opens your browser, you complete the sign-in on the site, and the CLI receives the session on a loopback callback. Tokens are never printed. Add `--no-browser` to print the URL instead of opening it, or `--web <url>` to point at a different site.
+2. **Get an account.** If you don't have one, sign up straight from the terminal:
 
-   For agents, CI, and anything headless, use the non-interactive path — no browser, no TTY:
+   ```bash
+   crosscode signup --email <email> --password <password> --service <service-url> --json
+   ```
+
+   This creates the account, logs you in, and gives you a personal workspace, so there is nothing else to join. You can also sign up on the website if one is deployed, then log in below.
+
+3. **Or log in, if the account already exists.**
+
+   ```bash
+   crosscode login --web <site-url> --service <service-url>
+   ```
+
+   In a real terminal this opens the sign-in page in your browser and the CLI picks up the session on a loopback callback; tokens are never printed. `--web` (or the `CROSSCODE_WEB_URL` environment variable) is **required** — there is no default website URL yet, so bare `crosscode login` fails with `WEB_URL_REQUIRED`. Add `--no-browser` to print the URL instead of opening it.
+
+   Agents, CI, and anything without a browser should use the headless path instead, which needs no `--web` at all:
 
    ```bash
    crosscode login --email <email> --password <password> --json
@@ -30,16 +54,13 @@ Crosscode is a CLI-first product. Everything you do day to day — signing in, j
 
    Full contract: [BUILD_INSTRUCTIONS.md § Authentication](./BUILD_INSTRUCTIONS.md#authentication--crosscode-login) and [`docs/onboarding-contracts.md`](./docs/onboarding-contracts.md).
 
-3. **Initialize the checkout** and join a workspace.
+4. **Join someone else's workspace** — only if you're not using your own personal one.
 
    ```bash
-   crosscode init --json
    crosscode join --workspace <workspaceId> --json   # or --invite <code>, or --pair <code>
    ```
 
-   Signing up auto-provisions a personal workspace, so `--workspace` is only needed to join someone else's.
-
-4. **Do real work.** Start the daemon (`pnpm daemon`, or let the MCP server start it for you) and use the commands under [Normal workflow](#normal-workflow).
+5. **Do real work.** Start the daemon (`pnpm daemon`, or let the MCP server start it for you) and use the commands under [Normal workflow](#normal-workflow).
 
 ## Fastest way to try it with an agent
 
@@ -47,38 +68,52 @@ Paste the prompt in [`docs/install-prompt.md`](./docs/install-prompt.md) into an
 
 ## What works today
 
-- One durable daemon per Git checkout/worktree
-- Settled filesystem-edit capture with stable before/after hashes
-- SQLite append-only local events, projections, and an offline outbox
-- Hidden Git checkpoints without moving HEAD or changing the real index
-- Detection of branches, commits, resets, index changes, merges, rebases, cherry-picks, and reverts
-- Supabase-hosted PostgreSQL coordination-service operations and audit records
-- Supabase Auth sign-in — `crosscode login` (loopback browser flow) and `crosscode login --email/--password` (headless) — plus self-service replica registration, with short-lived authenticated access tokens
-- Idempotent operation upload with ordered, cursor-based reconnect downloads
-- Explicit proposal inspection, acceptance, and rejection
-- Crash-safe application that preserves newer developer edits
-- Trusted committed validation profiles
-- HTTP-backed CLI and a standards-compliant MCP server (`apps/mcp-server`) that auto-bootstraps the daemon on first connection
-- Live WebSocket presence, task, claim, handoff, and intent fan-out, with a durable poll fallback
-- `publish --branch` with a dry-run plan, publishing accepted work as ordinary commits to a real remote
-- Editor/agent integration exclusively through the MCP server — the supported product surface is the daemon + MCP server (plus the CLI as the daemon's local tool). Every editor, including VS Code and Cursor, connects via MCP (`docs/mcp-clients.md`)
-- CLI/MCP-first end to end: status, claiming, checkpoints, proposal review, accept/reject, and publish are all direct CLI/MCP operations against the local daemon. Nobody — human or agent — needs to open a website to do routine work; the site exists for sign-up/sign-in and documentation. See [`AGENTS.md`](./AGENTS.md)
-- A bounded, non-authoritative AI semantic reviewer for ambiguous conflicts, gated behind explicit workspace policy and human approval
-- Self-serve account creation (site sign-up or `crosscode signup`), self-serve workspace creation, and an auto-provisioned personal workspace on first authenticated request — no admin `service:provision` step required for the common case
-- Multi-tenant workspaces, memberships, invites, one-time pairing codes, presence, and billing endpoints, all reachable from the CLI and the coordination service's HTTP API. There is no web UI for any of them
-- A per-workspace autonomy tier (always-ask / auto-if-clean / auto-always) that extends the existing accept-gated auto-apply mechanism without weakening it
-- A billing data model and plan-gating helpers behind a `BillingProvider` interface, with a stub implementation pending a real Stripe account
+**Watching your checkout**
 
-See [BUILD_INSTRUCTIONS.md](./BUILD_INSTRUCTIONS.md) for the authoritative, milestone-by-milestone status of what's implemented and tested, including which of the above are v1/placeholder implementations with known gaps.
+- One daemon per Git checkout/worktree, which survives restarts
+- Captures an edit once it has settled, with before/after hashes so a stale edit can't be applied on top of a newer one
+- Records everything to a local append-only SQLite log, plus an outbox for work made while offline
+- Hidden Git checkpoints — snapshots that never move `HEAD`, touch your index, or show up in branch history
+- Notices branch switches, commits, resets, index changes, merges, rebases, cherry-picks, and reverts
+
+**Sharing work with everyone else**
+
+- A coordination service backed by Supabase-hosted PostgreSQL, with an immutable audit log
+- Uploads are idempotent, and after a disconnect the daemon resumes from exactly where it left off
+- Live presence, tasks, claims, handoffs, and intents over WebSocket, falling back to polling when the socket drops
+- Text and binary files (binaries travel base64-encoded and are restored byte-for-byte), and renames tracked as real renames rather than a delete plus an add
+
+**Reviewing before anything lands**
+
+- Inspect, diff, accept, or reject each incoming proposal explicitly
+- Applying a change is crash-safe and never clobbers a newer local edit
+- Validation profiles that only come from a committed `.crosscode/config.yaml`, so nobody can smuggle in an arbitrary command
+- An optional AI reviewer for genuinely ambiguous conflicts. It only ever advises — it can't decide anything on its own, it's off unless workspace policy turns it on, and its suggestions still need human approval
+- A per-workspace autonomy setting (always ask / auto-apply when clean / auto-apply always) for teams that want to loosen the always-ask default
+- `publish --branch` turns accepted work into ordinary commits on a real branch, with a dry-run plan first
+
+**Accounts and teams**
+
+- Sign up yourself, from the website or `crosscode signup` — no administrator step needed. Your first account gets a personal workspace automatically
+- Multiple workspaces, memberships, roles, invite codes, and one-time pairing codes, all from the CLI or the service's HTTP API
+- Sign-in goes through Supabase Auth, in a browser (`crosscode login`) or headlessly for agents and CI (`crosscode login --email/--password`), and this machine registers itself the first time the daemon starts
+
+**Connecting your tools**
+
+- A standards-compliant MCP server that starts the daemon for you on the first tool call
+- Any MCP-capable agent or editor works: Claude Code, Codex CLI, OpenCode, Cursor, VS Code, Gemini CLI. There's no editor plugin to install — see [`docs/mcp-clients.md`](./docs/mcp-clients.md)
+- Nobody, human or agent, has to open a website to do routine work. See [`AGENTS.md`](./AGENTS.md)
+
+See [BUILD_INSTRUCTIONS.md](./BUILD_INSTRUCTIONS.md) for the authoritative, milestone-by-milestone status of what's implemented and tested, including which of the above are v1/placeholder implementations with known gaps, and [Current limitations](#current-limitations) for the honest gaps.
 
 ## Safety model
 
 Crosscode follows four rules:
 
-1. The local filesystem remains authoritative for local work.
-2. Remote operations arrive as proposals and are never automatically applied.
-3. Every materialization checks the local base again and creates a checkpoint first.
-4. Excluded paths, common secret files, symlink traversal, malformed payloads, and unsupported binary transactions are rejected.
+1. **Your files win locally.** Whatever is on your disk is the truth for your own work.
+2. **Nothing from anyone else is written without your say-so.** Remote work arrives as a proposal; accepting it is an explicit act.
+3. **Every write is checked and backed up first.** Before applying a proposal, Crosscode re-checks that your files still match what the change was based on, and takes a checkpoint it can roll back to.
+4. **Some things are refused outright:** excluded paths, files that look like secrets, symlinks pointing outside the repository, and payloads that are malformed or whose content doesn't match its hash.
 
 If Crosscode is stopped or removed, the repository remains an ordinary Git repository. Checkpoints live under `refs/crosscode/checkpoints/...` and do not pollute normal branch history.
 
@@ -357,6 +392,7 @@ For the implementation plan and current milestone ledger, see [BUILD_INSTRUCTION
 - Renames are tracked as first-class rename changes (old path, new path, content); a rename conflicting with pending work on either path, moving into or out of a critical path, or whose source has diverged locally always requires approval.
 - Dependency-impact analysis for `.ts`/`.tsx` is a syntactic AST walk, not a type-checker-backed analysis (see BUILD_INSTRUCTIONS.md Milestone C for exact scope).
 - There is no hosted/managed coordination service yet — you run a Supabase project and the service yourself.
+- There is no production website deployed yet, so `crosscode login` has no default site to open. Pass `--web <url>` or set `CROSSCODE_WEB_URL`, or use the headless `--email`/`--password` path, which needs neither.
 - Workspace, membership, invite, and billing management is CLI- and API-only. There is no web UI for any of it, by decision — the website is landing, sign-up/sign-in, and docs.
 - Billing is a placeholder: the plan/usage data model and enforcement helpers exist, but there is no Stripe account behind them yet (see BUILD_INSTRUCTIONS.md Phase 10).
 - Deliberately not published to npm or any editor marketplace — the supported surface is the daemon + MCP server, run from a cloned checkout via `pnpm install` and `tsx` (see `docs/install-prompt.md`).

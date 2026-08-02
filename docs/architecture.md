@@ -119,8 +119,11 @@ publish) with no website required — is formalized in
 1. The local filesystem remains authoritative for local work.
 2. Remote operations arrive as proposals and are never automatically applied.
 3. Every materialization checks the local base again and creates a checkpoint first.
-4. Excluded paths, common secret files, symlink traversal, malformed payloads, and
-   unsupported binary transactions are rejected.
+4. Excluded paths, common secret files, symlink traversal, and payloads that are
+   malformed or whose content does not match its recorded hash are rejected.
+   (Binary files themselves are supported — they travel base64-encoded and are
+   materialized byte-exactly — but any *conflict* involving one requires human
+   approval, since hunk-level merge analysis is text-only.)
 
 If Crosscode is stopped or removed, the repository remains an ordinary Git
 repository — Git is the durable history and publishing layer, and checkpoints live

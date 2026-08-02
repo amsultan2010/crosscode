@@ -132,66 +132,91 @@ pnpm service</code></pre>
         production points <code>DATABASE_URL</code> at Supabase.
       </p>
 
-      <h2>Sign in and enroll a replica</h2>
+      <h2>Get an account and connect this checkout</h2>
       <p>
-        Create an account at <a href="/auth/signup.html">/auth/signup.html</a> on
-        this site, then sign in from your terminal. <code>crosscode login</code>
-        opens a browser page that hands the session back to the CLI.
-        Administrators can still
-        create or invite a Supabase Auth user by email with
-        <code>pnpm service:provision</code> (using
-        <code>SUPABASE_SERVICE_ROLE_KEY</code>).
+        Everything below happens in the repository you actually want to work on,
+        not in the Crosscode checkout. <code>init</code> has to come first &mdash;
+        it writes the local state that <code>signup</code> and <code>login</code>
+        both need.
       </p>
-      <pre><code>pnpm crosscode -- init --json
-pnpm crosscode -- login --service http://127.0.0.1:8788
-pnpm daemon</code></pre>
+      <pre><code>pnpm crosscode init --json</code></pre>
+
+      <p>
+        If you don't have an account yet, create one straight from the terminal.
+        This signs you up, logs you in, and provisions a personal workspace, so
+        there is nothing else to join:
+      </p>
+      <pre><code>pnpm crosscode signup --email alice@example.com --password &lt;password&gt; --service http://127.0.0.1:8788 --json</code></pre>
+
+      <p>
+        If the account already exists, sign in instead. In a real terminal,
+        <code>login</code> opens the sign-in page in your browser and the CLI
+        collects the session on a loopback callback:
+      </p>
+      <pre><code>pnpm crosscode login --web &lt;site-url&gt; --service http://127.0.0.1:8788</code></pre>
+
+      <div class="callout">
+        <code>--web</code> (or the <code>CROSSCODE_WEB_URL</code> environment
+        variable) is <strong>required</strong>. There is no production site
+        deployed yet, so there is no default to fall back on and bare
+        <code>crosscode login</code> fails with <code>WEB_URL_REQUIRED</code>.
+        Point it at your own deployment of this site, or at
+        <code>http://localhost:5173</code> while running <code>pnpm docs:dev</code>.
+      </div>
 
       <p>
         For a headless machine or an agent with no browser, pass credentials
-        directly instead:
+        directly instead. This path needs no <code>--web</code> at all:
       </p>
-      <pre><code>pnpm crosscode -- login --email alice@example.com --password &lt;password&gt; --service http://127.0.0.1:8788</code></pre>
+      <pre><code>pnpm crosscode login --email alice@example.com --password &lt;password&gt; --service http://127.0.0.1:8788 --json</code></pre>
 
       <p>
-        <code>login</code> authenticates directly against Supabase Auth and
+        Either way, the CLI authenticates directly against Supabase Auth and
         stores the resulting session (access token in memory, refresh token in
         the OS keychain when available, otherwise the local mode-<code>0600</code>
-        daemon config). A replica is then self-registered automatically the
-        first time the daemon starts with a logged-in session and no
-        <code>replicaId</code> yet &mdash; there is no separate enrollment step
-        or token to distribute. To join a specific workspace explicitly:
+        daemon config). Tokens are never printed. This machine then registers
+        itself automatically the first time the daemon starts with a logged-in
+        session and no <code>replicaId</code> yet &mdash; there is no separate
+        enrollment step or token to distribute.
       </p>
-      <pre><code>pnpm crosscode -- join --workspace &lt;workspaceId&gt;</code></pre>
+      <p>Start the daemon:</p>
+      <pre><code>pnpm daemon</code></pre>
+
+      <p>To join someone else's workspace instead of using your personal one:</p>
+      <pre><code>pnpm crosscode join --workspace &lt;workspaceId&gt;   # or --invite &lt;code&gt;, or --pair &lt;code&gt;</code></pre>
 
       <p>
-        To create a read-only service member, use <code>viewer</code> instead of
-        <code>member</code> when provisioning. Viewers may download operations
-        but cannot upload them.
+        Administrators of a self-hosted deployment can still create or invite a
+        Supabase Auth user by email with <code>pnpm service:provision</code>
+        (using <code>SUPABASE_SERVICE_ROLE_KEY</code>), but it is no longer
+        required for the common case. Use <code>viewer</code> instead of
+        <code>member</code> there to create a read-only member: viewers may
+        download operations but cannot upload them.
       </p>
 
       <h2>Normal workflow</h2>
       <p>With the daemon running:</p>
       <pre><code># Repository, daemon, outbox, cursor, and service health
-pnpm crosscode -- status --json
+pnpm crosscode status --json
 
 # Declare local work
-pnpm crosscode -- task create "Implement checkout API" --path server/routes/checkout --json
-pnpm crosscode -- claim path server/routes/checkout --task &lt;task-id&gt; --json
+pnpm crosscode task create "Implement checkout API" --path server/routes/checkout --json
+pnpm crosscode claim path server/routes/checkout --task &lt;task-id&gt; --json
 
 # Create or inspect safety checkpoints
-pnpm crosscode -- checkpoint --message "before integration" --json
-pnpm crosscode -- checkpoint inspect &lt;checkpoint-ref&gt; --json
+pnpm crosscode checkpoint --message "before integration" --json
+pnpm crosscode checkpoint inspect &lt;checkpoint-ref&gt; --json
 
 # Review remote work
-pnpm crosscode -- proposals list --json
-pnpm crosscode -- proposals inspect &lt;operation-id&gt; --json
+pnpm crosscode proposals list --json
+pnpm crosscode proposals inspect &lt;operation-id&gt; --json
 
 # Materialize only after an explicit decision
-pnpm crosscode -- accept &lt;operation-id&gt; --json
-pnpm crosscode -- reject &lt;operation-id&gt; --json
+pnpm crosscode accept &lt;operation-id&gt; --json
+pnpm crosscode reject &lt;operation-id&gt; --json
 
 # Run commands from a committed validation profile
-pnpm crosscode -- validate --profile fast --json</code></pre>
+pnpm crosscode validate --profile fast --json</code></pre>
 
       <p>
         The daemon continues capturing work while the service is unavailable.

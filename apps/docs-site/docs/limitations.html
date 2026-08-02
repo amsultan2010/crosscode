@@ -64,15 +64,26 @@
       <h1>Current limitations</h1>
       <p class="subtitle">Taken directly from this repository's README.md.</p>
 
+      <h2>Setup and hosting</h2>
       <ul>
-        <li>Production PostgreSQL role grants and retention policies still need environment-specific deployment hardening.</li>
-        <li>Supabase session refresh tokens are stored in the OS keychain when available (macOS Keychain, Linux Secret Service); otherwise, including on Windows, the protected Git-directory configuration file is used.</li>
-        <li>Binary files are shared base64-encoded with byte-exact materialization; any conflict involving a binary file requires human approval, since deterministic hunk/merge analysis is text-only.</li>
-        <li>Renames are tracked as first-class rename changes; a rename conflicting with pending work on either path, or touching a critical path under either name, always requires approval.</li>
-        <li>Dependency-impact analysis for <code>.ts</code>/<code>.tsx</code> is a syntactic AST walk, not a type-checker-backed analysis.</li>
-        <li>There is no hosted or managed coordination service yet. You run a Supabase project (or a plain Postgres instance for local-only testing) and the service yourself.</li>
-        <li>Workspace and member provisioning is still an administrator-side command (<code>service:provision</code>); there is no self-serve signup or billing yet.</li>
+        <li>There is no hosted or managed coordination service yet. Your team runs a Supabase project (or a plain Postgres instance for local-only testing) and the service itself. This is the main setup cost.</li>
+        <li>There is no production website deployed yet, so <code>crosscode login</code> has no default sign-in page to open and fails with <code>WEB_URL_REQUIRED</code>. Pass <code>--web &lt;url&gt;</code> or set <code>CROSSCODE_WEB_URL</code>, or use the headless <code>--email</code>/<code>--password</code> path, which needs neither.</li>
+        <li>Billing is a placeholder: the plan and usage data model and its enforcement helpers exist, but no payment provider is wired up, so nothing is charged or actually limited.</li>
+        <li>Workspace, membership, invite, and billing management is CLI- and API-only. There is no web UI for any of it, by decision — the website is landing, sign-up/sign-in, and docs.</li>
         <li>Deliberately not published to npm or any editor marketplace — the supported surface is the daemon + MCP server, run from a cloned checkout. Editors like VS Code and Cursor connect via MCP; there is no supported editor extension.</li>
+      </ul>
+
+      <h2>Operational hardening</h2>
+      <ul>
+        <li>Production PostgreSQL role grants still need environment-specific deployment hardening. Retention is opt-in and admin-only (<code>pnpm service:prune -- --older-than-days &lt;n&gt;</code>); tables that cursor reconnect depends on are deliberately never pruned.</li>
+        <li>Supabase refresh tokens go in the OS keychain when one is available (macOS Keychain, Linux Secret Service); otherwise, including on Windows, the mode-<code>0600</code> Git-directory config file is used instead.</li>
+      </ul>
+
+      <h2>Analysis depth</h2>
+      <ul>
+        <li>Binary files are shared base64-encoded and materialized byte-exactly, but any conflict involving one requires human approval, since hunk-level merge analysis is text-only.</li>
+        <li>Renames are tracked as first-class rename changes; a rename that conflicts with pending work on either path, moves into or out of a critical path, or whose source has diverged locally always requires approval.</li>
+        <li>Dependency-impact analysis for <code>.ts</code>/<code>.tsx</code> is a syntactic AST walk, not a type-checker-backed analysis.</li>
       </ul>
 
       <div class="callout">
