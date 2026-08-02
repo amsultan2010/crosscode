@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { openInBrowser } from "../../daemon/src/browser-login.js";
 import { readDaemonConfig, writeDaemonConfig } from "../../daemon/src/runtime.js";
 import { DaemonClient } from "../../daemon/src/client.js";
 
@@ -10,28 +10,17 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const tsxBin = join(repoRoot, "node_modules", ".bin", "tsx");
 const daemonMain = join(repoRoot, "apps", "daemon", "src", "main.ts");
 
-const LOGIN_HINT = "No Crosscode Supabase session found for this directory; run `crosscode -- login` first, then retry.";
+const LOGIN_HINT = "No Crosscode session found for this directory; run `crosscode login` first, then retry.";
 
-// Best-effort: opens the dashboard's sign-in/sign-up page in the user's default browser
-// the first time an MCP client bootstraps a directory with no prior local identity, so
-// installing gets them straight to an account instead of a silent local-only daemon.
-// Only fires when CROSSCODE_DASHBOARD_URL is explicitly set -- there is no fixed hosted
-// domain yet, and guessing one would point users at a page that may not exist.
-function openDashboardInBrowser(): void {
-  const dashboardUrl = process.env.CROSSCODE_DASHBOARD_URL;
-  if (!dashboardUrl) return;
-  try {
-    const os = platform();
-    const child = os === "darwin"
-      ? spawn("open", [dashboardUrl], { detached: true, stdio: "ignore" })
-      : os === "win32"
-        ? spawn("cmd", ["/c", "start", "", dashboardUrl], { detached: true, stdio: "ignore" })
-        : spawn("xdg-open", [dashboardUrl], { detached: true, stdio: "ignore" });
-    child.unref();
-  } catch {
-    // Headless environments (CI, containers, remote sessions) have nothing to open;
-    // this must never block or fail daemon bootstrap.
-  }
+// Best-effort: opens the website's sign-in/sign-up page in the user's default browser the
+// first time an MCP client bootstraps a directory with no prior local identity, so
+// installing gets them straight to an account instead of a silent local-only daemon. The
+// session itself is still established by `crosscode login`; this only saves a copy-paste.
+// Only fires when a website URL is explicitly configured -- there is no fixed hosted domain
+// yet, and guessing one would point users at a page that may not exist.
+function openSignInPage(): void {
+  const webUrl = process.env.CROSSCODE_WEB_URL ?? process.env.CROSSCODE_DASHBOARD_URL;
+  if (webUrl) openInBrowser(webUrl);
 }
 
 async function ensureIdentity(directory: string): Promise<void> {
@@ -45,7 +34,7 @@ async function ensureIdentity(directory: string): Promise<void> {
     if (serviceUrl && !existingConfig.service?.session) throw new Error(LOGIN_HINT);
     return;
   }
-  openDashboardInBrowser();
+  openSignInPage();
   if (serviceUrl) throw new Error(LOGIN_HINT);
   await writeDaemonConfig(directory, {
     workspaceId: randomUUID(),
@@ -76,7 +65,7 @@ async function waitForDaemon(directory: string, timeoutMs = 10_000): Promise<Dae
 /**
  * Connects to the local daemon for `directory`, transparently bootstrapping it on
  * first use: writes a local-only replica identity if none exists and no coordination
- * service is configured, or requires `crosscode -- login` first when one is, then spawns
+ * service is configured, or requires `crosscode login` first when one is, then spawns
  * the daemon as a detached background process and waits for it to come up. This is what
  * lets an MCP client just point at this server with zero manual `crosscode init`/daemon
  * steps for local-only use.

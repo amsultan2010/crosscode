@@ -11,6 +11,7 @@ import {
   claimPairingCodeRequestSchema, claimPairingCodeResponseSchema, daemonConfigSchema, daemonConnectionSchema,
   type DaemonConfig, type DaemonConnection, type PresenceUpdate
 } from "@crosscode/protocol";
+import { cliSignInUrl, openInBrowser, startLoginCallbackServer } from "./browser-login.js";
 import { startDaemon, type RunningDaemon } from "./index.js";
 import { CoordinationServiceClient, type CoordinationServiceIdentity } from "./service-client.js";
 import { LiveSyncClient } from "./ws-client.js";
@@ -61,9 +62,11 @@ export async function writeDaemonConfig(directory: string, config: DaemonConfig)
   await chmod(path, 0o600);
 }
 
-export async function login(directory: string, credentials: { email: string; password: string; serviceUrl?: string }): Promise<DaemonConfig> {
-  const config = await readDaemonConfig(directory).catch(() => undefined);
-  if (!config) throw new Error("Run `crosscode init` before `crosscode -- login`");
+export type LoggedIn = { config: DaemonConfig; user: { id: string; email: string } };
+
+/** Headless/agent login: credentials in, session persisted, nothing to open. */
+export async function login(directory: string, credentials: { email: string; password: string; serviceUrl?: string }): Promise<LoggedIn> {
+  const config = await loginTarget(directory);
   const serviceUrl = credentials.serviceUrl ?? config.service?.url;
   if (!serviceUrl) throw new Error("A service URL is required to log in; pass --service or run `crosscode join` first");
   const supabase = getSupabaseClient();
@@ -71,7 +74,49 @@ export async function login(directory: string, credentials: { email: string; pas
   if (error || !data.session) throw new Error(`Supabase sign-in failed: ${error?.message ?? "no session returned"}`);
   const updated: DaemonConfig = { ...config, service: { url: serviceUrl, session: toStoredSession(data.session) } };
   await writeDaemonConfig(directory, updated);
-  return updated;
+  return { config: updated, user: { id: data.session.user.id, email: data.session.user.email ?? credentials.email } };
+}
+
+/**
+ * Browser login: stands up the loopback callback server, hands the caller the URL to open,
+ * and persists whatever the website posts back. Supabase Auth runs entirely in the browser
+ * here, so no password ever reaches the terminal; login() above stays the headless path.
+ */
+export async function browserLogin(
+  directory: string,
+  options: { webUrl: string; serviceUrl?: string; openBrowser?: boolean; timeoutMs?: number; onUrl?: (url: string) => void }
+): Promise<LoggedIn> {
+  const config = await loginTarget(directory);
+  const serviceUrl = options.serviceUrl ?? config.service?.url;
+  if (!serviceUrl) throw new Error("A service URL is required to log in; pass --service or run `crosscode join` first");
+  const server = await startLoginCallbackServer({ timeoutMs: options.timeoutMs });
+  try {
+    const url = cliSignInUrl(options.webUrl, server.port, server.state);
+    options.onUrl?.(url);
+    if (options.openBrowser ?? true) openInBrowser(url);
+    const callback = await server.session;
+    const updated: DaemonConfig = {
+      ...config,
+      service: {
+        url: serviceUrl,
+        session: {
+          accessToken: callback.access_token,
+          refreshToken: callback.refresh_token,
+          expiresAt: new Date(callback.expires_at * 1_000).toISOString()
+        }
+      }
+    };
+    await writeDaemonConfig(directory, updated);
+    return { config: updated, user: callback.user };
+  } finally {
+    await server.close();
+  }
+}
+
+async function loginTarget(directory: string): Promise<DaemonConfig> {
+  const config = await readDaemonConfig(directory).catch(() => undefined);
+  if (!config) throw new Error("Run `crosscode init` before `crosscode login`");
+  return config;
 }
 
 // Self-serve counterpart to login(): creates the Supabase Auth user via the anon key
@@ -151,7 +196,7 @@ export async function redeemInvite(directory: string, code: string): Promise<Dae
 }
 
 /**
- * Redeems a one-time pairing code minted by the dashboard (Contract A). Unauthenticated
+ * Redeems a one-time pairing code minted by the service (Contract A). Unauthenticated
  * on purpose -- the code is the credential -- and what comes back is a workspace-scoped
  * `ccw_` token, never a user session, so this path never puts credentials that can act as
  * the user into a terminal. Works without a prior `crosscode init`: pairing is allowed to
@@ -187,7 +232,7 @@ export async function redeemPairingCode(
   if (!response.ok || !envelope?.ok) {
     // 410 is the one status worth translating: the service deliberately cannot say
     // whether the code was already claimed, expired, or never existed.
-    if (response.status === 410) throw new Error("Pairing code is no longer valid; generate a new one from the dashboard");
+    if (response.status === 410) throw new Error("Pairing code is no longer valid; ask a workspace admin to mint a new one");
     throw new Error(envelope && !envelope.ok ? envelope.error : `Pairing failed with status ${response.status}`);
   }
   const claimed = claimPairingCodeResponseSchema.parse(envelope.data);

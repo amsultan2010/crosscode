@@ -5,7 +5,8 @@ import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
 import { DaemonClient } from "../../daemon/src/client.js";
-import { login, logout, readDaemonConfig, redeemInvite, redeemPairingCode, signup, writeDaemonConfig } from "../../daemon/src/runtime.js";
+import { BrowserLoginError, resolveWebUrl } from "../../daemon/src/browser-login.js";
+import { browserLogin, login, logout, readDaemonConfig, redeemInvite, redeemPairingCode, signup, writeDaemonConfig } from "../../daemon/src/runtime.js";
 import { PgStore } from "../../service/src/store.js";
 import { getWorkspaceBillingStatus } from "../../service/src/billing.js";
 
@@ -49,7 +50,7 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
   // tokens) is ever reinterpreted as a crosscode flag.
   if (command === "run") {
     const separator = args.indexOf("--");
-    if (separator < 0 || !args[separator + 1]) throw new CliError("USAGE_ERROR", "Usage: crosscode run -- <command> [args]");
+    if (separator < 0 || !args[separator + 1]) throw new CliError("USAGE_ERROR", "Usage: crosscode run -- <command> [args]", "Everything after `--` is passed to the child process verbatim, e.g. `crosscode run -- pytest -q`.");
     const child = spawn(args[separator + 1]!, args.slice(separator + 2), { cwd: directory, stdio: "inherit" });
     const exitCode = await new Promise<number>((resolveRun, rejectRun) => {
       child.once("error", rejectRun);
@@ -59,7 +60,7 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
   }
 
   if (command === "validate" && args.includes("--")) {
-    throw new CliError("UNTRUSTED_VALIDATION_ARGS", "Validation commands must come from trusted .crosscode/config.yaml profiles");
+    throw new CliError("UNTRUSTED_VALIDATION_ARGS", "Validation commands must come from trusted .crosscode/config.yaml profiles", "Add the command to a profile in .crosscode/config.yaml and run `crosscode validate --profile <name>`.");
   }
 
   // --json is a purely presentational, position-independent flag handled by
@@ -93,7 +94,7 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
     .argument("[workspaceId]", "workspace id (or use --workspace / --invite / --pair)")
     .option("--workspace <id>", "workspace id")
     .option("--invite <code>", "invite code (alternative to --workspace)")
-    .option("--pair <code>", "one-time pairing code from the dashboard (XXXX-XXXX); no login required")
+    .option("--pair <code>", "one-time pairing code minted by the service (XXXX-XXXX); no login required")
     .option("--service <url>", "service URL, when pairing before any login")
     .option("--replica-name <name>", "name to register this machine under when pairing")
     .action(async (positional: string | undefined, options: { workspace?: string; invite?: string; pair?: string; service?: string; replicaName?: string }) => {
@@ -110,7 +111,7 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
       }
       const settings = await readDaemonConfig(directory);
       const workspaceId = options.workspace ?? positional;
-      if (!workspaceId) throw new CliError("USAGE_ERROR", "Usage: crosscode join --workspace <workspaceId> | --invite <code> | --pair <code> (run `crosscode -- login` first)");
+      if (!workspaceId) throw new CliError("USAGE_ERROR", "Usage: crosscode join --workspace <workspaceId> | --invite <code> | --pair <code>", "Run `crosscode login` first for --workspace/--invite; --pair needs no login.");
       const updated = { ...settings, workspaceId };
       await writeDaemonConfig(directory, updated);
       result = { value: updated };
@@ -118,25 +119,45 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
 
   program
     .command("login")
-    .description("log in to the crosscode service")
-    .option("--email <email>", "account email")
-    .option("--password <password>", "account password")
-    .option("--service <url>", "service URL")
-    .action(async (options: { email?: string; password?: string; service?: string }) => {
-      let email = options.email ?? process.env.CROSSCODE_EMAIL;
-      let password = options.password ?? process.env.CROSSCODE_PASSWORD;
+    .description("log in to the crosscode service by signing in in a browser, or headlessly with --email/--password")
+    .option("--email <email>", "account email; with --password, signs in headlessly instead of opening a browser (or set CROSSCODE_EMAIL)")
+    .option("--password <password>", "account password for the headless sign-in (or set CROSSCODE_PASSWORD)")
+    .option("--web <url>", "base URL of the crosscode website hosting the sign-in page (or set CROSSCODE_WEB_URL)")
+    .option("--no-browser", "print the sign-in URL instead of opening a browser, for remote shells and CI")
+    .option("--service <url>", "coordination service URL to record for this checkout")
+    .action(async (options: { email?: string; password?: string; web?: string; browser?: boolean; service?: string }) => {
+      const email = options.email ?? process.env.CROSSCODE_EMAIL;
+      const password = options.password ?? process.env.CROSSCODE_PASSWORD;
       const serviceUrl = options.service;
-      if ((!email || !password) && process.stdout.isTTY) {
-        const rl = createInterface({ input: process.stdin, output: process.stdout });
-        if (!email) email = await rl.question("Email: ");
-        if (!password) password = await rl.question("Password: ");
-        rl.close();
+      if (email || password) {
+        if (!email || !password) {
+          throw new CliError(
+            "USAGE_ERROR",
+            "The headless login needs both --email and --password",
+            "Pass both flags (or set CROSSCODE_EMAIL and CROSSCODE_PASSWORD), or drop them to sign in in a browser."
+          );
+        }
+        const { user } = await login(directory, { email, password, serviceUrl });
+        result = { value: { userId: user.id, email: user.email } };
+        return;
       }
-      if (!email || !password) {
-        throw new CliError("USAGE_ERROR", "Usage: crosscode -- login --email <email> --password <password> [--service <url>] (or set CROSSCODE_EMAIL/CROSSCODE_PASSWORD)");
+      // Opening a browser from a pipe would strand the caller waiting on a tab nobody can
+      // see, so an agent or CI run has to say which noninteractive path it wants.
+      if (options.browser !== false && !process.stdout.isTTY) {
+        throw new CliError(
+          "LOGIN_NOT_INTERACTIVE",
+          "Browser login needs a terminal; this process has no TTY",
+          "Pass --no-browser to print the sign-in URL, or --email <email> --password <password> for the headless login."
+        );
       }
-      const updated = await login(directory, { email, password, serviceUrl });
-      result = { value: { workspaceId: updated.workspaceId, actorId: updated.actorId, service: { url: updated.service!.url, loggedIn: true } } };
+      const { user } = await browserLogin(directory, {
+        webUrl: resolveWebUrl(options.web),
+        serviceUrl,
+        openBrowser: options.browser !== false,
+        // stderr, not stdout: --json output has to stay a single parseable object.
+        onUrl: (url) => process.stderr.write(options.browser === false ? `Open this URL to sign in:\n${url}\n` : `Opening ${url}\n`)
+      });
+      result = { value: { userId: user.id, email: user.email } };
     });
 
   program
@@ -157,7 +178,7 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
         rl.close();
       }
       if (!email || !password) {
-        throw new CliError("USAGE_ERROR", "Usage: crosscode -- signup --email <email> --password <password> [--invite <code>] [--service <url>] (or set CROSSCODE_EMAIL/CROSSCODE_PASSWORD)");
+        throw new CliError("USAGE_ERROR", "Usage: crosscode -- signup --email <email> --password <password> [--invite <code>] [--service <url>] (or set CROSSCODE_EMAIL/CROSSCODE_PASSWORD)", "Set CROSSCODE_EMAIL and CROSSCODE_PASSWORD to sign up without a terminal prompt.");
       }
       const updated = await signup(directory, { email, password, invite: options.invite, serviceUrl });
       result = { value: { workspaceId: updated.workspaceId, actorId: updated.actorId, service: { url: updated.service!.url, loggedIn: true } } };
@@ -196,7 +217,7 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
     .description("set the autonomy tier (owner/admin only)")
     .argument("<tier>", "0, 1, or 2")
     .action(async (tierArg: string) => {
-      if (!/^[0-2]$/.test(tierArg)) throw new CliError("USAGE_ERROR", "Usage: crosscode workspace autonomy set <0|1|2>");
+      if (!/^[0-2]$/.test(tierArg)) throw new CliError("USAGE_ERROR", "Usage: crosscode workspace autonomy set <0|1|2>", "The tier is 0=always_ask, 1=auto_if_clean, or 2=auto_always; run `crosscode workspace autonomy get` to see the current one.");
       result = { value: await (await client()).setWorkspaceAutonomy(Number(tierArg) as 0 | 1 | 2) };
     });
 
@@ -333,13 +354,13 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
     .option("--yes", "skip the confirmation prompt")
     .action(async (options: { branch?: string; profile?: string; message?: string; dryRun?: boolean; yes?: boolean }) => {
       if (!options.branch || !options.profile) {
-        throw new CliError("USAGE_ERROR", 'Usage: crosscode publish --branch <branch> --profile <name> [--message "..."] [--dry-run] [--yes]');
+        throw new CliError("USAGE_ERROR", 'Usage: crosscode publish --branch <branch> --profile <name> [--message "..."] [--dry-run] [--yes]', "Both --branch and --profile are required; add --dry-run to see what would be published.");
       }
       const input = { branch: options.branch, profile: options.profile, message: options.message, dryRun: Boolean(options.dryRun) };
       if (!options.yes) {
         if (!process.stdout.isTTY) throw new CliError("CONFIRMATION_REQUIRED", "Publishing requires confirmation; pass --yes in noninteractive environments", "Pass --yes to publish without an interactive prompt.");
         const confirmed = await confirm(`Publish to branch "${input.branch}"? [y/N] `);
-        if (!confirmed) throw new CliError("CANCELLED", "Publish cancelled");
+        if (!confirmed) throw new CliError("CANCELLED", "Publish cancelled", "Re-run with --yes to publish without the confirmation prompt.");
       }
       result = { value: await (await client()).publish(input) };
     });
@@ -350,9 +371,9 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
     .description("show a workspace's plan and current usage counters")
     .option("--workspace <id>", "workspace id")
     .action(async (options: { workspace?: string }) => {
-      if (!options.workspace) throw new CliError("USAGE_ERROR", "Usage: crosscode billing status --workspace <workspaceId>");
+      if (!options.workspace) throw new CliError("USAGE_ERROR", "Usage: crosscode billing status --workspace <workspaceId>", "Run `crosscode status` to see the workspace id for this checkout.");
       const databaseUrl = process.env.DATABASE_URL ?? process.env.MIGRATION_DATABASE_URL;
-      if (!databaseUrl) throw new CliError("USAGE_ERROR", "DATABASE_URL or MIGRATION_DATABASE_URL is required");
+      if (!databaseUrl) throw new CliError("USAGE_ERROR", "DATABASE_URL or MIGRATION_DATABASE_URL is required", "Billing status reads the service database directly; export DATABASE_URL before running it.");
       const store = new PgStore(databaseUrl);
       try {
         result = { value: await getWorkspaceBillingStatus(store, options.workspace) };
@@ -389,6 +410,8 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
 
 function formatError(error: unknown): { error: { code: string; message: string; hint?: string } } {
   if (error instanceof CliError) return { error: { code: error.code, message: error.message, hint: error.hint } };
+  // The browser-login errors already carry the frozen contract's codes and their own hints.
+  if (error instanceof BrowserLoginError) return { error: { code: error.code, message: error.message, hint: error.hint } };
   const message = error instanceof Error ? error.message : "Command failed";
   if (message === "Unknown command") return { error: { code: "UNKNOWN_COMMAND", message, hint: "Run `crosscode commands --json` to see available commands." } };
   if (message.startsWith("Crosscode daemon is unavailable")) {
