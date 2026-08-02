@@ -16,12 +16,18 @@ export async function main(environment: NodeJS.ProcessEnv = process.env): Promis
   const host = environment.CROSSCODE_SERVICE_HOST ?? "127.0.0.1";
   const port = parsePort(environment.CROSSCODE_SERVICE_PORT ?? "8788");
   const tls = await loadTls(environment);
-  assertSafeServiceBinding(host, Boolean(tls));
+  // Managed hosts (Fly, Railway, Render, Cloud Run) terminate TLS at their edge and
+  // route plaintext to the container, so the process must bind 0.0.0.0 with no cert of
+  // its own. That is only safe when something in front is actually doing the TLS, which
+  // no process can detect -- hence an explicit opt-in rather than a guess.
+  const trustProxyTls = environment.CROSSCODE_TRUST_PROXY_TLS === "true";
+  assertSafeServiceBinding(host, Boolean(tls) || trustProxyTls);
+  const allowedOrigins = parseAllowedOrigins(environment.CROSSCODE_ALLOWED_ORIGINS);
   const store = new PgStore(databaseUrl);
   let server: ReturnType<typeof createServiceServer>;
   try {
     await store.assertRuntimePrivileges();
-    server = createServiceServer({ store, jwks, supabaseUrl, tls });
+    server = createServiceServer({ store, jwks, supabaseUrl, tls, allowedOrigins });
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(port, host, () => {
@@ -63,6 +69,22 @@ async function loadTls(environment: NodeJS.ProcessEnv) {
 function required(value: string | undefined, name: string): string {
   if (!value) throw new Error(`${name} is required`);
   return value;
+}
+
+/** Comma-separated exact origins, e.g. "https://crosscode-one.vercel.app". */
+function parseAllowedOrigins(value: string | undefined): string[] {
+  if (!value) return [];
+  return value.split(",").map((origin) => origin.trim()).filter(Boolean).map((origin) => {
+    // A trailing slash or a path here would silently never match the browser's Origin
+    // header, which sends scheme://host[:port] and nothing else.
+    let parsed: URL;
+    try {
+      parsed = new URL(origin);
+    } catch {
+      throw new Error(`CROSSCODE_ALLOWED_ORIGINS entry is not a valid origin: ${origin}`);
+    }
+    return parsed.origin;
+  });
 }
 
 function parsePort(value: string): number {

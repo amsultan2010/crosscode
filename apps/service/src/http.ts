@@ -52,6 +52,16 @@ export type ServiceServerOptions = {
   supabaseUrl: string;
   bodyLimitBytes?: number;
   tls?: { key: string | Buffer; cert: string | Buffer };
+  /**
+   * Exact browser origins allowed to call this service cross-origin, e.g.
+   * "https://crosscode-one.vercel.app". Empty (the default) keeps the service
+   * closed to browsers, which is right for a daemon-only deployment.
+   *
+   * Every request carries a bearer token, so this is an explicit allowlist and
+   * never `*`: a wildcard would let any site on the internet spend a user's
+   * credentials against this API.
+   */
+  allowedOrigins?: readonly string[];
 };
 
 const JSON_TYPE = "application/json";
@@ -94,6 +104,14 @@ async function handleRequest(
   response.setHeader("cache-control", "no-store");
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", "http://service.local");
+  applyCorsHeaders(request, response, options.allowedOrigins);
+  // Preflight carries no credentials and must be answered before any auth or rate-limit
+  // work, or the browser never gets far enough to send the real request.
+  if (method === "OPTIONS") {
+    response.writeHead(corsOriginFor(request, options.allowedOrigins) ? 204 : 403);
+    response.end();
+    return;
+  }
   const route = rateLimitRoute(method, url.pathname);
   const remote = request.socket.remoteAddress ?? "unknown";
   // Claiming is unauthenticated and single-use, so per-IP throttling is the only thing
@@ -551,6 +569,26 @@ function toRemoteOperation(operation: StoredOperation): RemoteOperation {
     serverSequence: operation.serverSequence,
     createdAt: operation.createdAt
   };
+}
+
+/** The request's Origin when it is on the allowlist, otherwise undefined. */
+function corsOriginFor(request: IncomingMessage, allowedOrigins: readonly string[] | undefined): string | undefined {
+  const origin = request.headers.origin;
+  if (!origin || !allowedOrigins?.length) return undefined;
+  return allowedOrigins.includes(origin) ? origin : undefined;
+}
+
+function applyCorsHeaders(request: IncomingMessage, response: ServerResponse, allowedOrigins: readonly string[] | undefined): void {
+  // Vary regardless of the outcome: the response body for a given URL is identical for
+  // every origin, but these headers are not, and a shared cache must not reuse one
+  // origin's CORS decision for another.
+  response.setHeader("vary", "origin");
+  const origin = corsOriginFor(request, allowedOrigins);
+  if (!origin) return;
+  response.setHeader("access-control-allow-origin", origin);
+  response.setHeader("access-control-allow-methods", "GET, POST, PUT, DELETE, OPTIONS");
+  response.setHeader("access-control-allow-headers", `authorization, content-type, ${WORKSPACE_HEADER}`);
+  response.setHeader("access-control-max-age", "600");
 }
 
 function send(response: ServerResponse, status: number, data: unknown): void {

@@ -552,12 +552,76 @@ describe("service HTTP boundary", () => {
   });
 });
 
+// Without these, a browser on a different origin than the service -- which is every
+// hosted deployment of the dashboard -- cannot make a single authenticated call.
+describe("browser CORS", () => {
+  const dashboard = "https://crosscode-one.vercel.app";
+  const store = { resolveMembership: async () => membership } as unknown as PgStore;
+
+  it("answers preflight for an allowed origin with the headers the dashboard sends", async () => {
+    const base = await listen(store, undefined, [dashboard]);
+
+    const response = await fetch(`${base}/v1/memberships`, {
+      method: "OPTIONS",
+      headers: { origin: dashboard, "access-control-request-method": "GET", "access-control-request-headers": "authorization" }
+    });
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-allow-origin")).toBe(dashboard);
+    const allowedHeaders = response.headers.get("access-control-allow-headers")!.toLowerCase();
+    // The dashboard cannot authenticate or name its workspace without both of these.
+    expect(allowedHeaders).toContain("authorization");
+    expect(allowedHeaders).toContain(WORKSPACE_HEADER);
+    expect(response.headers.get("vary")!.toLowerCase()).toContain("origin");
+  });
+
+  it("echoes the allowed origin on a real authenticated response", async () => {
+    const listStore = {
+      resolveMembership: async () => membership,
+      ensurePersonalWorkspace: async () => {},
+      listMembershipsForUser: async () => [{ workspaceId: membership.workspaceId, workspaceName: "Ada", role: "owner" }]
+    } as unknown as PgStore;
+    const base = await listen(listStore, undefined, [dashboard]);
+    const accessToken = await signToken(membership.userId);
+
+    const response = await fetch(`${base}/v1/memberships`, {
+      headers: { origin: dashboard, authorization: `Bearer ${accessToken}` }
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("access-control-allow-origin")).toBe(dashboard);
+  });
+
+  it("refuses an origin that is not on the allowlist", async () => {
+    const base = await listen(store, undefined, [dashboard]);
+
+    const preflight = await fetch(`${base}/v1/memberships`, {
+      method: "OPTIONS",
+      headers: { origin: "https://evil.example", "access-control-request-method": "GET" }
+    });
+
+    expect(preflight.status).toBe(403);
+    expect(preflight.headers.get("access-control-allow-origin")).toBeNull();
+  });
+
+  it("stays closed to browsers when no allowlist is configured", async () => {
+    const base = await listen(store);
+
+    const response = await fetch(`${base}/healthz`, { headers: { origin: dashboard } });
+
+    // Still serves the daemon and CLI, which are not subject to CORS -- it just never
+    // hands a browser permission it was not explicitly given.
+    expect(response.status).toBe(200);
+    expect(response.headers.get("access-control-allow-origin")).toBeNull();
+  });
+});
+
 async function signToken(userId: string): Promise<string> {
   return signTestSupabaseToken(supabaseUrl, { sub: userId });
 }
 
-async function listen(store: PgStore, bodyLimitBytes?: number): Promise<string> {
-  const server = createServiceServer({ store, jwks: await testSupabaseJwks(), supabaseUrl, bodyLimitBytes });
+async function listen(store: PgStore, bodyLimitBytes?: number, allowedOrigins?: readonly string[]): Promise<string> {
+  const server = createServiceServer({ store, jwks: await testSupabaseJwks(), supabaseUrl, bodyLimitBytes, allowedOrigins });
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

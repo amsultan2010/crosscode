@@ -155,6 +155,29 @@ Service environment variables:
 | `CROSSCODE_SERVICE_PORT` | Listen port | `8788` |
 | `CROSSCODE_TLS_KEY` | TLS private-key path | unset |
 | `CROSSCODE_TLS_CERT` | TLS certificate path | unset |
+| `CROSSCODE_TRUST_PROXY_TLS` | Set to `true` only when a proxy in front terminates TLS and forwards plaintext (managed container hosts do this). Permits a non-loopback bind without a local certificate. | unset |
+| `CROSSCODE_ALLOWED_ORIGINS` | Comma-separated exact browser origins allowed to call the API cross-origin, e.g. `https://crosscode-one.vercel.app`. Empty means no browser may call it. | unset |
+
+### Deploying the coordination service
+
+The service's clients are daemons and the CLI, not a browser — the website talks only to
+Supabase (sign-in) and to a loopback port on your own machine (the `crosscode login`
+callback), never to this service.
+
+The service must run as a **persistent process**, not on serverless functions: `apps/daemon`
+holds an open WebSocket to `/v1/stream` for live coordination, and serverless platforms drop
+long-lived connections between invocations. `apps/service/Dockerfile` builds a deployable
+image for any container host (Fly, Railway, Render, Cloud Run, or Docker on a VPS):
+
+```bash
+# Build from the repository root, not from apps/service.
+docker build -f apps/service/Dockerfile -t crosscode-service .
+```
+
+Set on the host: `DATABASE_URL`, `SUPABASE_URL`, and — when a proxy in front terminates TLS —
+`CROSSCODE_TRUST_PROXY_TLS=true`. `CROSSCODE_ALLOWED_ORIGINS` stays unset in the CLI-only
+product, which means no browser origin may call the API cross-origin; it exists for anyone
+building their own browser client against the service.
 
 Run `pnpm service:migrate` with a migration-owner connection before starting a new service version. `CROSSCODE_RUNTIME_DB_ROLE` applies the required least-privilege grants, and service startup refuses a role that can update/delete immutable operations or audit rows. The runtime never executes DDL. Non-loopback PostgreSQL URLs must specify exactly one `sslmode=verify-full` and cannot use host/SSL query overrides. For local-only testing against a plain (non-Supabase) Postgres instance, `infra/docker-compose.yml` still starts one on `127.0.0.1:5432`; it is not used in production, where `DATABASE_URL` points at Supabase.
 
