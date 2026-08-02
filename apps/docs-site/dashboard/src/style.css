@@ -733,3 +733,300 @@ button[type="submit"].loading::after {
   overflow-x: auto;
   max-height: 20rem;
 }
+
+/* =============================================================================
+   Dashboard analytics sections + spotlight tour  (workstream 4)
+   Appended as one block on purpose: the onboarding workstream also edits this
+   file, and keeping these rules contiguous keeps that merge mechanical.
+   ============================================================================= */
+
+.dash-section {
+  margin-bottom: 2.75rem;
+  scroll-margin-top: 5rem;
+}
+
+.dash-section .section-heading {
+  margin-bottom: 1rem;
+}
+
+.dash-section .section-heading h2 {
+  font-size: 1.1rem;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+.dash-section .section-heading p {
+  margin: 0.15rem 0 0;
+}
+
+.dash-section .panels {
+  margin-top: 1rem;
+}
+
+.dash-section .panel h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 0.7rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.panel-wide {
+  grid-column: 1 / -1;
+}
+
+.section-note {
+  font-size: 0.85rem;
+  color: var(--muted);
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+  padding: 0.7rem 0.9rem;
+  margin: 0 0 1rem;
+}
+
+/* Create-a-team: an ordinary optional action, not an empty-state gate */
+
+#create-team-toggle {
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+  color: var(--fg);
+  border-radius: 4px;
+  padding: 0.55rem 0.9rem;
+}
+
+#create-team-toggle[hidden] {
+  display: none;
+}
+
+.create-team-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+  margin-bottom: 1.75rem;
+}
+
+.create-team-form[hidden] {
+  display: none;
+}
+
+.create-team-form label {
+  min-width: 18rem;
+}
+
+#memberships-error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+#memberships-error[hidden] {
+  display: none;
+}
+
+/* Projects */
+
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.project-card {
+  border: 1px solid var(--border);
+  background: var(--bg-alt);
+  border-radius: 6px;
+  padding: 1rem 1.1rem;
+}
+
+.project-card-unassigned {
+  border-style: dashed;
+}
+
+.project-card h3 {
+  font-size: 0.95rem;
+  margin: 0;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.project-card .project-remote {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--fg-dim);
+  margin: 0.3rem 0 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.project-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem 1.4rem;
+  margin: 0;
+}
+
+.project-meta div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.project-meta dt {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.project-meta dd {
+  margin: 0;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Risk mix */
+
+.risk-mix {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.risk-mix li {
+  display: grid;
+  grid-template-columns: 4.5rem 1fr 6rem;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.82rem;
+}
+
+.risk-label {
+  text-transform: capitalize;
+  color: var(--fg-dim);
+}
+
+.risk-bar {
+  display: block;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.risk-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--fg-dim);
+}
+
+.risk-mix li[data-risk="low"] .risk-bar-fill { background: var(--ok); }
+.risk-mix li[data-risk="medium"] .risk-bar-fill { background: var(--fg-dim); }
+.risk-mix li[data-risk="high"] .risk-bar-fill,
+.risk-mix li[data-risk="critical"] .risk-bar-fill { background: var(--danger); }
+
+.risk-count {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Spotlight tour */
+
+.tour-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+}
+
+.tour-spotlight {
+  position: fixed;
+  border-radius: 10px;
+  /* The dim is the spotlight's own outward shadow, so the anchor stays fully legible
+     and no separate mask element has to be kept in sync with it. */
+  box-shadow: 0 0 0 9999px color-mix(in srgb, #000 68%, transparent);
+  outline: 1px solid var(--border-strong);
+  pointer-events: none;
+  transition: top 0.18s ease, left 0.18s ease, width 0.18s ease, height 0.18s ease;
+}
+
+[data-tour-active] {
+  position: relative;
+  z-index: 51;
+}
+
+.tour-popover {
+  position: fixed;
+  z-index: 52;
+  width: min(22rem, calc(100vw - 2rem));
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+  border-radius: 8px;
+  padding: 1rem 1.1rem;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+}
+
+.tour-popover h3 {
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+  margin: 0.2rem 0 0.4rem;
+}
+
+.tour-popover .tour-step-count {
+  margin: 0;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tour-popover .tour-body {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--fg-dim);
+}
+
+.tour-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.tour-actions .tour-spacer {
+  flex: 1;
+}
+
+.tour-actions button {
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--fg);
+  border-radius: 4px;
+  padding: 0.35rem 0.75rem;
+}
+
+.tour-actions .tour-skip {
+  border-color: transparent;
+  color: var(--muted);
+  padding-left: 0;
+}
+
+.tour-actions .tour-next {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--fg);
+  font-weight: 600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tour-spotlight { transition: none; }
+}

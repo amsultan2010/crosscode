@@ -31,7 +31,7 @@ Paste the prompt in [`docs/install-prompt.md`](./docs/install-prompt.md) into an
 - CLI/MCP-first for agents: status, claiming, checkpoints, proposal review, accept/reject, and publish are all direct CLI/MCP operations against the local daemon — a coding agent (Claude Code, Codex, etc.) never needs to open a website to do routine work. Humans are guided to the docs-site (`apps/docs-site`) for full documentation, configuration/settings reference, and eventual web-dashboard version history; see [`AGENTS.md`](./AGENTS.md)
 - A bounded, non-authoritative AI semantic reviewer for ambiguous conflicts, gated behind explicit workspace policy and human approval
 - Self-serve `crosscode -- signup`, invite-by-code/link (create/list/revoke/redeem), and self-serve workspace creation — no admin `service:provision` step required for the common case
-- A read-only web dashboard (`/dashboard` on the docs site) for live presence/tasks/claims/proposals/validation status, plus invite redemption
+- A read-only web dashboard (`/dashboard` on the docs site) organized into four analytics sections — Overview (live presence, connected projects, settled edits, plan/seat usage), Projects (per-repository cards with last activity, edit counts and active replicas), Coordination (tasks, claims, handoffs, intents) and Validation &amp; safety (pass rate, recent runs, risk mix) — plus invite redemption and a first-run spotlight tour
 - A per-workspace autonomy tier (always-ask / auto-if-clean / auto-always) that extends the existing accept-gated auto-apply mechanism without weakening it
 - A billing data model and plan-gating helpers behind a `BillingProvider` interface, with a stub implementation pending a real Stripe account
 
