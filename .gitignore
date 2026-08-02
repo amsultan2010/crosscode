@@ -4,3 +4,5 @@ coverage/
 .crosscode/
 .vscode-test/
 .gstack/
+.env
+.env.local

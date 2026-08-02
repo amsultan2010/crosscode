@@ -265,6 +265,60 @@ describe("service HTTP boundary", () => {
 
     expect((await put(base, "/v1/workspace/autonomy", { tier: 3 }, accessToken, "owner-workspace")).status).toBe(400);
   });
+
+  it("lists every workspace a user belongs to, for the dashboard's team switcher", async () => {
+    const store = {
+      listMembershipsForUser: async (userId: string) => {
+        expect(userId).toBe("user-5");
+        return [
+          { memberId: "m1", userId, actorId: "a@example.com", role: "owner" as const, workspaceId: "workspace-a", workspaceName: "Acme" },
+          { memberId: "m2", userId, actorId: "a@example.com", role: "member" as const, workspaceId: "workspace-b", workspaceName: "Beta" }
+        ];
+      }
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken("user-5");
+
+    const response = await fetch(`${base}/v1/memberships`, { headers: { authorization: `Bearer ${accessToken}` } });
+    expect(await response.json()).toEqual({
+      ok: true,
+      data: {
+        memberships: [
+          { workspaceId: "workspace-a", workspaceName: "Acme", role: "owner" },
+          { workspaceId: "workspace-b", workspaceName: "Beta", role: "member" }
+        ]
+      }
+    });
+  });
+
+  it("reports workspace billing status, converting an unlimited (Infinity) cap to null over JSON", async () => {
+    const store = {
+      resolveMembership: async () => membership,
+      pool: {
+        query: async (sql: string) => {
+          if (sql.includes("FROM workspaces")) return { rows: [{ plan: "unlimited" }] };
+          if (sql.includes("FROM members")) return { rows: [{ count: "2" }] };
+          return { rows: [] };
+        }
+      }
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken(membership.userId);
+
+    const response = await fetch(`${base}/v1/workspace/billing`, { headers: { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId } });
+    expect(await response.json()).toEqual({
+      ok: true,
+      data: {
+        workspaceId: membership.workspaceId,
+        plan: "unlimited",
+        seatCap: null,
+        currentMemberCount: 2,
+        semanticReviewCallsPerMonth: null,
+        semanticReviewCallsUsedThisMonth: 0,
+        autonomyTiers: ["always-ask", "auto-if-clean", "auto-always"]
+      }
+    });
+  });
 });
 
 async function signToken(userId: string): Promise<string> {

@@ -224,6 +224,27 @@ export const workspaceAutonomyResponseSchema = z.object({
 }).strict();
 export type WorkspaceAutonomyResponse = z.infer<typeof workspaceAutonomyResponseSchema>;
 
+export const workspaceBillingResponseSchema = z.object({
+  workspaceId: z.string().min(1),
+  plan: z.enum(["free", "essential", "pro", "unlimited", "student"]),
+  // null means unlimited (the plan's cap is Infinity server-side; JSON has no Infinity).
+  seatCap: z.number().nullable(),
+  currentMemberCount: z.number(),
+  semanticReviewCallsPerMonth: z.number().nullable(),
+  semanticReviewCallsUsedThisMonth: z.number(),
+  autonomyTiers: z.array(z.enum(["always-ask", "auto-if-clean", "auto-always"]))
+}).strict();
+export type WorkspaceBillingResponse = z.infer<typeof workspaceBillingResponseSchema>;
+
+export const listMembershipsResponseSchema = z.object({
+  memberships: z.array(z.object({
+    workspaceId: z.string().min(1),
+    workspaceName: z.string().min(1),
+    role: workspaceRoleSchema
+  }))
+}).strict();
+export type ListMembershipsResponse = z.infer<typeof listMembershipsResponseSchema>;
+
 export const setWorkspaceAutonomyRequestSchema = z.object({
   tier: workspaceAutonomyTierSchema
 }).strict();

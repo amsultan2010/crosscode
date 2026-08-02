@@ -171,6 +171,22 @@ export class PgStore {
     return { memberId: row.id, userId, actorId: row.actor_id, workspaceId, role: row.role };
   }
 
+  // Powers the dashboard's "your teams" / workspace switcher -- every workspace a
+  // user currently belongs to, with the workspace name for display.
+  async listMembershipsForUser(userId: string): Promise<Array<Membership & { workspaceName: string }>> {
+    const result = await this.pool.query<{ member_id: string; actor_id: string; role: Membership["role"]; workspace_id: string; workspace_name: string }>(
+      `SELECT m.id AS member_id, m.actor_id, m.role, m.workspace_id, w.name AS workspace_name
+         FROM members m JOIN workspaces w ON w.id = m.workspace_id
+         WHERE m.user_id = $1 AND m.disabled_at IS NULL
+         ORDER BY w.name`,
+      [userId]
+    );
+    return result.rows.map((row) => ({
+      memberId: row.member_id, userId, actorId: row.actor_id, role: row.role,
+      workspaceId: row.workspace_id, workspaceName: row.workspace_name
+    }));
+  }
+
   async createInvite(identity: Membership, input: { role?: Invite["role"]; ttlMs?: number }): Promise<Invite> {
     if (identity.role !== "owner") throw new StoreUnauthorizedError("Only workspace owners can create invites");
     const role = input.role ?? "member";

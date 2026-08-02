@@ -4,8 +4,11 @@ import {
   type RemoteClaim,
   type RemoteHandoff,
   type RemoteIntent,
+  type RemoteOperation,
   type RemoteTask,
-  type RemoteValidation
+  type RemoteValidation,
+  type WorkspaceBillingResponse,
+  type ListMembershipsResponse
 } from "@crosscode/protocol";
 
 export type PresenceSession = {
@@ -23,6 +26,7 @@ export type WorkspaceSnapshot = {
   handoffs: RemoteHandoff[];
   intents: RemoteIntent[];
   validations: RemoteValidation[];
+  operations: RemoteOperation[];
 };
 
 const WORKSPACE_HEADER = "x-crosscode-workspace-id";
@@ -120,16 +124,31 @@ export async function fetchValidations(auth: AuthContext): Promise<RemoteValidat
   return data.validations;
 }
 
+export async function fetchOperations(auth: AuthContext): Promise<RemoteOperation[]> {
+  const data = await request<{ operations: RemoteOperation[]; nextCursor: number }>(
+    auth,
+    "GET",
+    "/v1/operations?afterSequence=0",
+    { workspaceId: auth.workspaceId }
+  );
+  return data.operations;
+}
+
+export async function fetchBillingStatus(auth: AuthContext): Promise<WorkspaceBillingResponse> {
+  return request<WorkspaceBillingResponse>(auth, "GET", "/v1/workspace/billing", { workspaceId: auth.workspaceId });
+}
+
 export async function fetchWorkspaceSnapshot(auth: AuthContext): Promise<WorkspaceSnapshot> {
-  const [presence, tasks, claims, handoffs, intents, validations] = await Promise.all([
+  const [presence, tasks, claims, handoffs, intents, validations, operations] = await Promise.all([
     fetchPresence(auth),
     fetchTasks(auth),
     fetchClaims(auth),
     fetchHandoffs(auth),
     fetchIntents(auth),
-    fetchValidations(auth)
+    fetchValidations(auth),
+    fetchOperations(auth)
   ]);
-  return { presence, tasks, claims, handoffs, intents, validations };
+  return { presence, tasks, claims, handoffs, intents, validations, operations };
 }
 
 export async function redeemInvite(session: SessionContext, code: string): Promise<{ workspaceId: string }> {
@@ -140,4 +159,11 @@ export async function redeemInvite(session: SessionContext, code: string): Promi
 // (no `workspaceId` header: there is nothing to scope one to before this call succeeds).
 export async function createWorkspace(session: SessionContext, name: string): Promise<{ workspaceId: string }> {
   return request<{ workspaceId: string }>(session, "POST", "/v1/workspaces", { body: { name } });
+}
+
+// Every workspace ("team") the signed-in user belongs to -- powers the dashboard's
+// team switcher instead of asking someone to paste a raw workspace ID.
+export async function fetchMemberships(session: SessionContext): Promise<ListMembershipsResponse["memberships"]> {
+  const data = await request<ListMembershipsResponse>(session, "GET", "/v1/memberships");
+  return data.memberships;
 }

@@ -19,6 +19,8 @@ import {
   serviceIngestReceiptSchema,
   serviceIngestRequestSchema,
   setWorkspaceAutonomyRequestSchema,
+  workspaceBillingResponseSchema,
+  listMembershipsResponseSchema,
   taskIngestRequestSchema,
   taskIngestReceiptSchema,
   timeCursorQuerySchema,
@@ -34,6 +36,7 @@ import type { JWTVerifyGetKey } from "jose";
 import { verifySupabaseAccessToken } from "./auth.js";
 import { PgStore, StoreConflictError, StoreUnauthorizedError, type Membership, type StoredOperation } from "./store.js";
 import { attachWebSocketGateway } from "./ws.js";
+import { getWorkspaceBillingStatus } from "./billing.js";
 
 export type ServiceServerOptions = {
   store: PgStore;
@@ -112,6 +115,15 @@ async function handleRequest(
     const { userId, email } = await verifyToken(request, options);
     const redeemed = await options.store.redeemInvite({ code: decodeURIComponent(redeemMatch[1]!), userId, actorId: email ?? userId });
     send(response, 200, redeemInviteResponseSchema.parse(redeemed));
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v1/memberships") {
+    const { userId } = await verifyToken(request, options);
+    const memberships = await options.store.listMembershipsForUser(userId);
+    send(response, 200, listMembershipsResponseSchema.parse({
+      memberships: memberships.map((m) => ({ workspaceId: m.workspaceId, workspaceName: m.workspaceName, role: m.role }))
+    }));
     return;
   }
 
@@ -329,6 +341,16 @@ async function handleRequest(
     return;
   }
 
+  if (method === "GET" && url.pathname === "/v1/workspace/billing") {
+    const status = await getWorkspaceBillingStatus(options.store, identity.workspaceId);
+    send(response, 200, workspaceBillingResponseSchema.parse({
+      ...status,
+      seatCap: Number.isFinite(status.seatCap) ? status.seatCap : null,
+      semanticReviewCallsPerMonth: Number.isFinite(status.semanticReviewCallsPerMonth) ? status.semanticReviewCallsPerMonth : null
+    }));
+    return;
+  }
+
   if (method === "GET" && url.pathname === "/v1/presence") {
     const sessions = await options.store.listPresence(identity.workspaceId);
     send(response, 200, { sessions });
@@ -467,6 +489,8 @@ function rateLimitRoute(method: string, pathname: string): string {
     "POST /v1/validations",
     "GET /v1/validations",
     "GET /v1/presence",
+    "GET /v1/workspace/billing",
+    "GET /v1/memberships",
     "POST /v1/workspaces",
     "POST /v1/invites",
     "GET /v1/invites",

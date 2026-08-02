@@ -1,40 +1,86 @@
-import type { RemoteClaim, RemoteHandoff, RemoteIntent, RemoteTask, RemoteValidation, WsFanOutMessage } from "@crosscode/protocol";
-import { fetchWorkspaceSnapshot, registerReplica, type AuthContext, type PresenceSession } from "../lib/api.js";
+import type { RemoteClaim, RemoteHandoff, RemoteIntent, RemoteOperation, RemoteTask, RemoteValidation, WsFanOutMessage, WorkspaceBillingResponse, ListMembershipsResponse } from "@crosscode/protocol";
+import { createWorkspace, fetchBillingStatus, fetchMemberships, fetchWorkspaceSnapshot, registerReplica, type AuthContext, type PresenceSession } from "../lib/api.js";
 import { connectStream } from "../lib/ws.js";
 import { getStoredReplicaId, getStoredWorkspaceId, setStoredReplicaId, setStoredWorkspaceId } from "../lib/workspace.js";
 
-export function renderDashboard(container: HTMLElement, session: { serviceUrl: string; accessToken: string }): void {
-  const storedWorkspaceId = getStoredWorkspaceId();
+type Membership = ListMembershipsResponse["memberships"][number];
 
+export function renderDashboard(container: HTMLElement, session: { serviceUrl: string; accessToken: string }): void {
   container.innerHTML = `
     <div class="workspace-bar">
+      <label id="team-switcher-label" hidden>
+        Team
+        <select id="team-switcher"></select>
+      </label>
+      <span id="connection-status" class="status-pill" hidden></span>
+      <span id="mcp-badge" class="mcp-badge" hidden></span>
+    </div>
+    <div id="no-team" hidden>
+      <p class="muted">You're not on any team yet. Create one, or ask a teammate for an invite code.</p>
       <form id="workspace-form">
         <label>
-          Workspace ID
-          <input type="text" name="workspaceId" required autocomplete="off" spellcheck="false" value="${storedWorkspaceId ? escapeHtml(storedWorkspaceId) : ""}" />
+          Workspace name
+          <input type="text" name="workspaceId" required autocomplete="off" spellcheck="false" placeholder="e.g. Acme" />
         </label>
-        <button type="submit">Connect</button>
+        <button type="submit">Create workspace</button>
       </form>
-      <span id="connection-status" class="status-pill" hidden></span>
     </div>
+    <div id="stats" class="stat-grid"></div>
     <div id="panels" class="panels"></div>
   `;
 
+  const noTeam = container.querySelector<HTMLDivElement>("#no-team")!;
+  const teamLabel = container.querySelector<HTMLLabelElement>("#team-switcher-label")!;
+  const teamSelect = container.querySelector<HTMLSelectElement>("#team-switcher")!;
   const form = container.querySelector<HTMLFormElement>("#workspace-form")!;
   const statusEl = container.querySelector<HTMLSpanElement>("#connection-status")!;
+  const mcpBadgeEl = container.querySelector<HTMLSpanElement>("#mcp-badge")!;
+  const statsEl = container.querySelector<HTMLDivElement>("#stats")!;
   const panelsEl = container.querySelector<HTMLDivElement>("#panels")!;
 
   let socket: WebSocket | undefined;
+  const auth: AuthContext = { serviceUrl: session.serviceUrl, accessToken: session.accessToken, workspaceId: "" };
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    const workspaceId = String(new FormData(form).get("workspaceId") ?? "").trim();
-    if (!workspaceId) return;
-    setStoredWorkspaceId(workspaceId);
-    void connect(workspaceId);
+    const name = String(new FormData(form).get("workspaceId") ?? "").trim();
+    if (!name) return;
+    const button = form.querySelector<HTMLButtonElement>("button[type=submit]")!;
+    button.disabled = true;
+    createWorkspace(auth, name)
+      .then((created) => {
+        setStoredWorkspaceId(created.workspaceId);
+        void connect(created.workspaceId);
+      })
+      .catch((error: unknown) => setStatus("error", error instanceof Error ? error.message : "Could not create workspace"))
+      .finally(() => { button.disabled = false; });
   });
 
-  if (storedWorkspaceId) void connect(storedWorkspaceId);
+  teamSelect.addEventListener("change", () => {
+    if (teamSelect.value) {
+      setStoredWorkspaceId(teamSelect.value);
+      void connect(teamSelect.value);
+    }
+  });
+
+  void fetchMemberships(auth).then(
+    (memberships) => initTeamSwitcher(memberships),
+    () => { noTeam.hidden = false; }
+  );
+
+  function initTeamSwitcher(memberships: Membership[]): void {
+    if (!memberships.length) {
+      noTeam.hidden = false;
+      return;
+    }
+    teamLabel.hidden = false;
+    teamSelect.innerHTML = memberships.map((m) => `<option value="${escapeHtml(m.workspaceId)}">${escapeHtml(m.workspaceName)} (${escapeHtml(m.role)})</option>`).join("");
+    const stored = getStoredWorkspaceId();
+    const initial = memberships.find((m) => m.workspaceId === stored)?.workspaceId ?? memberships[0]!.workspaceId;
+    teamSelect.value = initial;
+    setStoredWorkspaceId(initial);
+    void connect(initial);
+  }
 
   async function connect(workspaceId: string): Promise<void> {
     socket?.close();
@@ -49,9 +95,14 @@ export function renderDashboard(container: HTMLElement, session: { serviceUrl: s
         setStoredReplicaId(workspaceId, replicaId);
       }
 
-      const snapshot = await fetchWorkspaceSnapshot(auth);
+      const [snapshot, billing] = await Promise.all([
+        fetchWorkspaceSnapshot(auth),
+        fetchBillingStatus(auth).catch(() => undefined)
+      ]);
       const state = new PanelState(snapshot);
       state.render(panelsEl);
+      renderStats(statsEl, state, billing);
+      renderMcpBadge(mcpBadgeEl, state.presence);
 
       socket = connectStream(
         session.serviceUrl,
@@ -61,6 +112,8 @@ export function renderDashboard(container: HTMLElement, session: { serviceUrl: s
           onMessage: (message) => {
             state.apply(message);
             state.render(panelsEl);
+            renderStats(statsEl, state, billing);
+            renderMcpBadge(mcpBadgeEl, state.presence);
           },
           onError: (message) => setStatus("error", message),
           onClose: () => setStatus("offline", "Disconnected")
@@ -78,6 +131,56 @@ export function renderDashboard(container: HTMLElement, session: { serviceUrl: s
   }
 }
 
+function renderMcpBadge(el: HTMLElement, presence: PresenceSession[]): void {
+  el.hidden = false;
+  // A live presence session means some daemon is currently connected to this
+  // workspace over MCP/CLI -- the closest real, honest signal available to a
+  // browser-only dashboard for "is the MCP daemon set up and running."
+  const connected = presence.some((p) => p.status === "online");
+  el.innerHTML = connected
+    ? `<span class="dot online"></span> MCP daemon connected`
+    : `<span class="dot offline"></span> No MCP daemon detected right now`;
+}
+
+function renderStats(container: HTMLElement, state: PanelState, billing: WorkspaceBillingResponse | undefined): void {
+  const passing = state.validations.filter((remote) => remote.validation.exitCode === 0).length;
+  const passRate = state.validations.length ? Math.round((passing / state.validations.length) * 100) : null;
+  const onlineCount = state.presence.filter((p) => p.status === "online").length;
+
+  const cards = [
+    {
+      label: "Live presence",
+      value: String(onlineCount),
+      sub: `${state.presence.length} known ${state.presence.length === 1 ? "replica" : "replicas"}`
+    },
+    {
+      label: "Recent operations",
+      value: String(state.operations.length),
+      sub: "settled edits synced to this workspace"
+    },
+    {
+      label: "Validation pass rate",
+      value: passRate === null ? "—" : `${passRate}%`,
+      sub: `${passing}/${state.validations.length} passing`
+    },
+    billing
+      ? {
+          label: `Plan: ${billing.plan}`,
+          value: billing.seatCap === null ? `${billing.currentMemberCount}` : `${billing.currentMemberCount}/${billing.seatCap}`,
+          sub: billing.seatCap === null ? "seats used (unlimited plan)" : "seats used"
+        }
+      : { label: "Plan", value: "—", sub: "billing status unavailable" }
+  ];
+
+  container.innerHTML = cards.map((card) => `
+    <div class="stat-card">
+      <p class="stat-label">${escapeHtml(card.label)}</p>
+      <p class="stat-value">${escapeHtml(card.value)}</p>
+      <p class="stat-sub">${escapeHtml(card.sub)}</p>
+    </div>
+  `).join("");
+}
+
 class PanelState {
   presence: PresenceSession[];
   tasks: Map<string, RemoteTask> = new Map();
@@ -85,6 +188,7 @@ class PanelState {
   handoffs: Map<string, RemoteHandoff> = new Map();
   intents: Map<string, RemoteIntent> = new Map();
   validations: RemoteValidation[];
+  operations: RemoteOperation[];
 
   constructor(snapshot: {
     presence: PresenceSession[];
@@ -93,6 +197,7 @@ class PanelState {
     handoffs: RemoteHandoff[];
     intents: RemoteIntent[];
     validations: RemoteValidation[];
+    operations: RemoteOperation[];
   }) {
     this.presence = snapshot.presence;
     for (const task of snapshot.tasks) this.tasks.set(task.task.id, task);
@@ -100,6 +205,7 @@ class PanelState {
     for (const handoff of snapshot.handoffs) this.handoffs.set(handoff.handoff.id, handoff);
     for (const intent of snapshot.intents) this.intents.set(intent.intent.id, intent);
     this.validations = snapshot.validations;
+    this.operations = [...snapshot.operations].sort((a, b) => b.serverSequence - a.serverSequence);
   }
 
   apply(message: WsFanOutMessage): void {
@@ -128,6 +234,7 @@ class PanelState {
         this.validations = [message.validation, ...this.validations].slice(0, 50);
         break;
       case "operation":
+        this.operations = [message.operation, ...this.operations.filter((op) => op.id !== message.operation.id)].slice(0, 100);
         break;
     }
   }
@@ -152,6 +259,28 @@ class PanelState {
       ${this.panel("Validation status", this.validations.length, this.validations.map((remote) => `
         <li><span class="dot ${remote.validation.exitCode === 0 ? "online" : "error"}"></span> ${escapeHtml(remote.validation.profile)} <span class="muted">exit ${remote.validation.exitCode}</span></li>
       `))}
+      <section class="panel" style="grid-column: 1 / -1;">
+        <h2>Edit history <span class="muted">${this.operations.length}</span></h2>
+        <ul class="history-list">
+          ${this.operations.length ? this.operations.map((operation) => this.historyItem(operation)).join("") : '<li class="muted">No edits synced yet</li>'}
+        </ul>
+      </section>
+    `;
+  }
+
+  private historyItem(operation: RemoteOperation): string {
+    const paths = operation.transaction.changes.map((change) => `${change.kind} ${change.path}`).join(", ");
+    const when = new Date(operation.createdAt).toLocaleString();
+    // Presence only knows currently-online-or-recently-seen replicas, so this is
+    // best-effort attribution -- falls back to the raw replica id when the replica
+    // that made this edit isn't in the live presence list anymore.
+    const actor = this.presence.find((p) => p.replicaId === operation.senderReplicaId)?.actorId;
+    const who = actor ?? operation.senderReplicaId;
+    return `
+      <li class="history-item">
+        <span class="history-path">${escapeHtml(paths)}</span>
+        <span class="history-status">${escapeHtml(who)} &middot; ${escapeHtml(operation.transaction.safety.risk)} risk &middot; ${escapeHtml(when)}</span>
+      </li>
     `;
   }
 
