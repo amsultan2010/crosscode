@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type {
   ChangeTransaction, Claim, ClaimCreatedEvent, ClaimReleasedEvent, EventEnvelope, Handoff, HandoffRequestedEvent,
@@ -31,6 +31,20 @@ export type Membership = {
   role: "owner" | "member" | "viewer";
 };
 
+export type Invite = {
+  id: string;
+  workspaceId: string;
+  code: string;
+  role: Membership["role"];
+  createdBy: string;
+  expiresAt: string;
+  redeemedAt: string | null;
+  redeemedBy: string | null;
+  createdAt: string;
+};
+
+const DEFAULT_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
+
 export class PgStore {
   readonly pool: Pool;
 
@@ -57,6 +71,8 @@ export class PgStore {
       await client.query(supabaseAuthSql);
       const rlsHardeningSql = await readFile(new URL("../migrations/005_rls_hardening.sql", import.meta.url), "utf8");
       await client.query(rlsHardeningSql);
+      const invitesSql = await readFile(new URL("../migrations/006_invites.sql", import.meta.url), "utf8");
+      await client.query(invitesSql);
     } finally {
       await client.query("SELECT pg_advisory_unlock(hashtext('crosscode_migrate'))");
       client.release();
@@ -97,6 +113,26 @@ export class PgStore {
     return { workspaceId, memberId };
   }
 
+  // Self-serve counterpart to provisionAdmin: callable by any authenticated Supabase user
+  // (no service-role key), so an agent can spin up a workspace just by opening a folder.
+  async createWorkspace(input: {
+    workspaceName: string;
+    userId: string;
+    actorId: string;
+  }): Promise<{ workspaceId: string; memberId: string }> {
+    const workspaceId = randomUUID();
+    const memberId = randomUUID();
+    await this.transaction(async (client) => {
+      await client.query("INSERT INTO workspaces (id, name) VALUES ($1, $2)", [workspaceId, input.workspaceName]);
+      await client.query(
+        "INSERT INTO members (id, workspace_id, user_id, actor_id, role) VALUES ($1, $2, $3, $4, 'owner')",
+        [memberId, workspaceId, input.userId, input.actorId]
+      );
+      await this.audit(client, workspaceId, memberId, null, "workspace.self_serve_created", {});
+    });
+    return { workspaceId, memberId };
+  }
+
   async addMember(input: {
     workspaceId: string;
     userId: string;
@@ -129,6 +165,82 @@ export class PgStore {
     const row = result.rows[0];
     if (!row) throw new StoreUnauthorizedError("Membership is not available");
     return { memberId: row.id, userId, actorId: row.actor_id, workspaceId, role: row.role };
+  }
+
+  async createInvite(identity: Membership, input: { role?: Invite["role"]; ttlMs?: number }): Promise<Invite> {
+    if (identity.role !== "owner") throw new StoreUnauthorizedError("Only workspace owners can create invites");
+    const role = input.role ?? "member";
+    if (role === "owner") throw new StoreUnauthorizedError("Invites cannot grant the owner role");
+    const id = randomUUID();
+    const expiresAt = new Date(Date.now() + (input.ttlMs ?? DEFAULT_INVITE_TTL_MS));
+    return this.transaction(async (client) => {
+      let row: InviteRow | undefined;
+      // Retry on the (astronomically unlikely) chance a freshly generated code collides
+      // with an existing one, rather than surfacing a conflict the caller can't act on.
+      for (let attempt = 0; attempt < 5 && !row; attempt += 1) {
+        try {
+          const inserted = await client.query<InviteRow>(
+            `INSERT INTO invites (id, workspace_id, code, role, created_by, expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             RETURNING id, workspace_id, code, role, created_by, expires_at, redeemed_at, redeemed_by, created_at`,
+            [id, identity.workspaceId, generateInviteCode(), role, identity.memberId, expiresAt]
+          );
+          row = inserted.rows[0];
+        } catch (error) {
+          if (!isUniqueViolation(error) || attempt === 4) throw error;
+        }
+      }
+      await this.audit(client, identity.workspaceId, identity.memberId, null, "invite.created", { inviteId: id });
+      return mapInvite(row!);
+    });
+  }
+
+  async listInvites(identity: Membership): Promise<Invite[]> {
+    if (identity.role !== "owner") throw new StoreUnauthorizedError("Only workspace owners can list invites");
+    const result = await this.pool.query<InviteRow>(
+      `SELECT id, workspace_id, code, role, created_by, expires_at, redeemed_at, redeemed_by, created_at
+         FROM invites
+        WHERE workspace_id = $1
+        ORDER BY created_at DESC`,
+      [identity.workspaceId]
+    );
+    return result.rows.map(mapInvite);
+  }
+
+  async revokeInvite(identity: Membership, inviteId: string): Promise<void> {
+    if (identity.role !== "owner") throw new StoreUnauthorizedError("Only workspace owners can revoke invites");
+    const result = await this.pool.query(
+      `DELETE FROM invites WHERE id = $1 AND workspace_id = $2 AND redeemed_at IS NULL RETURNING id`,
+      [inviteId, identity.workspaceId]
+    );
+    if (!result.rows[0]) throw new StoreConflictError("Invite is not available to revoke");
+  }
+
+  async redeemInvite(input: { code: string; userId: string; actorId: string }): Promise<{ workspaceId: string; memberId: string; role: Invite["role"] }> {
+    return this.transaction(async (client) => {
+      const inviteResult = await client.query<InviteRow>(
+        `SELECT id, workspace_id, code, role, created_by, expires_at, redeemed_at, redeemed_by, created_at
+           FROM invites WHERE code = $1 FOR UPDATE`,
+        [input.code]
+      );
+      const invite = inviteResult.rows[0];
+      if (!invite) throw new StoreUnauthorizedError("Invite code is not valid");
+      if (invite.redeemed_at) throw new StoreConflictError("Invite has already been redeemed");
+      if (invite.expires_at.getTime() <= Date.now()) throw new StoreConflictError("Invite has expired");
+      const memberId = randomUUID();
+      try {
+        await client.query(
+          `INSERT INTO members (id, workspace_id, user_id, actor_id, role) VALUES ($1, $2, $3, $4, $5)`,
+          [memberId, invite.workspace_id, input.userId, input.actorId, invite.role]
+        );
+      } catch (error) {
+        if (isUniqueViolation(error)) throw new StoreConflictError("User is already a member of a workspace");
+        throw error;
+      }
+      await client.query(`UPDATE invites SET redeemed_at = now(), redeemed_by = $2 WHERE id = $1`, [invite.id, input.userId]);
+      await this.audit(client, invite.workspace_id, memberId, null, "invite.redeemed", { inviteId: invite.id });
+      return { workspaceId: invite.workspace_id, memberId, role: invite.role };
+    });
   }
 
   async registerReplica(userId: string, workspaceId: string, name: string): Promise<{ replicaId: string; createdAt: string }> {
@@ -614,6 +726,43 @@ function mapValidation(row: ValidationRow): RemoteValidation {
     validation: row.payload,
     createdAt: new Date(row.created_at).toISOString()
   };
+}
+
+type InviteRow = {
+  id: string;
+  workspace_id: string;
+  code: string;
+  role: Invite["role"];
+  created_by: string;
+  expires_at: Date;
+  redeemed_at: Date | null;
+  redeemed_by: string | null;
+  created_at: Date;
+};
+
+function mapInvite(row: InviteRow): Invite {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    code: row.code,
+    role: row.role,
+    createdBy: row.created_by,
+    expiresAt: new Date(row.expires_at).toISOString(),
+    redeemedAt: row.redeemed_at ? new Date(row.redeemed_at).toISOString() : null,
+    redeemedBy: row.redeemed_by,
+    createdAt: new Date(row.created_at).toISOString()
+  };
+}
+
+// No ambiguous characters (0/O, 1/I) so a human can read a code back over voice/chat
+// without transcription errors; 10 chars from a 32-symbol alphabet is ~50 bits of entropy.
+const INVITE_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+function generateInviteCode(): string {
+  const bytes = randomBytes(10);
+  let code = "";
+  for (const byte of bytes) code += INVITE_CODE_ALPHABET[byte % INVITE_CODE_ALPHABET.length];
+  return code;
 }
 
 function isUniqueViolation(error: unknown): boolean {

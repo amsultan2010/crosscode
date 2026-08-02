@@ -31,3 +31,15 @@ describe("crosscode run -- <tool>", () => {
     await expect(runCli(["run", "--"])).rejects.toThrow("Usage: crosscode run -- <command> [args]");
   });
 });
+
+describe("crosscode -- signup", () => {
+  it("rejects when neither email nor password is available and stdin is not a TTY", async () => {
+    await expect(runCli(["signup"])).rejects.toThrow("Usage: crosscode -- signup --email <email> --password <password>");
+  });
+});
+
+describe("crosscode join --invite", () => {
+  it("requires `crosscode init` before redeeming an invite", async () => {
+    await expect(runCli(["join", "--invite", "SOMECODE"])).rejects.toThrow("Run `crosscode init` before `crosscode join --invite`");
+  });
+});

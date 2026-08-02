@@ -3,11 +3,17 @@ import { createServer as createHttpsServer } from "node:https";
 import {
   claimIngestRequestSchema,
   claimIngestReceiptSchema,
+  createInviteRequestSchema,
+  createWorkspaceRequestSchema,
+  createWorkspaceResponseSchema,
   cursorQuerySchema,
   handoffIngestRequestSchema,
   handoffIngestReceiptSchema,
   intentIngestRequestSchema,
   intentIngestReceiptSchema,
+  inviteSchema,
+  listInvitesResponseSchema,
+  redeemInviteResponseSchema,
   registerReplicaRequestSchema,
   registerReplicaResponseSchema,
   serviceIngestReceiptSchema,
@@ -87,7 +93,50 @@ async function handleRequest(
     return;
   }
 
+  // These two routes are reachable by a freshly authenticated Supabase user who is not
+  // (yet) a member of any workspace, so they verify the bearer token only -- not the full
+  // authenticate() below, which requires an existing membership resolved via the
+  // WORKSPACE_HEADER.
+  if (method === "POST" && url.pathname === "/v1/workspaces") {
+    const { userId, email } = await verifyToken(request, options);
+    const body = createWorkspaceRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
+    const created = await options.store.createWorkspace({ workspaceName: body.name, userId, actorId: email ?? userId });
+    send(response, 201, createWorkspaceResponseSchema.parse(created));
+    return;
+  }
+
+  const redeemMatch = method === "POST" ? url.pathname.match(/^\/v1\/invites\/([^/]+)\/redeem$/) : null;
+  if (redeemMatch) {
+    const { userId, email } = await verifyToken(request, options);
+    const redeemed = await options.store.redeemInvite({ code: decodeURIComponent(redeemMatch[1]!), userId, actorId: email ?? userId });
+    send(response, 200, redeemInviteResponseSchema.parse(redeemed));
+    return;
+  }
+
   const identity = await authenticate(request, options);
+  if (method === "POST" && url.pathname === "/v1/invites") {
+    if (identity.role !== "owner") throw new HttpError(403, "Only workspace owners can create invites");
+    const body = createInviteRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
+    const invite = await options.store.createInvite(identity, { role: body.role, ttlMs: body.ttlSeconds ? body.ttlSeconds * 1_000 : undefined });
+    send(response, 201, inviteSchema.parse(invite));
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v1/invites") {
+    if (identity.role !== "owner") throw new HttpError(403, "Only workspace owners can list invites");
+    const invites = await options.store.listInvites(identity);
+    send(response, 200, listInvitesResponseSchema.parse({ invites }));
+    return;
+  }
+
+  const deleteInviteMatch = method === "DELETE" ? url.pathname.match(/^\/v1\/invites\/([^/]+)$/) : null;
+  if (deleteInviteMatch) {
+    if (identity.role !== "owner") throw new HttpError(403, "Only workspace owners can revoke invites");
+    await options.store.revokeInvite(identity, decodeURIComponent(deleteInviteMatch[1]!));
+    send(response, 200, { revoked: true });
+    return;
+  }
+
   if (method === "POST" && url.pathname === "/v1/replicas") {
     const body = registerReplicaRequestSchema.parse(
       await readJson(request, Math.min(options.bodyLimitBytes ?? 1_048_576, 16_384))
@@ -273,20 +322,27 @@ async function handleRequest(
   throw new HttpError(404, "Route not found");
 }
 
-async function authenticate(request: IncomingMessage, options: ServiceServerOptions): Promise<Membership> {
+// Verifies the bearer token only, without requiring an existing workspace membership --
+// for the self-serve routes (create workspace, redeem invite) that a brand-new Supabase
+// user must be able to call before they belong to any workspace.
+async function verifyToken(request: IncomingMessage, options: ServiceServerOptions): Promise<{ userId: string; email: string | undefined }> {
   const authorization = request.headers.authorization;
   if (!authorization?.startsWith("Bearer ")) throw new HttpError(401, "Authentication required");
+  try {
+    const claims = await verifySupabaseAccessToken(authorization.slice(7), options.jwks, options.supabaseUrl);
+    return { userId: claims.userId, email: claims.email };
+  } catch {
+    throw new HttpError(401, "Access token is invalid or expired");
+  }
+}
+
+async function authenticate(request: IncomingMessage, options: ServiceServerOptions): Promise<Membership> {
+  if (!request.headers.authorization?.startsWith("Bearer ")) throw new HttpError(401, "Authentication required");
   const workspaceId = request.headers[WORKSPACE_HEADER];
   if (typeof workspaceId !== "string" || workspaceId.length === 0) {
     throw new HttpError(400, `${WORKSPACE_HEADER} header is required`);
   }
-  let userId: string;
-  try {
-    const claims = await verifySupabaseAccessToken(authorization.slice(7), options.jwks, options.supabaseUrl);
-    userId = claims.userId;
-  } catch {
-    throw new HttpError(401, "Access token is invalid or expired");
-  }
+  const { userId } = await verifyToken(request, options);
   try {
     return await options.store.resolveMembership(userId, workspaceId);
   } catch (error) {
@@ -376,6 +432,8 @@ class FixedWindowRateLimiter {
 }
 
 function rateLimitRoute(method: string, pathname: string): string {
+  if (method === "POST" && /^\/v1\/invites\/[^/]+\/redeem$/.test(pathname)) return "POST /v1/invites/:code/redeem";
+  if (method === "DELETE" && /^\/v1\/invites\/[^/]+$/.test(pathname)) return "DELETE /v1/invites/:id";
   const route = `${method} ${pathname}`;
   return new Set([
     "GET /healthz",
@@ -392,7 +450,10 @@ function rateLimitRoute(method: string, pathname: string): string {
     "GET /v1/intents",
     "POST /v1/validations",
     "GET /v1/validations",
-    "GET /v1/presence"
+    "GET /v1/presence",
+    "POST /v1/workspaces",
+    "POST /v1/invites",
+    "GET /v1/invites"
   ]).has(route) ? route : "unknown";
 }
 

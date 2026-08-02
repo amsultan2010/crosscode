@@ -66,6 +66,53 @@ export async function login(directory: string, credentials: { email: string; pas
   return updated;
 }
 
+// Self-serve counterpart to login(): creates the Supabase Auth user via the anon key
+// (no service-role key involved) instead of signing in to an existing one. Supabase Auth
+// can be configured to require email confirmation, in which case signUp() returns a user
+// but no session -- surfaced here as an error telling the caller to confirm and log in.
+export async function signup(directory: string, credentials: { email: string; password: string; serviceUrl?: string }): Promise<DaemonConfig> {
+  const config = await readDaemonConfig(directory).catch(() => undefined);
+  if (!config) throw new Error("Run `crosscode init` before `crosscode -- signup`");
+  const serviceUrl = credentials.serviceUrl ?? config.service?.url;
+  if (!serviceUrl) throw new Error("A service URL is required to sign up; pass --service or run `crosscode join` first");
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase.auth.signUp({ email: credentials.email, password: credentials.password });
+  if (error || !data.session) {
+    throw new Error(`Supabase sign-up failed: ${error?.message ?? "no session returned (email confirmation may be required; confirm and run `crosscode -- login`)"}`);
+  }
+  // actorId must match what the service records as the member's actor_id, which for
+  // invite-redeemed and self-serve-created members is the account email (see
+  // apps/service/src/http.ts's use of the verified token's email claim).
+  const updated: DaemonConfig = { ...config, actorId: credentials.email, service: { url: serviceUrl, session: toStoredSession(data.session) } };
+  await writeDaemonConfig(directory, updated);
+  return updated;
+}
+
+// Redeems a workspace invite code against the coordination service and records the
+// resulting workspaceId locally, standing in for the workspaceId a `crosscode join
+// --workspace <id>` would otherwise require out-of-band.
+export async function redeemInvite(directory: string, code: string): Promise<DaemonConfig> {
+  const config = await readDaemonConfig(directory).catch(() => undefined);
+  if (!config) throw new Error("Run `crosscode init` before `crosscode join --invite`");
+  if (!config.service?.session) throw new Error("Run `crosscode -- login` or `crosscode -- signup` before `crosscode join --invite`");
+  const response = await fetch(new URL(`/v1/invites/${encodeURIComponent(code)}/redeem`, config.service.url), {
+    method: "POST",
+    headers: { authorization: `Bearer ${config.service.session.accessToken}`, "content-type": "application/json" },
+    body: JSON.stringify({}),
+    signal: AbortSignal.timeout(5_000)
+  });
+  const envelope = await response.json().catch(() => undefined) as
+    | { ok: true; data: { workspaceId: string; memberId: string; role: string } }
+    | { ok: false; error: string }
+    | undefined;
+  if (!response.ok || !envelope?.ok) {
+    throw new Error(envelope && !envelope.ok ? envelope.error : `Invite redemption failed with status ${response.status}`);
+  }
+  const updated: DaemonConfig = { ...config, workspaceId: envelope.data.workspaceId };
+  await writeDaemonConfig(directory, updated);
+  return updated;
+}
+
 export async function logout(directory: string): Promise<void> {
   const config = await readDaemonConfig(directory).catch(() => undefined);
   if (!config?.service?.session) return;

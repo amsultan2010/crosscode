@@ -168,6 +168,53 @@ export const registerReplicaResponseSchema = z.object({
 }).strict();
 export type RegisterReplicaResponse = z.infer<typeof registerReplicaResponseSchema>;
 
+export const createWorkspaceRequestSchema = z.object({
+  name: z.string().trim().min(1).max(200)
+}).strict();
+export type CreateWorkspaceRequest = z.infer<typeof createWorkspaceRequestSchema>;
+
+export const createWorkspaceResponseSchema = z.object({
+  workspaceId: z.string().min(1),
+  memberId: z.string().min(1)
+}).strict();
+export type CreateWorkspaceResponse = z.infer<typeof createWorkspaceResponseSchema>;
+
+// Invite roles exclude "owner": an invite link should never be able to mint another
+// workspace owner, only the member/viewer roles addMember already allows a non-owner to hold.
+export const inviteRoleSchema = z.enum(["member", "viewer"]);
+export type InviteRole = z.infer<typeof inviteRoleSchema>;
+
+export const createInviteRequestSchema = z.object({
+  role: inviteRoleSchema.optional(),
+  ttlSeconds: z.number().int().positive().max(30 * 24 * 60 * 60).optional()
+}).strict();
+export type CreateInviteRequest = z.infer<typeof createInviteRequestSchema>;
+
+export const inviteSchema = z.object({
+  id: z.string().min(1),
+  workspaceId: z.string().min(1),
+  code: z.string().min(1),
+  role: workspaceRoleSchema,
+  createdBy: z.string().min(1),
+  expiresAt: z.string().datetime(),
+  redeemedAt: z.string().datetime().nullable(),
+  redeemedBy: z.string().nullable(),
+  createdAt: z.string().datetime()
+}).strict();
+export type Invite = z.infer<typeof inviteSchema>;
+
+export const listInvitesResponseSchema = z.object({
+  invites: z.array(inviteSchema)
+}).strict();
+export type ListInvitesResponse = z.infer<typeof listInvitesResponseSchema>;
+
+export const redeemInviteResponseSchema = z.object({
+  workspaceId: z.string().min(1),
+  memberId: z.string().min(1),
+  role: workspaceRoleSchema
+}).strict();
+export type RedeemInviteResponse = z.infer<typeof redeemInviteResponseSchema>;
+
 export const serviceIngestRequestSchema = z.object({
   event: transactionCreatedEventSchema
 }).strict();
