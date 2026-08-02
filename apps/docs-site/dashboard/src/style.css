@@ -375,6 +375,12 @@ button[type="submit"]:disabled {
   background: var(--border);
 }
 
+.auth-oauth-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
 .auth-oauth-btn {
   display: flex;
   align-items: center;

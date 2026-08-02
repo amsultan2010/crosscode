@@ -45,13 +45,19 @@ export function renderSignIn(container: HTMLElement, onSignedIn: (justSignedUp: 
             <p id="auth-error" class="error" hidden></p>
           </form>
           <div class="auth-divider"><span>or</span></div>
-          <button type="button" id="auth-github" class="auth-oauth-btn">Continue with GitHub</button>
+          <div class="auth-oauth-group">
+            <button type="button" data-provider="google" class="auth-oauth-btn">Continue with Google</button>
+            <button type="button" data-provider="github" class="auth-oauth-btn">Continue with GitHub</button>
+          </div>
         </div>
       </div>
     `;
 
-    container.querySelector<HTMLButtonElement>("#auth-github")!.addEventListener("click", () => {
-      void getSupabaseClient().auth.signInWithOAuth({ provider: "github", options: { redirectTo: window.location.origin + window.location.pathname } });
+    container.querySelectorAll<HTMLButtonElement>(".auth-oauth-btn").forEach((button) => {
+      button.addEventListener("click", () => {
+        const provider = button.dataset.provider as "google" | "github";
+        void getSupabaseClient().auth.signInWithOAuth({ provider, options: { redirectTo: window.location.origin + window.location.pathname } });
+      });
     });
 
     container.querySelectorAll<HTMLButtonElement>(".auth-tabs button").forEach((tab) => {
