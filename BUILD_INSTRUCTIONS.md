@@ -28,13 +28,15 @@ A local-first coordination layer for people and coding agents working in separat
 
 **Daemon test flakiness — fixed (2026-08-01).** Root causes were: `DaemonClient`'s HTTP request timeout was a hardcoded 3s (too tight for a real daemon under load — also a latent production fragility, not just a test artifact — now 10s); vitest ran daemon-spawning integration/e2e tests with unbounded fork concurrency, so real child daemon processes starved each other for CPU (now capped at `maxForks: 4`); and the heaviest test cases in `process.test.ts`/`three-participant.e2e.test.ts` had tighter per-test timeouts than lighter cases in the same files — an inverted budget, not just contention — now rebalanced to match real cost.
 
-**Verification baseline:** TypeScript build passes; full vitest suite passes cleanly and repeatably (23 test files, 177 tests, 6 skipped pending `CROSSCODE_TEST_DATABASE_URL`); `pnpm audit --audit-level high` clean; docs-site builds; CLI/MCP manually smoke-tested.
+**Verification baseline:** TypeScript build passes; full vitest suite passes cleanly and repeatably (24 test files, 204 tests, 6 skipped pending `CROSSCODE_TEST_DATABASE_URL`); `pnpm audit --audit-level high` clean; docs-site (including the dashboard) builds; CLI/MCP manually smoke-tested.
+
+**Phases 8/9/10 v1 — implemented (2026-08-02).** Invite-by-code/link, self-serve workspace creation, the autonomy slider, a billing placeholder, and a web dashboard all landed together against the same hosted Supabase project this repo already used for dev. Detail and remaining gaps are under each phase below — none of the three is fully "done" against its original exit criteria yet, but each has a working v1.
 
 ## The plan
 
 Three initiatives, in this order. Each is a precondition for the next in practice (tiers need something to meter; the autonomy slider is most valuable once a hosted service makes teams easy to form).
 
-### Phase 8 — Hosted multi-tenant coordination service + frictionless team setup (NEXT)
+### Phase 8 — Hosted multi-tenant coordination service + frictionless team setup (v1 shipped)
 
 **Problem:** the multiplayer feature — the actual point of the product — currently requires a team to stand up their own Supabase project, run migrations, and have an admin run `service:provision` with a service-role key to invite each member by email. That's not frictionless, and it undercuts the "open a folder, invite your team" vision.
 
@@ -51,7 +53,9 @@ Three initiatives, in this order. Each is a precondition for the next in practic
 
 **Exit criteria:** a user opens a folder in their agent, a workspace exists with zero manual service setup, they generate an invite, a teammate joins from the dashboard with just an email, and both are coordinating through the same workspace within minutes.
 
-### Phase 9 — Autonomy slider (auto-apply vs. always-approve)
+**Shipped (v1):** self-serve `crosscode -- signup` (with an optional `--invite <code>`), invite create/list/revoke/redeem (CLI + `POST/GET /v1/invites`, `POST /v1/invites/:code/redeem`), self-serve `POST /v1/workspaces`, and a read-only web dashboard (`apps/docs-site/dashboard`, served at `/dashboard` on the same build/deploy as the marketing site) with sign-in, invite redemption, and live presence/tasks/claims/proposals/validation status over `/v1/stream`. All running against the same Supabase project this repo already used for dev — "hosted" here means the code path exists and works against a real project, not that a separate production deployment/ops setup has been stood up yet. Proposal accept/reject from the dashboard remains explicitly out of scope per Fundamental Rule 1, as planned.
+
+### Phase 9 — Autonomy slider (auto-apply vs. always-approve) (v1 shipped)
 
 **Problem:** today, every proposal requires an explicit `accept`. Some users want that; some want closer to real-time (Google-Docs-adjacent) sync and are fine trusting validation + semantic review to catch what a human eye would've caught.
 
@@ -65,7 +69,9 @@ Three initiatives, in this order. Each is a precondition for the next in practic
 
 **Exit criteria:** a workspace can configure its autonomy tier, tier 2/3 proposals materialize without a human calling `accept`, Fundamental Rule 4 is provably never bypassed regardless of tier, and switching tiers takes effect without restarting the daemon.
 
-### Phase 10 — Tiered pricing & billing
+**Shipped (v1):** `workspaces.autonomy_tier` (0/1/2), `GET/PUT /v1/workspace/autonomy` (owner-only to set), `crosscode workspace autonomy get|set` plus matching MCP tools, and the daemon's existing local `autoApplyRisk` mechanism extended to also honor the workspace's synced tier — refreshed on each sync cycle, no daemon restart required. Every auto-apply attempt still routes through the same unchanged `accept()` → `assertApplicable`/`assertChangeApplicable` gate, which is the sole enforcement point for Fundamental Rule 4; a dedicated regression test proves a critical-risk proposal is never auto-applied at tier 2. One known gap: tier ≥1 requiring semantic review enabled is currently enforced client-side in the daemon (against the committed `.crosscode/config.yaml`), not server-side in the `PUT` handler, because the service has no visibility into that git-committed file — worth revisiting once review policy has a service-side home.
+
+### Phase 10 — Tiered pricing & billing (placeholder v1 shipped)
 
 **Billing provider:** Stripe (account setup pending — not yet created).
 
@@ -90,6 +96,8 @@ Student tier requires real verification (e.g. SheerID or `.edu`-gated flow) to a
 **Design intent:** the free→paid wall should be hit naturally through wanting to collaborate — free tier should be good enough that a solo multi-agent user (see the solo-use decision above) likes it, and the first real friction point is inviting teammate #2 or wanting a conflict to auto-resolve, not an artificial cap.
 
 **Exit criteria:** Stripe account exists and is wired to workspace creation/upgrade; each tier's caps are enforced server-side (not just UI-hidden); student verification flow works; downgrade/cancellation doesn't destroy workspace data.
+
+**Shipped (v1, placeholder):** `workspaces.plan` (free/essential/pro/unlimited/student) plus unused-until-real-key `stripe_customer_id`/`stripe_subscription_id` columns, a `usage_counters` table metering semantic review calls/month, a `BillingProvider` interface with a `StubBillingProvider` (no real Stripe account exists yet, so no `stripe` package dependency was added), and `assertSeatCapAvailable`/`assertSemanticReviewCallAvailable`/`assertPlanAllowsAutonomyTier` enforcement helpers plus a read-only `crosscode billing status`. **Not yet done:** wiring those assert helpers into the actual invite-redeem/workspace-creation/autonomy-tier-set call sites (they exist and are unit-tested in isolation but aren't enforced end-to-end yet), and the Stripe account itself.
 
 ## Non-goals (still true)
 
