@@ -75,9 +75,11 @@ header.site-header .brand {
 
 header.site-header .brand::before {
   content: "";
-  width: 0.55rem;
-  height: 0.55rem;
+  width: 1.15rem;
+  height: 1.15rem;
   background: var(--fg);
+  -webkit-mask: url("/brand/logo.svg") center / contain no-repeat;
+  mask: url("/brand/logo.svg") center / contain no-repeat;
 }
 
 header.site-header a {

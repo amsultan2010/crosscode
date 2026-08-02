@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round">
+  <title>Crosscode</title>
+  <!-- front strand -->
+  <path d="M6 25 C13 25 19 7 26 7"/>
+  <!-- back strand, broken at the crossing so it passes behind -->
+  <path d="M6 7 C11 7 14 11.5 16.1 15.3"/>
+  <path d="M19.7 21.3 C21.6 24.4 24 25 26 25"/>
+</svg>

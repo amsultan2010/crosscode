@@ -163,6 +163,14 @@ function renderPage({ title, activeKey, bodyHtml, mdHref, mdSourceRel, nextHref,
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${title} · Crosscode</title>
+  <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml" />
+  <link rel="alternate icon" href="/brand/favicon-32.png" sizes="32x32" />
+  <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png" />
+  <meta property="og:site_name" content="Crosscode" />
+  <meta property="og:title" content="${title} · Crosscode" />
+  <meta property="og:image" content="/brand/logo-social.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:image" content="/brand/logo-social.png" />
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
