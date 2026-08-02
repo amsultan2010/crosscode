@@ -5,7 +5,7 @@ import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
 import { DaemonClient } from "../../daemon/src/client.js";
-import { login, logout, readDaemonConfig, redeemInvite, signup, writeDaemonConfig } from "../../daemon/src/runtime.js";
+import { login, logout, readDaemonConfig, redeemInvite, redeemPairingCode, signup, writeDaemonConfig } from "../../daemon/src/runtime.js";
 import { PgStore } from "../../service/src/store.js";
 import { getWorkspaceBillingStatus } from "../../service/src/billing.js";
 
@@ -90,17 +90,27 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
   program
     .command("join")
     .description("join a workspace")
-    .argument("[workspaceId]", "workspace id (or use --workspace / --invite)")
+    .argument("[workspaceId]", "workspace id (or use --workspace / --invite / --pair)")
     .option("--workspace <id>", "workspace id")
     .option("--invite <code>", "invite code (alternative to --workspace)")
-    .action(async (positional: string | undefined, options: { workspace?: string; invite?: string }) => {
+    .option("--pair <code>", "one-time pairing code from the dashboard (XXXX-XXXX); no login required")
+    .option("--service <url>", "service URL, when pairing before any login")
+    .option("--replica-name <name>", "name to register this machine under when pairing")
+    .action(async (positional: string | undefined, options: { workspace?: string; invite?: string; pair?: string; service?: string; replicaName?: string }) => {
+      if (options.pair) {
+        const paired = await redeemPairingCode(directory, options.pair, { serviceUrl: options.service, replicaName: options.replicaName });
+        // Never echo the workspace token: it is a bearer credential, and it is already
+        // persisted to the 0600 config file the daemon reads.
+        result = { value: { workspaceId: paired.workspaceId, replicaId: paired.replicaId, actorId: paired.actorId, paired: true } };
+        return;
+      }
       if (options.invite) {
         result = { value: await redeemInvite(directory, options.invite) };
         return;
       }
       const settings = await readDaemonConfig(directory);
       const workspaceId = options.workspace ?? positional;
-      if (!workspaceId) throw new CliError("USAGE_ERROR", "Usage: crosscode join --workspace <workspaceId> | --invite <code> (run `crosscode -- login` first)");
+      if (!workspaceId) throw new CliError("USAGE_ERROR", "Usage: crosscode join --workspace <workspaceId> | --invite <code> | --pair <code> (run `crosscode -- login` first)");
       const updated = { ...settings, workspaceId };
       await writeDaemonConfig(directory, updated);
       result = { value: updated };

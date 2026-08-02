@@ -250,6 +250,63 @@ export const setWorkspaceAutonomyRequestSchema = z.object({
 }).strict();
 export type SetWorkspaceAutonomyRequest = z.infer<typeof setWorkspaceAutonomyRequestSchema>;
 
+// Pairing (docs/onboarding-contracts.md, Contract A). The dashboard mints a code, the
+// user hands it to their coding agent, and the daemon redeems it unauthenticated -- the
+// code itself is the credential, so it is short-lived (15 minutes), single-use, and only
+// ever stored server-side as a SHA-256 hash.
+export const PAIRING_CODE_TTL_MS = 15 * 60 * 1_000;
+// Crockford base32 minus the letters it deliberately excludes (I, L, O, U), so a code
+// read aloud or retyped from a screen cannot be transcribed into a different valid code.
+export const PAIRING_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+export const pairingCodeSchema = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/, "Pairing codes look like XXXX-XXXX");
+export type PairingCode = z.infer<typeof pairingCodeSchema>;
+
+export const createPairingCodeResponseSchema = z.object({
+  code: pairingCodeSchema,
+  expiresAt: z.string().datetime(),
+  pairingId: z.string().min(1)
+}).strict();
+export type CreatePairingCodeResponse = z.infer<typeof createPairingCodeResponseSchema>;
+
+export const pairingStatusSchema = z.enum(["pending", "claimed", "expired"]);
+export type PairingStatus = z.infer<typeof pairingStatusSchema>;
+
+export const pairingStatusResponseSchema = z.object({
+  status: pairingStatusSchema,
+  claimedAt: z.string().datetime().nullable(),
+  replicaId: z.string().min(1).nullable(),
+  actorId: z.string().min(1).nullable()
+}).strict();
+export type PairingStatusResponse = z.infer<typeof pairingStatusResponseSchema>;
+
+export const claimPairingCodeRequestSchema = z.object({
+  code: pairingCodeSchema,
+  actorId: z.string().min(1).max(200),
+  replicaName: z.string().min(1).max(200),
+  repoRoot: z.string().min(1).max(4_096),
+  // Reported so the projects workstream can upsert a project from it; normalization and
+  // the resulting projectId are entirely on that side of the seam (see Contract B).
+  repoRemote: z.string().min(1).max(2_048).nullable()
+}).strict();
+export type ClaimPairingCodeRequest = z.infer<typeof claimPairingCodeRequestSchema>;
+
+export const claimPairingCodeResponseSchema = z.object({
+  workspaceId: z.string().min(1),
+  replicaId: z.string().min(1),
+  token: z.string().min(1),
+  // Always null until the projects workstream extends the claim handler; the field is
+  // declared now so the response shape never changes shape underneath a client.
+  projectId: z.string().min(1).nullable()
+}).strict();
+export type ClaimPairingCodeResponse = z.infer<typeof claimPairingCodeResponseSchema>;
+
+// Workspace service tokens: opaque, 32 random bytes base64url, scoped to one workspace.
+// The service's bearer auth accepts either a Supabase JWT or one of these; the prefix is
+// what lets it tell them apart before attempting (and failing) a JWT verification.
+export const WORKSPACE_TOKEN_PREFIX = "ccw_";
+export const workspaceTokenSchema = z.string().startsWith(WORKSPACE_TOKEN_PREFIX).min(WORKSPACE_TOKEN_PREFIX.length + 1);
+export type WorkspaceToken = z.infer<typeof workspaceTokenSchema>;
+
 export const serviceIngestRequestSchema = z.object({
   event: transactionCreatedEventSchema
 }).strict();
@@ -510,7 +567,11 @@ export const daemonServiceConfigSchema = z.object({
     accessToken: z.string().min(1),
     refreshToken: z.string().min(1),
     expiresAt: z.string().datetime()
-  }).strict().optional()
+  }).strict().optional(),
+  // Set by `crosscode join --pair <code>`: a workspace-scoped service token standing in
+  // for a Supabase session, so a paired install can reach the daemon ingest/read surface
+  // without the terminal ever holding credentials that can act as the user.
+  workspaceToken: workspaceTokenSchema.optional()
 }).strict();
 export type DaemonServiceConfig = z.infer<typeof daemonServiceConfigSchema>;
 
