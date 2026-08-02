@@ -2,8 +2,9 @@
 
 ## Authentication
 
-Workspace members authenticate directly against Supabase Auth (email +
-password, `crosscode -- login`); the daemon stores the resulting Supabase
+Workspace members authenticate directly against Supabase Auth — `crosscode
+login` (loopback browser callback) or `crosscode login --email/--password`
+(headless); the daemon stores the resulting Supabase
 session (short-lived access token plus a longer-lived refresh token) rather
 than a Crosscode-issued credential. The coordination service verifies each
 request's access token against Supabase's own signing key
@@ -33,6 +34,44 @@ server-side for that `(userId, workspaceId)` pair on every request
 than waiting for its token to expire. POST bodies also carry their own
 `event.workspaceId`, which is checked against the header for a redundant
 principal-binding match.
+
+## Sign-in threat model
+
+The browser sign-in path exists so a human does not have to type a password
+into a terminal. It moves a live Supabase session from a web page into a local
+process, which is exactly the shape that OAuth loopback redirects have to get
+right, so the same defenses apply.
+
+- **Loopback-only binding.** The callback server binds `127.0.0.1` on an
+  ephemeral port — never `0.0.0.0`, never a fixed port. Nothing off the machine
+  can reach it, and nothing can squat the port in advance.
+- **The `state` parameter.** The CLI generates a 32-character random `state`,
+  puts it in the URL it opens, and requires the callback body to echo it back.
+  A callback with a missing or mismatched `state` is rejected with
+  `LOGIN_STATE_MISMATCH` and the session is discarded. This is what stops
+  another local process (or a stray browser tab, or a page the user was
+  tricked into opening) from POSTing an attacker-chosen session into a CLI
+  that happens to be waiting.
+- **Bounded lifetime.** The server accepts exactly one callback and shuts down;
+  if none arrives within 300 seconds the command fails with `LOGIN_TIMEOUT`
+  rather than leaving a listener open. The permissive CORS headers on
+  `/callback` (`Access-Control-Allow-Origin: *`) exist only so the site's fetch
+  succeeds — they widen who may *send* to the endpoint, which is precisely why
+  `state` and not origin is the thing being trusted.
+- **Tokens are never printed.** Neither the access token nor the refresh token
+  is written to stdout, in `--json` mode or out of it. `crosscode login --json`
+  emits only `{"value":{"userId":"…","email":"…"}}`. This keeps credentials out
+  of terminal scrollback, CI logs, and any agent transcript that captures
+  command output. For the same reason there is no `CROSSCODE_TOKEN`
+  environment variable to set or leak.
+- **The session lands in a mode-`0600` file.** Both login paths persist through
+  the same daemon config writer to `<git-dir>/crosscode/config.json`, owner
+  read/write only, outside versioned files — with the refresh token preferring
+  the OS keychain where one exists (see below). The browser path introduces no
+  new storage location and no new credential type.
+- **Headless is not a downgrade path.** `--email/--password` signs in against
+  Supabase directly with no loopback server and no `state` involved, so agents
+  and CI never exercise the browser surface at all.
 
 ## Provisioning and replica self-registration
 
@@ -123,6 +162,13 @@ today's always-explicit-accept behavior completely unchanged.
 
 Trust boundaries:
 
+- **Website ↔ CLI:** the only thing the site ever hands the CLI is a Supabase
+  session, over the loopback callback described above, guarded by `state`. The
+  site holds no workspace state, issues no Crosscode-specific credential, and
+  cannot reach a daemon. There is no browser surface that reads or writes
+  coordination data at all, so a compromised web page's blast radius stops at
+  "can attempt to deliver a session to a login that is already waiting" — which
+  is what `state` is there to reject.
 - **Daemon ↔ local filesystem:** fully trusted. The daemon reads and writes the
   checkout it manages directly; there is no sandboxing between the daemon
   process and the repository it watches.

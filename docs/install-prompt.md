@@ -66,14 +66,14 @@ other checkouts of this same repository. Do the following:
   prompt in a second project reuses the same installation instead of re-cloning.
 - Nothing here requires `pnpm build` — the MCP server and daemon both run directly
   from TypeScript source via `tsx`, so `pnpm install` is the only setup step.
-- Joining an existing team workspace (so proposals from other people/agents show
-  up) isn't wired into this prompt yet — that needs `CROSSCODE_SERVICE_URL` set in
-  the MCP server's `env` block plus a prior `crosscode -- login` (Supabase Auth
-  email+password sign-in) in the worktree, which requires a running coordination
-  service and an administrator-provisioned Supabase user (`pnpm
-  service:provision`, see README.md). The daemon-side support for this already
-  exists (`apps/mcp-server/src/bootstrap.ts` reads `CROSSCODE_SERVICE_URL` and
-  checks for a logged-in session); only the hosted signup/billing flow that
-  provisions new users without a manual admin step is still pending (see
-  BUILD_INSTRUCTIONS.md and the project's near-term plan for the hosted service
-  and billing).
+- Joining an existing workspace (so proposals from other people/agents show up)
+  isn't wired into this prompt yet. It needs `CROSSCODE_SERVICE_URL` set in the
+  MCP server's `env` block plus, in the worktree, either a prior sign-in
+  (`crosscode login --email <e> --password <p>` — the headless path, since an
+  agent has no browser) or a one-time pairing code (`crosscode join --pair
+  <code>`, which needs no login at all). The daemon-side support already exists
+  (`apps/mcp-server/src/bootstrap.ts` reads `CROSSCODE_SERVICE_URL` and checks
+  for a logged-in session).
+- Nothing here opens a web page, and nothing here needs one. Account creation is
+  the only step that has a website form, and `crosscode signup --email <e>
+  --password <p>` covers it from a terminal.

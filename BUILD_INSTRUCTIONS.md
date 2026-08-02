@@ -6,6 +6,11 @@ This document is a living reference: **current status** and **the plan**. It is 
 
 A local-first coordination layer for people and coding agents working in separate checkouts of the same Git repo. A daemon watches filesystem/Git activity, captures edits as durable transactions, and exchanges them through a coordination service. Remote work always arrives as a reviewable proposal — never auto-written into a checkout — and Git remains the durable history/publishing layer. Full product framing: `README.md`. Agent-facing contract (capability ladder, trust model, CLI/MCP-first positioning): `AGENTS.md`.
 
+**Product-surface decision (2026-08-02): Crosscode is a CLI-first product.** The product surface is the daemon, the MCP server, and the CLI. The website is a landing page, sign-up/sign-in (including the `crosscode login` callback page), and the generated docs — nothing else lives behind auth. Two consequences, both deliberate:
+
+- **There is no web dashboard**, and no web UI for teams, invites, settings, onboarding, analytics, or a live feed. The multi-tenant backend is untouched: workspaces, memberships, invites, pairing codes, roles, RLS, presence, and billing all still exist in `apps/service` and in the SQL migrations. They are reached from the CLI and the HTTP API. "Deleted" applies to the browser UI, never to the service.
+- **There is no editor extension.** Editors and agents integrate through MCP, which is the one integration contract.
+
 **Product-scope decision (2026-08-01): Crosscode has no standalone solo use case.** The whole point is coordinating concurrent editors on a repo. One person running one agent alone has nothing to coordinate with, and shouldn't be the product's framing or free-tier target. The one legitimate non-team case is **one person running multiple concurrent agents** (e.g. Claude in one worktree, Codex in another, same repo) — that's still real multi-party coordination, just intra-person. Design free-tier/messaging around "coordinate concurrent editors, human or agent," not "useful even completely alone."
 
 **Fundamental rules** (unchanged, non-negotiable):
@@ -15,6 +20,59 @@ A local-first coordination layer for people and coding agents working in separat
 3. Every materialization re-checks the local base and creates a checkpoint first.
 4. High-risk/critical changes always require explicit approval regardless of any policy setting.
 
+## Architecture
+
+```text
+human / coding agent
+        |
+        |  CLI (`crosscode …`)      MCP tools (stdio)
+        v                            v
+per-worktree daemon --- SQLite events + outbox
+        |
+        | authenticated HTTP sync (Supabase JWT or ccw_ workspace token)
+        v
+coordination service --- Supabase-hosted PostgreSQL operations + audit log
+        |
+        v
+other daemons receive reviewable proposals
+```
+
+The website sits beside this, not inside it: it originates accounts (sign-up/sign-in/password reset) and hands a session back to the CLI over a loopback callback, then gets out of the way. Full design: `docs/architecture.md`.
+
+### Apps
+
+| App | What it is |
+| --- | --- |
+| `apps/daemon` | The per-worktree daemon — the sole local authority for capture, checkpoints, materialization, and sync (`pnpm daemon`). |
+| `apps/cli` | The local CLI over the daemon's loopback HTTP API, plus login/join/init (`pnpm crosscode <command>`). |
+| `apps/mcp-server` | The standards-compliant MCP server agents connect to; bootstraps the daemon on first connection (`pnpm mcp`). |
+| `apps/service` | The multi-tenant coordination service: Supabase-Postgres operations, auth, workspaces, memberships, invites, pairing codes, projects, billing, audit (`pnpm service`). No UI. |
+| `apps/docs-site` | The website: landing page, auth pages (sign-up, sign-in, password reset, `/auth/cli.html`), and the docs pages generated from the root `docs/*.md` (`pnpm docs:dev` / `docs:build`). |
+
+## Authentication — `crosscode login`
+
+This is a frozen contract. The CLI side and the site side are implemented against it independently and neither may renegotiate it.
+
+- `crosscode login` with no flags and a TTY present starts a loopback HTTP server on `127.0.0.1` on an ephemeral port with the route `/callback`, and generates a 32-character random `state`.
+- It opens the browser at `${WEB_URL}/auth/cli.html?port=<port>&state=<state>`, where `WEB_URL` comes from `--web <url>`, else `CROSSCODE_WEB_URL`, else the production default.
+- `/auth/cli.html` is a page on the marketing site. If the visitor is not signed in it renders the normal sign-in form. After a successful Supabase sign-in it POSTs JSON to `http://127.0.0.1:<port>/callback`:
+
+  ```jsonc
+  { "state": "<echoed state>",
+    "access_token": "…",
+    "refresh_token": "…",
+    "expires_at": 1754131200,   // unix seconds
+    "user": { "id": "…", "email": "…" } }
+  ```
+
+  then renders "You're signed in — return to your terminal."
+- The CLI's loopback server answers the CORS preflight so the fetch from the site succeeds: `OPTIONS /callback` → `Access-Control-Allow-Origin: *`, `Access-Control-Allow-Methods: POST, OPTIONS`, `Access-Control-Allow-Headers: content-type`.
+- A mismatched or missing `state` fails with the error code `LOGIN_STATE_MISMATCH`. No callback within 300 seconds fails with `LOGIN_TIMEOUT`, whose hint points at `--email`/`--password` or `--no-browser`.
+- `--no-browser` prints the URL instead of opening it. `--email <e> --password <p>` keeps the existing headless path, which is what agents and CI use. There is deliberately **no** `CROSSCODE_TOKEN` environment variable.
+- On success the session is persisted through the existing daemon config writer (the mode-`0600` `<git-dir>/crosscode/config.json`). Tokens are never printed to stdout and never appear in `--json` output. `crosscode login --json` emits `{"value":{"userId":"…","email":"…"}}`.
+
+Threat model for this flow — why loopback-only, why `state`, why nothing is printed — is in `docs/security.md`.
+
 ## Current status
 
 **Core coordination engine — complete and tested.** Per-worktree daemon (SQLite event log, hidden Git checkpoints, crash-safe materialization, Git-transition detection), a Supabase-Postgres-backed coordination service (authenticated sync, live WebSocket fan-out, audit log), deterministic conflict classification plus an AST-based TypeScript dependency graph, validation-gated publish, and a real (non-mock) AI semantic reviewer (`AgentDelegatedReviewer`, delegates to the workspace member's own connected MCP agent — no external AI provider). Auto-triggers at classification time, not just on demand. See `docs/architecture.md` for the full design and `README.md`'s "What works today" for the exact feature list.
@@ -23,14 +81,14 @@ A local-first coordination layer for people and coding agents working in separat
 
 - **CLI** rewritten on `commander`: proper `--help`, a `commands --json` machine-readable catalog, structured `{error: {code, message, hint}}` errors, JSON-first output preserved throughout. (`apps/cli`)
 - **MCP server** now self-describing: workflow-sequencing resources, tool descriptions that explain *when* to call each tool relative to others, a generated tool catalog as the single source of truth for `docs/mcp-clients.md`, and — closing a real gap found during review — MCP tools for the full proposal lifecycle (`accept_proposal`, `reject_proposal`, `publish_branch`, `diff_proposal`, `inspect_proposal`, `list_proposal_artifacts`) that previously only existed as CLI commands. An agent can now do the entire workflow through MCP alone, no shell access required. (`apps/mcp-server`)
-- **Docs site** now agent-crawlable: HTML pages generate from the root `docs/*.md` at build time (single source of truth, no more hand-transcribed drift), plus `llms.txt`/`llms-full.txt` and raw `.md` served directly. (`apps/docs-site`)
+- **Website** now agent-crawlable: HTML pages generate from the root `docs/*.md` at build time (single source of truth, no more hand-transcribed drift), plus `llms.txt`/`llms-full.txt` and raw `.md` served directly. (`apps/docs-site`)
 - **Root `AGENTS.md`** created as the file coding agents auto-load: capability ladder, MCP trust model, and the CLI/MCP-first workflow contract, moved out of this document.
 
 **Daemon test flakiness — fixed (2026-08-01).** Root causes were: `DaemonClient`'s HTTP request timeout was a hardcoded 3s (too tight for a real daemon under load — also a latent production fragility, not just a test artifact — now 10s); vitest ran daemon-spawning integration/e2e tests with unbounded fork concurrency, so real child daemon processes starved each other for CPU (now capped at `maxForks: 4`); and the heaviest test cases in `process.test.ts`/`three-participant.e2e.test.ts` had tighter per-test timeouts than lighter cases in the same files — an inverted budget, not just contention — now rebalanced to match real cost.
 
-**Verification baseline:** TypeScript build passes; full vitest suite passes cleanly and repeatably (24 test files, 204 tests, 6 skipped pending `CROSSCODE_TEST_DATABASE_URL`); `pnpm audit --audit-level high` clean; docs-site (including the dashboard) builds; CLI/MCP manually smoke-tested.
+**Verification baseline:** TypeScript build passes; full vitest suite passes cleanly and repeatably (24 test files, 204 tests, 6 skipped pending `CROSSCODE_TEST_DATABASE_URL`); `pnpm audit --audit-level high` clean; docs-site builds; CLI/MCP manually smoke-tested.
 
-**Phases 8/9/10 v1 — implemented (2026-08-02).** Invite-by-code/link, self-serve workspace creation, the autonomy slider, a billing placeholder, and a web dashboard all landed together against the same hosted Supabase project this repo already used for dev. Detail and remaining gaps are under each phase below — none of the three is fully "done" against its original exit criteria yet, but each has a working v1.
+**Phases 8/9/10 v1 — implemented (2026-08-02).** Invite-by-code/link, self-serve workspace creation, the autonomy slider, and a billing placeholder all landed together against the same hosted Supabase project this repo already used for dev. Detail and remaining gaps are under each phase below — none is fully "done" against its original exit criteria yet, but each has a working v1.
 
 ## The plan
 
@@ -45,18 +103,16 @@ Three initiatives, in this order. Each is a precondition for the next in practic
 **Scope:**
 - Crosscode runs one hosted, multi-tenant instance of the coordination service (you operate the Supabase project; teams no longer run their own).
 - Self-serve workspace creation: opening a folder and connecting an agent creates a workspace against the hosted service automatically — no `service:provision`/admin step for the common case. Self-hosting stays available for teams who want it.
-- Invite-by-code/link: a workspace owner generates a short-lived invite (from CLI/MCP, since that should be the frictionless path for someone already in their agent), a teammate redeems it either in the web dashboard (click to join, Supabase Auth handles account creation) or via `crosscode join --invite <code>`.
-- Web dashboard v1 (folds in the previously-separate "Phase 8 dashboard" plan): sign in, see live presence/tasks/claims/proposals/validation status for a workspace by subscribing to the existing `/v1/stream` WebSocket and reading existing REST endpoints — no new service-side read model needed. Redeem invites here. Task/claim/intent writes go through the same authenticated API the daemon already uses.
-- Dashboard analytics sections: the dashboard body is four sections — Overview, Projects, Coordination, and Validation &amp; safety — each with its own heading, stat row and panels. Every figure is derived client-side from that same snapshot plus `GET /v1/projects`; there are deliberately **no** server-side aggregation endpoints. Operations and replicas whose `project_id` is null group under an "Unassigned" card, and a failing `GET /v1/projects` degrades that one section without affecting the other three. Section roots carry frozen `data-tour` attributes (`overview`, `projects`, `coordination`, `validation`, `team-switcher`) that a first-run anchored spotlight tour (`apps/docs-site/dashboard/src/lib/tour.ts`) attaches to; the tour skips missing anchors, scrolls off-screen ones into view, survives resize, is dismissible at any point, and records completion as `onboarding_completed_at` in Supabase user metadata with a `localStorage` mirror so a failed metadata write never re-runs it.
-- **Explicitly deferred within this phase:** proposal accept/reject and anything that materializes changes into a participant's working tree stays daemon-only (a browser has no local filesystem access — this is Fundamental Rule 1). "Accept from the dashboard" needs a new remote-command channel (service → daemon) that doesn't exist yet; that's a distinct follow-up once read-only + invites + task management are proven.
+- Invite-by-code/link: a workspace owner generates a short-lived invite (`POST /v1/invites`), a teammate redeems it with `crosscode join --invite <code>` or `POST /v1/invites/:code/redeem`. There is no web redemption page — see the product-surface decision above.
+- Reading workspace state — presence, tasks, claims, proposals, validation — is `crosscode status --json`, the equivalent MCP tools, and the existing REST/`/v1/stream` endpoints. There is deliberately no browser read model and no server-side aggregation endpoint.
 
 **Real cost of this decision:** taking on hosting/ops/billing liability for other people's workspace metadata (proposals, diffs, task descriptions — not raw source unless proposals pass through) starting now, not deferred. Confirmed as the right tradeoff (2026-08-01) because it's what actually makes team setup frictionless — self-host-only doesn't solve the problem.
 
-**Exit criteria:** a user opens a folder in their agent, a workspace exists with zero manual service setup, they generate an invite, a teammate joins from the dashboard with just an email, and both are coordinating through the same workspace within minutes.
+**Exit criteria:** a user creates an account, a workspace exists with zero manual service setup, they generate an invite, a teammate redeems it with one command, and both are coordinating through the same workspace within minutes.
 
-**Shipped (v1):** self-serve `crosscode -- signup` (with an optional `--invite <code>`), invite create/list/revoke/redeem (CLI + `POST/GET /v1/invites`, `POST /v1/invites/:code/redeem`), self-serve `POST /v1/workspaces`, and a read-only web dashboard (`apps/docs-site/dashboard`, served at `/dashboard` on the same build/deploy as the marketing site) with sign-in, invite redemption, and live presence/tasks/claims/proposals/validation status over `/v1/stream`, organized into the four analytics sections described above and introduced by a first-run spotlight tour. All running against the same Supabase project this repo already used for dev — "hosted" here means the code path exists and works against a real project, not that a separate production deployment/ops setup has been stood up yet. Proposal accept/reject from the dashboard remains explicitly out of scope per Fundamental Rule 1, as planned.
+**Shipped (v1):** self-serve `crosscode signup` (with an optional `--invite <code>`), invite create/list/revoke (`POST/GET/DELETE /v1/invites`) and redeem (`crosscode join --invite`, `POST /v1/invites/:code/redeem`), and self-serve `POST /v1/workspaces`. All running against the same Supabase project this repo already used for dev — "hosted" here means the code path exists and works against a real project, not that a separate production deployment/ops setup has been stood up yet.
 
-**Onboarding rework (in flight, per [`docs/onboarding-contracts.md`](./docs/onboarding-contracts.md)).** The v1 dashboard put team creation first: a new account landed on two static onboarding slides plus a "copy the install prompt" step that verified nothing, then reached a dashboard whose only available action was the "Create workspace" form. That order is backwards — the first thing a new user should do is connect their MCP server and see it actually verified. `#/onboarding` is now: **welcome → connect MCP → verify → dashboard**. The connect step shows the install prompt *and* a freshly minted one-time pairing code (`POST /v1/pairing-codes`, Contract A) to hand to a coding agent; the verify step polls `GET /v1/pairing-codes/:pairingId` every 2s with a live status, an expiry countdown, and a "mint a new code" action once the 15-minute TTL lapses. Verification is blocking for the primary button but always skippable — skipping still lands on the dashboard. Because signup auto-provisions a personal workspace (Contract C), onboarding no longer needs a team to exist and never gates on creating one; "create a team" is an ordinary, optional post-onboarding action.
+**Onboarding (per [`docs/onboarding-contracts.md`](./docs/onboarding-contracts.md)).** Onboarding is the CLI: create an account on the site or with `crosscode signup`, `crosscode login`, `crosscode init`, `crosscode join`. Signup auto-provisions a personal workspace (Contract C), so nothing gates on creating a team. The pairing-code flow (Contract A) survives as a way to attach a checkout to a workspace without a login at all — mint with `POST /v1/pairing-codes`, redeem with `crosscode join --pair <code>`.
 
 ### Phase 9 — Autonomy slider (auto-apply vs. always-approve) (v1 shipped)
 
@@ -102,25 +158,22 @@ Student tier requires real verification (e.g. SheerID or `.edu`-gated flow) to a
 
 **Shipped (v1, placeholder):** `workspaces.plan` (free/essential/pro/unlimited/student) plus unused-until-real-key `stripe_customer_id`/`stripe_subscription_id` columns, a `usage_counters` table metering semantic review calls/month, a `BillingProvider` interface with a `StubBillingProvider` (no real Stripe account exists yet, so no `stripe` package dependency was added), and `assertSeatCapAvailable`/`assertSemanticReviewCallAvailable`/`assertPlanAllowsAutonomyTier` enforcement helpers plus a read-only `crosscode billing status`. **Not yet done:** wiring those assert helpers into the actual invite-redeem/workspace-creation/autonomy-tier-set call sites (they exist and are unit-tested in isolation but aren't enforced end-to-end yet), and the Stripe account itself.
 
-### Phase 11 — Onboarding: pair & verify before teams (backend v1 shipped)
+### Phase 11 — Pairing a checkout to an account (backend v1 shipped)
 
-**Problem:** a freshly signed-up account lands on two static onboarding slides and a
-"copy the install prompt" step that verifies nothing, then hits a dashboard whose only
-available action is "Create workspace". Nothing links a local MCP/daemon install to a
-cloud account, so the first thing a new user does is set up a team they don't have yet.
+**Problem:** nothing linked a local MCP/daemon install to a cloud account, so the first
+thing a new user did was set up a team they didn't have yet.
 
-**Shape:** signup auto-provisions a personal workspace, onboarding mints a one-time
-pairing code, the user hands it to their coding agent, and the dashboard polls until the
-daemon has claimed it — verified, not assumed. Explicit team creation becomes an ordinary
-post-onboarding action. The frozen cross-workstream contracts live in
-`docs/onboarding-contracts.md`.
+**Shape:** signup auto-provisions a personal workspace, and a one-time pairing code binds
+a local checkout to it — verified, not assumed. Explicit team creation is an ordinary
+later action, never a gate. The frozen contracts live in `docs/onboarding-contracts.md`.
 
 **Shipped (backend v1, Contracts A and C):**
 
 - `POST /v1/pairing-codes` (Supabase JWT + workspace header) → `{ code, expiresAt, pairingId }`.
   Codes are `XXXX-XXXX` Crockford base32, 15-minute TTL, single-use, stored only as a SHA-256 hash.
 - `GET /v1/pairing-codes/:pairingId` (Supabase JWT + workspace header) → `{ status, claimedAt, replicaId, actorId }`
-  where status is `pending | claimed | expired`. The dashboard polls this every 2s.
+  where status is `pending | claimed | expired`. Whoever minted the code polls this to
+  confirm the claim.
 - `POST /v1/pairing-codes/claim` — **unauthenticated**, the code is the credential. Returns
   `{ workspaceId, replicaId, token, projectId }`, where `token` is a `ccw_` workspace
   service token and `projectId` is null until the projects workstream populates it.
@@ -151,11 +204,11 @@ later" flow cannot live with.
 `pnpm test` and (with `CROSSCODE_TEST_DATABASE_URL` set) `pnpm test:postgres`, which now
 includes `apps/service/src/pairing.integration.test.ts`.
 
-**Not in this workstream:** projects (Contract B), the dashboard sections and spotlight
-tour (Contract D), and the onboarding UI itself.
+**Not in this workstream:** projects (Contract B), delivered separately as Phase 12.
+
 ### Phase 12 — Projects (repository entity) (backend shipped)
 
-Until now `workspaces` was the only container, so the dashboard had no way to attribute
+Until now `workspaces` was the only container, so there was no way to attribute
 activity to the repository it came from. A **project** is a repository inside a workspace,
 keyed by its normalized git remote when the checkout has one and by its absolute repo root
 otherwise (see Contract B in `docs/onboarding-contracts.md`).
@@ -193,7 +246,7 @@ replica that connects after the initial load would silently lose its attribution
 (`(workspace_id, repo_remote)` when a remote exists, `(workspace_id, repo_root)` when it
 does not — a plain `UNIQUE` would treat NULL remotes as distinct and allow unlimited
 duplicates), plus nullable `project_id` columns on `replicas` and `operations`. Backfill is
-deliberately skipped: NULL means "recorded before projects existed" and the dashboard groups
+deliberately skipped: NULL means "recorded before projects existed", and consumers group
 those under "Unassigned". `operations.project_id` is derived server-side from the sending
 replica, never from the client.
 
@@ -207,7 +260,8 @@ case-sensitive.
 - A new code editor/IDE, or a replacement Git host/implementation.
 - Character-by-character CRDT/OT live editing — proposals stay reviewable units, even at the most automatic autonomy tier.
 - Automatic force-push, rebase, reset, or commit on a user's active branch, ever.
-- The browser dashboard writing directly to a participant's filesystem (see Phase 8's deferred scope).
+- A web UI for coordination work. Materializing a change into a working tree requires local filesystem access, which a browser does not have (Fundamental Rule 1); accept/reject/publish are daemon-only, and the rest of the surface follows the CLI-first decision above.
+- An editor extension for any editor. MCP is the one integration contract.
 - Deep bespoke integrations with every commercial agent — MCP is the one contract.
 
 ## Where implementation detail lives

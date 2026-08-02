@@ -1,51 +1,49 @@
-# Onboarding & analytics rework — frozen contracts
+# Onboarding — frozen contracts
 
-Status: authoritative for the in-flight onboarding/analytics work. Four workstreams
-implement against the contracts below. **No workstream may change a contract in this
-document unilaterally** — if something here is unimplementable, stop and report rather
-than inventing a different shape, because three other workstreams are coding against it.
+Status: authoritative. These are the cross-component contracts for how a person or a
+coding agent gets from "no account" to "a checkout coordinating in a workspace."
+**No component may change a contract in this document unilaterally** — the CLI, the
+website's auth pages, and the coordination service are implemented against it
+independently, so a unilateral change breaks someone else. If something here is
+unimplementable, stop and report rather than inventing a different shape.
 
 ## Why this exists
 
-Today a freshly signed-up account lands on `#/onboarding` (two static slides plus a
-"copy the install prompt" step that verifies nothing), then hits the dashboard, where
-the only thing it can do is fill in the "Create workspace" form. That is backwards: the
-first thing a new user should do is connect their MCP server and see it actually
-verified; teams come later, and only as an option.
+Crosscode is CLI-first: there is no web dashboard, no web onboarding wizard, and no web
+UI for teams or invites. Onboarding is therefore a sequence of commands, and the only
+step with a browser in it is creating an account and signing in. That single browser
+step still has to hand a real Supabase session back to a local process, and a
+freshly-installed daemon still has to be attached to a workspace — those two seams are
+what the contracts below freeze.
 
-Two gaps make the desired order impossible today:
+The multi-tenant backend is untouched by the CLI-first decision. Workspaces,
+memberships, invites, pairing codes, roles, RLS, presence, and billing all still exist in
+`apps/service` and in the SQL migrations. They are reached from the CLI and the HTTP API.
 
-1. Nothing links a local MCP/daemon install to a cloud account. `apps/mcp-server/src/bootstrap.ts`
-   mints a random local `workspaceId`; the daemon only reaches the service after
-   `crosscode login` + `crosscode join`.
-2. There is no project/repository entity anywhere — not in `packages/protocol`, not in
-   the service store, not in the schema. Workspaces are the only container.
-
-So: signup auto-provisions a personal workspace (something to bind a pairing to),
-onboarding pairs and verifies against it, and explicit team creation moves to a
-post-onboarding action.
-
-## The new flow
+## The flow
 
 ```
-sign up
-  └─ service auto-provisions a personal workspace ("<name>'s workspace", owner)
-       └─ #/onboarding
-            1. welcome
-            2. connect MCP  — show install prompt + one-time pairing code
-            3. verify       — poll until the daemon claims the code; blocking but skippable
-            4. anchored spotlight tour over the live dashboard
-                 └─ #/dashboard  (projects + analytics sections visible)
-                      └─ "Create a team" is now an ordinary action, not a gate
+create an account
+  ├─ on the website's sign-up page, or
+  └─ crosscode signup --email <e> --password <p>
+       └─ service auto-provisions a personal workspace ("<name>'s workspace", owner)   [Contract C]
+            └─ crosscode login                                                          [Contract D]
+                 └─ crosscode init
+                      └─ crosscode join --workspace <id> | --invite <code> | --pair <code>   [Contract A]
+                           └─ daemon syncs; activity is attributed to a project        [Contract B]
 ```
+
+Nothing gates on creating a team. A personal workspace exists from the first
+authenticated request, and joining or creating a team is an ordinary later action.
 
 ## Contract A — pairing & verification
 
-A pairing code is a short-lived, single-use bearer secret. The dashboard mints one; the
-user's coding agent hands it to the daemon; the daemon redeems it **unauthenticated**
-(the code is the credential) and receives back a workspace-scoped service token. The
-claim endpoint never returns a Supabase user session — a terminal-side credential must
-not be able to act as the user.
+A pairing code is a short-lived, single-use bearer secret that attaches a local checkout
+to a workspace **without a login**. Whoever holds a session mints one; the user's coding
+agent hands it to the daemon; the daemon redeems it unauthenticated (the code is the
+credential) and receives back a workspace-scoped service token. The claim endpoint never
+returns a Supabase user session — a terminal-side credential must not be able to act as
+the user.
 
 Code format: `XXXX-XXXX`, Crockford base32, uppercase, from `crypto.randomBytes`. TTL 15
 minutes. Single-use. Store only a SHA-256 hash of the code, never the plaintext.
@@ -61,7 +59,8 @@ Mints a code for the caller's workspace. Owner or member.
 
 ### `GET /v1/pairing-codes/:pairingId` (Supabase JWT + workspace header)
 
-Dashboard polls this. Poll every 2s, give up after 15 min.
+Whoever minted the code polls this to confirm the claim. Poll every 2s, give up after 15
+min.
 
 ```jsonc
 { "status": "pending" | "claimed" | "expired",
@@ -84,13 +83,9 @@ that returns zero rows means already-claimed or expired — respond 410, never 2
 limit by IP: 10 attempts/minute, and treat unknown/expired codes identically so the
 endpoint is not an oracle.
 
-> **Ownership seam — read this before touching the claim handler.** `projectId` is
-> declared here so the response shape is final, but the pairing workstream must ship it
-> as a literal `null` and must not create a projects table, a `projects.ts`, or any
-> project upsert. The projects workstream owns populating it: it extends the existing
-> claim handler to upsert from `repoRoot`/`repoRemote` and return the real id. Both
-> workstreams edit `apps/service/src/http.ts`, so keeping the project logic entirely on
-> one side of this line is what keeps the merge mechanical.
+CLI side: `crosscode join --pair <code> [--service <url>] [--replica-name <name>]`. It
+needs no prior `crosscode init` and no login, and it persists the returned token into the
+mode-`0600` `<git-dir>/crosscode/config.json` without ever echoing it.
 
 ### Workspace service tokens
 
@@ -127,52 +122,75 @@ export type Project = {
   `(workspaceId, repoRoot)`; returns the `Project`. Idempotent.
 - `GET  /v1/projects/:id` → single `Project`, 404 outside the caller's workspace.
 
-`replicas` and `operations` each gain a nullable `project_id`, so the dashboard can
-attribute activity per project. Backfill is not required — null means "before projects
-existed" and the UI shows those under an "Unassigned" grouping.
+`replicas` and `operations` each carry a nullable `project_id`, so activity can be
+attributed per repository. Backfill is not required — null means "before projects
+existed" and consumers group those as "Unassigned".
 
 ## Contract C — auto-provisioned personal workspace
 
-`POST /v1/workspaces` stays as-is for explicit team creation. New behavior: the first
-authenticated request from a user with zero memberships auto-provisions a personal
-workspace and an owner membership, transactionally and idempotently (a unique partial
-index on `members(user_id) WHERE is_personal` prevents a double-provision under
-concurrent requests). `workspaces` gains `is_personal boolean NOT NULL DEFAULT false`.
+`POST /v1/workspaces` stays as-is for explicit team creation. The first authenticated
+request from a user with zero memberships auto-provisions a personal workspace and an
+owner membership, transactionally and idempotently (a unique partial index on
+`members(user_id) WHERE is_personal` prevents a double-provision under concurrent
+requests). `workspaces` carries `is_personal boolean NOT NULL DEFAULT false`.
 
-`GET /v1/memberships` therefore never returns an empty list for a valid user. The
-dashboard's `#no-team` empty state is consequently dead and is removed.
+`GET /v1/memberships` therefore never returns an empty list for a valid user. This is
+what lets onboarding skip team creation entirely: there is always something to join a
+checkout to.
 
-## Contract D — dashboard sections
+## Contract D — CLI browser login
 
-Frontend-only; computed client-side from the existing snapshot plus `GET /v1/projects`.
-No new aggregation endpoints. Four sections, each with its own heading, stat row, and
-panels:
+`crosscode login` is the one step with a browser in it. It is frozen: the CLI and the
+website's `/auth/cli.html` page are implemented against it independently and neither may
+renegotiate it.
 
-| Section | Contents |
-|---|---|
-| Overview | live presence, connected projects, total settled edits, plan/seat usage |
-| Projects | per-project cards: name, remote, last activity, edit count, active replicas |
-| Coordination | tasks, claims, handoffs, intents |
-| Validation & safety | pass rate, recent validation runs, risk mix from `transaction.safety.risk` |
+- `crosscode login` (no flags, TTY present) starts a loopback HTTP server on `127.0.0.1`
+  on an ephemeral port with the route `/callback`, and generates a 32-character random
+  `state`.
+- It opens the browser at `${WEB_URL}/auth/cli.html?port=<port>&state=<state>`, where
+  `WEB_URL` comes from `--web <url>`, else `CROSSCODE_WEB_URL`, else the production
+  default.
+- `/auth/cli.html` is a page on the marketing site. If the visitor is not signed in it
+  renders the normal sign-in form. After a successful Supabase sign-in it POSTs JSON to
+  `http://127.0.0.1:<port>/callback`:
 
-Each section root carries a stable `data-tour` attribute so the spotlight tour can anchor
-to it: `data-tour="overview" | "projects" | "coordination" | "validation" | "team-switcher"`.
-These attribute values are a contract between the dashboard and tour workstreams.
+  ```jsonc
+  { "state": "<echoed state>",
+    "access_token": "…",
+    "refresh_token": "…",
+    "expires_at": 1754131200,   // unix seconds
+    "user": { "id": "…", "email": "…" } }
+  ```
 
-Tour completion persists to Supabase user metadata as `onboarding_completed_at` (ISO
-string), with a `localStorage` mirror so a metadata write failure never re-runs the tour
-on every load.
+  then renders "You're signed in — return to your terminal."
+- The CLI's loopback server answers the CORS preflight so that fetch succeeds:
+  `OPTIONS /callback` → `Access-Control-Allow-Origin: *`,
+  `Access-Control-Allow-Methods: POST, OPTIONS`,
+  `Access-Control-Allow-Headers: content-type`.
+- Mismatched or missing `state` → error code `LOGIN_STATE_MISMATCH`. No callback within
+  300s → `LOGIN_TIMEOUT`, with a hint pointing at `--email`/`--password` or
+  `--no-browser`.
+- `--no-browser` prints the URL instead of opening it. `--email <e> --password <p>` keeps
+  the existing headless path, which is what agents and CI use. There is deliberately
+  **no** `CROSSCODE_TOKEN` environment variable.
+- On success the session is persisted through the existing daemon config writer (the
+  mode-`0600` `<git-dir>/crosscode/config.json`). Tokens are never printed to stdout and
+  never appear in `--json` output. `crosscode login --json` emits
+  `{"value":{"userId":"…","email":"…"}}`.
+
+Threat model — loopback-only binding, the role of `state`, why nothing is printed, and
+the 0600 file — is in [security.md](./security.md#sign-in-threat-model).
 
 ## Verification bar
 
 There is no `lint` or `typecheck` script in this repo. The real gates are:
 
-- `pnpm build` — root `tsc --noEmit` across the workspace, plus the VS Code extension build.
+- `pnpm build` — root `tsc --noEmit` across the workspace.
 - `pnpm test` — `vitest run --coverage`.
-- `pnpm docs:build` — required for any workstream touching `apps/docs-site` (the dashboard
-  lives at `apps/docs-site/dashboard`), since the root `tsc` does not cover it.
+- `pnpm docs:build` — required for anything touching `apps/docs-site`, since the root
+  `tsc` does not cover it.
 
-Every workstream leaves all applicable gates green and adds tests covering its own
-contract surface. Backend workstreams additionally prove their migration applies cleanly
-from an empty database via `pnpm service:migrate`; Postgres-backed integration tests run
-under `pnpm test:postgres` with `CROSSCODE_TEST_DATABASE_URL` set.
+Every change leaves all applicable gates green and adds tests covering its own contract
+surface. Backend changes additionally prove their migration applies cleanly from an empty
+database via `pnpm service:migrate`; Postgres-backed integration tests run under
+`pnpm test:postgres` with `CROSSCODE_TEST_DATABASE_URL` set.
