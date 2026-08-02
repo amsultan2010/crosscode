@@ -85,8 +85,8 @@ pnpm test</code></pre>
       <p>
         The coordination service verifies Supabase-issued JWTs and stores
         workspace/operation state in Supabase-hosted PostgreSQL. Create a
-        Supabase project (or use an existing one), then from its dashboard
-        collect the project URL, the <code>anon</code> public key, the
+        Supabase project (or use an existing one), then from its project
+        settings collect the project URL, the <code>anon</code> public key, the
         <code>service_role</code> key, and the pooled Postgres connection
         string (Project Settings &rarr; API / Database).
       </p>
@@ -134,15 +134,23 @@ pnpm service</code></pre>
 
       <h2>Sign in and enroll a replica</h2>
       <p>
-        Workspace and member provisioning is still an administrator-side command,
-        but it now creates or invites a Supabase Auth user by email
-        (<code>pnpm service:provision</code>, using
-        <code>SUPABASE_SERVICE_ROLE_KEY</code>) instead of writing a one-time
-        enrollment token.
+        Create an account at <a href="/auth/signup.html">/auth/signup.html</a> on
+        this site, then sign in from your terminal. <code>crosscode login</code>
+        opens a browser page that hands the session back to the CLI.
+        Administrators can still
+        create or invite a Supabase Auth user by email with
+        <code>pnpm service:provision</code> (using
+        <code>SUPABASE_SERVICE_ROLE_KEY</code>).
       </p>
       <pre><code>pnpm crosscode -- init --json
-pnpm crosscode -- login --email alice@example.com --password &lt;password&gt; --service http://127.0.0.1:8788
+pnpm crosscode -- login --service http://127.0.0.1:8788
 pnpm daemon</code></pre>
+
+      <p>
+        For a headless machine or an agent with no browser, pass credentials
+        directly instead:
+      </p>
+      <pre><code>pnpm crosscode -- login --email alice@example.com --password &lt;password&gt; --service http://127.0.0.1:8788</code></pre>
 
       <p>
         <code>login</code> authenticates directly against Supabase Auth and
@@ -193,7 +201,7 @@ pnpm crosscode -- validate --profile fast --json</code></pre>
         remote operations as proposals without changing files.
       </p>
 
-      <h2>Team validation configuration</h2>
+      <h2>Validation configuration</h2>
       <p>Validation commands and exclusions come only from committed <code>.crosscode/config.yaml</code> at <code>HEAD</code>:</p>
       <pre><code>version: 1
 validation:

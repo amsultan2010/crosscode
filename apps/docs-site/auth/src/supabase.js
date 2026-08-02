@@ -1,8 +1,8 @@
-import { createClient, type Session, type SupabaseClient } from "@supabase/supabase-js";
+import { createClient } from "@supabase/supabase-js";
 
-let client: SupabaseClient | undefined;
+let client;
 
-export function getSupabaseClient(): SupabaseClient {
+export function getSupabaseClient() {
   if (client) return client;
   const url = import.meta.env.VITE_SUPABASE_URL;
   const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -11,8 +11,4 @@ export function getSupabaseClient(): SupabaseClient {
   }
   client = createClient(url, anonKey);
   return client;
-}
-
-export function accessTokenFrom(session: Session | null): string | undefined {
-  return session?.access_token;
 }
