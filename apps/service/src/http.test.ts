@@ -268,6 +268,7 @@ describe("service HTTP boundary", () => {
 
   it("lists every workspace a user belongs to, for the dashboard's team switcher", async () => {
     const store = {
+      ensurePersonalWorkspace: async () => ({ workspaceId: "workspace-a", memberId: "m1", created: false }),
       listMembershipsForUser: async (userId: string) => {
         expect(userId).toBe("user-5");
         return [
@@ -289,6 +290,116 @@ describe("service HTTP boundary", () => {
         ]
       }
     });
+  });
+
+  it("mints and polls a pairing code, and claims it unauthenticated with a null projectId", async () => {
+    const { StoreGoneError } = await import("./store.js");
+    const pairingId = "3f1d5f1e-1e2b-4a7c-9f3d-2b6c7d8e9f01";
+    const store = {
+      resolveMembership: async () => membership,
+      createPairingCode: async () => ({ pairingId, code: "K4T9-2WQZ", expiresAt: "2026-08-01T12:15:00.000Z" }),
+      getPairingCodeStatus: async (_identity: Membership, id: string) => id === pairingId
+        ? { status: "pending" as const, claimedAt: null, replicaId: null, actorId: null }
+        : undefined,
+      claimPairingCode: async (input: { code: string }) => {
+        if (input.code !== "K4T9-2WQZ") throw new StoreGoneError("Pairing code is no longer available");
+        return { workspaceId: membership.workspaceId, replicaId: "replica-9", token: "ccw_opaque-token" };
+      }
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken(membership.userId);
+
+    const minted = await post(base, "/v1/pairing-codes", {}, accessToken, membership.workspaceId);
+    expect(minted.status).toBe(201);
+    expect(await minted.json()).toEqual({ ok: true, data: { code: "K4T9-2WQZ", expiresAt: "2026-08-01T12:15:00.000Z", pairingId } });
+
+    const polled = await fetch(`${base}/v1/pairing-codes/${pairingId}`, {
+      headers: { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId }
+    });
+    expect(await polled.json()).toEqual({ ok: true, data: { status: "pending", claimedAt: null, replicaId: null, actorId: null } });
+
+    const missing = await fetch(`${base}/v1/pairing-codes/1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f`, {
+      headers: { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId }
+    });
+    expect(missing.status).toBe(404);
+    const malformed = await fetch(`${base}/v1/pairing-codes/not-a-uuid`, {
+      headers: { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId }
+    });
+    expect(malformed.status).toBe(400);
+
+    // No authorization header at all: the code itself is the credential.
+    const claimed = await post(base, "/v1/pairing-codes/claim", {
+      code: "K4T9-2WQZ", actorId: "user@host", replicaName: "laptop", repoRoot: "/repo", repoRemote: null
+    });
+    expect(await claimed.json()).toEqual({
+      ok: true,
+      data: { workspaceId: membership.workspaceId, replicaId: "replica-9", token: "ccw_opaque-token", projectId: null }
+    });
+
+    const gone = await post(base, "/v1/pairing-codes/claim", {
+      code: "AAAA-BBBB", actorId: "user@host", replicaName: "laptop", repoRoot: "/repo", repoRemote: null
+    });
+    expect(gone.status).toBe(410);
+    expect((await post(base, "/v1/pairing-codes/claim", { code: "lowercase", actorId: "a", replicaName: "b", repoRoot: "/r", repoRemote: null })).status).toBe(400);
+  });
+
+  it("accepts a ccw_ workspace token on the daemon surface and refuses it on the user surface", async () => {
+    const { StoreUnauthorizedError } = await import("./store.js");
+    const store = {
+      resolveWorkspaceToken: async (token: string) => {
+        if (token !== "ccw_valid-token") throw new StoreUnauthorizedError("Workspace token is invalid or revoked");
+        return { ...membership, replicaId: "replica-9" };
+      },
+      listPresence: async () => [],
+      createPairingCode: async () => { throw new Error("unreachable: a workspace token must never mint a pairing code"); },
+      listMembershipsForUser: async () => { throw new Error("unreachable: a workspace token must never list memberships"); },
+      listInvites: async () => { throw new Error("unreachable: a workspace token must never list invites"); },
+      createWorkspace: async () => { throw new Error("unreachable: a workspace token must never create a workspace"); }
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const token = "ccw_valid-token";
+
+    // Accepted on the daemon read surface, and without the workspace header: the token
+    // already names its workspace.
+    const presence = await fetch(`${base}/v1/presence`, { headers: { authorization: `Bearer ${token}` } });
+    expect(await presence.json()).toEqual({ ok: true, data: { sessions: [] } });
+
+    const withHeader = await fetch(`${base}/v1/presence`, {
+      headers: { authorization: `Bearer ${token}`, [WORKSPACE_HEADER]: "workspace-2" }
+    });
+    expect(withHeader.status).toBe(403);
+
+    for (const path of ["/v1/memberships", "/v1/invites"]) {
+      expect((await fetch(`${base}${path}`, { headers: { authorization: `Bearer ${token}`, [WORKSPACE_HEADER]: membership.workspaceId } })).status).toBe(403);
+    }
+    expect((await post(base, "/v1/workspaces", { name: "acme" }, token)).status).toBe(403);
+    expect((await post(base, "/v1/pairing-codes", {}, token, membership.workspaceId)).status).toBe(403);
+    expect((await post(base, "/v1/invites", {}, token, membership.workspaceId)).status).toBe(403);
+    expect((await fetch(`${base}/v1/invites/invite-1`, { method: "DELETE", headers: { authorization: `Bearer ${token}`, [WORKSPACE_HEADER]: membership.workspaceId } })).status).toBe(403);
+    expect((await fetch(`${base}/v1/invites/CODE/redeem`, { method: "POST", headers: { authorization: `Bearer ${token}` } })).status).toBe(403);
+    expect((await fetch(`${base}/v1/presence`, { headers: { authorization: "Bearer ccw_revoked" } })).status).toBe(401);
+  });
+
+  it("auto-provisions a personal workspace before listing memberships", async () => {
+    const provisioned: string[] = [];
+    const store = {
+      ensurePersonalWorkspace: async (input: { userId: string; actorId: string }) => {
+        provisioned.push(input.actorId);
+        return { workspaceId: "workspace-personal", memberId: "member-personal", created: true };
+      },
+      listMembershipsForUser: async (userId: string) => [
+        { memberId: "member-personal", userId, actorId: "member@example.com", role: "owner" as const, workspaceId: "workspace-personal", workspaceName: "member@example.com's workspace" }
+      ]
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken("user-6");
+
+    const response = await fetch(`${base}/v1/memberships`, { headers: { authorization: `Bearer ${accessToken}` } });
+    expect(await response.json()).toEqual({
+      ok: true,
+      data: { memberships: [{ workspaceId: "workspace-personal", workspaceName: "member@example.com's workspace", role: "owner" }] }
+    });
+    expect(provisioned).toEqual(["member@example.com"]);
   });
 
   it("reports workspace billing status, converting an unlimited (Infinity) cap to null over JSON", async () => {

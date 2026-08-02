@@ -99,6 +99,58 @@ Student tier requires real verification (e.g. SheerID or `.edu`-gated flow) to a
 
 **Shipped (v1, placeholder):** `workspaces.plan` (free/essential/pro/unlimited/student) plus unused-until-real-key `stripe_customer_id`/`stripe_subscription_id` columns, a `usage_counters` table metering semantic review calls/month, a `BillingProvider` interface with a `StubBillingProvider` (no real Stripe account exists yet, so no `stripe` package dependency was added), and `assertSeatCapAvailable`/`assertSemanticReviewCallAvailable`/`assertPlanAllowsAutonomyTier` enforcement helpers plus a read-only `crosscode billing status`. **Not yet done:** wiring those assert helpers into the actual invite-redeem/workspace-creation/autonomy-tier-set call sites (they exist and are unit-tested in isolation but aren't enforced end-to-end yet), and the Stripe account itself.
 
+### Phase 11 — Onboarding: pair & verify before teams (backend v1 shipped)
+
+**Problem:** a freshly signed-up account lands on two static onboarding slides and a
+"copy the install prompt" step that verifies nothing, then hits a dashboard whose only
+available action is "Create workspace". Nothing links a local MCP/daemon install to a
+cloud account, so the first thing a new user does is set up a team they don't have yet.
+
+**Shape:** signup auto-provisions a personal workspace, onboarding mints a one-time
+pairing code, the user hands it to their coding agent, and the dashboard polls until the
+daemon has claimed it — verified, not assumed. Explicit team creation becomes an ordinary
+post-onboarding action. The frozen cross-workstream contracts live in
+`docs/onboarding-contracts.md`.
+
+**Shipped (backend v1, Contracts A and C):**
+
+- `POST /v1/pairing-codes` (Supabase JWT + workspace header) → `{ code, expiresAt, pairingId }`.
+  Codes are `XXXX-XXXX` Crockford base32, 15-minute TTL, single-use, stored only as a SHA-256 hash.
+- `GET /v1/pairing-codes/:pairingId` (Supabase JWT + workspace header) → `{ status, claimedAt, replicaId, actorId }`
+  where status is `pending | claimed | expired`. The dashboard polls this every 2s.
+- `POST /v1/pairing-codes/claim` — **unauthenticated**, the code is the credential. Returns
+  `{ workspaceId, replicaId, token, projectId }`, where `token` is a `ccw_` workspace
+  service token and `projectId` is null until the projects workstream populates it.
+  Claiming is a single atomic conditional UPDATE; already-claimed, expired, and unknown
+  codes all return an identical 410 so the endpoint is not an oracle. Rate limited to
+  10 attempts/minute/IP.
+- Workspace service tokens (`ccw_` + 32 random bytes base64url, SHA-256 hashed in
+  `workspace_tokens`): the bearer auth now accepts either a Supabase JWT or one of these.
+  A `ccw_` token resolves to its own workspace and reaches only the daemon ingest/read
+  surface — it is rejected on `/v1/workspaces`, `/v1/memberships`, `/v1/invites`, and
+  `/v1/pairing-codes`, so a terminal-side credential can never act as the user.
+- Contract C: `workspaces.is_personal` / `members.is_personal`, and a user with zero
+  memberships is auto-provisioned a personal workspace plus an owner membership on their
+  first `GET /v1/memberships`. A partial unique index on `members(user_id) WHERE is_personal`
+  makes that idempotent under concurrent requests, so the list is never empty.
+- `crosscode join --pair <code> [--service <url>] [--replica-name <name>]` redeems a code
+  from a local checkout and persists the returned workspace token into the 0600
+  `.git/crosscode/config.json`. It needs no prior `crosscode init` and no login; the daemon
+  uses that token for HTTP sync and falls back to polling (live sync over `/v1/stream`
+  still requires a Supabase session).
+
+Migration `009_pairing.sql` adds `pairing_codes` and `workspace_tokens`, and narrows
+`members.user_id` from globally UNIQUE to unique per workspace — the old constraint capped
+every account at one workspace for life, which Contract C's "personal workspace now, team
+later" flow cannot live with.
+
+**Verification:** `pnpm service:migrate` against an empty database, plus
+`pnpm test` and (with `CROSSCODE_TEST_DATABASE_URL` set) `pnpm test:postgres`, which now
+includes `apps/service/src/pairing.integration.test.ts`.
+
+**Not in this workstream:** projects (Contract B), the dashboard sections and spotlight
+tour (Contract D), and the onboarding UI itself.
+
 ## Non-goals (still true)
 
 - A new code editor/IDE, or a replacement Git host/implementation.

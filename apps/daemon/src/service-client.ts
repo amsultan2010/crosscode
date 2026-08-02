@@ -45,15 +45,22 @@ export type CoordinationServiceHooks = {
  * hold a reference to the same identity object observe the newly assigned id.
  */
 export class CoordinationServiceClient implements RemoteSyncTransport {
-  private session: StoredSession;
+  // Exactly one of these is set: a Supabase session (from `crosscode -- login`) or a
+  // `ccw_` workspace token (from `crosscode join --pair`). The workspace token covers the
+  // daemon ingest/read surface only and cannot be refreshed, so a 401 on it is terminal.
+  private session: StoredSession | undefined;
+  private readonly workspaceToken: string | undefined;
 
   constructor(
     private readonly identity: CoordinationServiceIdentity,
     private readonly service: NonNullable<DaemonConfig["service"]>,
     private readonly hooks: CoordinationServiceHooks = {}
   ) {
-    if (!service.session) throw new Error("Run 'crosscode -- login' before starting the daemon");
+    if (!service.session && !service.workspaceToken) {
+      throw new Error("Run 'crosscode -- login' or 'crosscode join --pair <code>' before starting the daemon");
+    }
     this.session = service.session;
+    this.workspaceToken = service.workspaceToken;
   }
 
   get replicaId(): string | undefined {
@@ -69,12 +76,16 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
     return response.replicaId;
   }
 
+  // The live-sync WebSocket authenticates with a Supabase access token only, so a
+  // pairing-only install has none to offer; runDaemonProcess skips live sync for it.
   async getValidAccessToken(): Promise<string> {
+    if (!this.session) throw new Error("Live sync requires a Supabase session; run 'crosscode -- login'");
     if (isExpiringSoon(this.session.expiresAt)) await this.refreshAccessToken();
     return this.session.accessToken;
   }
 
   async refreshAccessToken(): Promise<string> {
+    if (!this.session) throw new Error("Workspace tokens cannot be refreshed; run 'crosscode join --pair <code>' again");
     const supabase = getSupabaseClient();
     const { data, error } = await supabase.auth.refreshSession({ refresh_token: this.session.refreshToken });
     if (error || !data.session) throw new Error(`Supabase session refresh failed: ${error?.message ?? "no session returned"}; run 'crosscode -- login' again`);
@@ -210,13 +221,16 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
   }
 
   private async authorizedRequest(path: string, method: "GET" | "POST" | "PUT", body?: unknown): Promise<unknown> {
+    if (!this.session) {
+      return request(this.service.url, path, method, this.workspaceToken, body, true, this.identity.workspaceId);
+    }
     try {
       return await request(this.service.url, path, method, this.session.accessToken, body, true, this.identity.workspaceId);
     } catch (error) {
       if (error instanceof ServiceHttpError) {
         if (error.status !== 401) throw error;
         await this.refreshAccessToken();
-        return request(this.service.url, path, method, this.session.accessToken, body, true, this.identity.workspaceId);
+        return request(this.service.url, path, method, this.session!.accessToken, body, true, this.identity.workspaceId);
       }
       return request(this.service.url, path, method, this.session.accessToken, body, true, this.identity.workspaceId);
     }

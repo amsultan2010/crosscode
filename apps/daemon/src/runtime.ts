@@ -1,15 +1,23 @@
+import { execFile as execFileCallback } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { hostname } from "node:os";
 import { dirname, join } from "node:path";
+import { promisify } from "node:util";
 import type { FSWatcher } from "chokidar";
 import { AgentDelegatedReviewer } from "@crosscode/core";
 import { discoverRepository, resolveGitPath } from "@crosscode/git";
-import { daemonConfigSchema, daemonConnectionSchema, type DaemonConfig, type DaemonConnection, type PresenceUpdate } from "@crosscode/protocol";
+import {
+  claimPairingCodeRequestSchema, claimPairingCodeResponseSchema, daemonConfigSchema, daemonConnectionSchema,
+  type DaemonConfig, type DaemonConnection, type PresenceUpdate
+} from "@crosscode/protocol";
 import { startDaemon, type RunningDaemon } from "./index.js";
 import { CoordinationServiceClient, type CoordinationServiceIdentity } from "./service-client.js";
 import { LiveSyncClient } from "./ws-client.js";
 import { keychainAvailable, readSecret, storeSecret, deleteSecret } from "./keychain.js";
 import { getSupabaseClient, toStoredSession } from "./supabase-client.js";
+
+const execFile = promisify(execFileCallback);
 
 const KEYCHAIN_REFRESH_TOKEN_SENTINEL = "stored-in-os-keychain";
 
@@ -142,6 +150,67 @@ export async function redeemInvite(directory: string, code: string): Promise<Dae
   return updated;
 }
 
+/**
+ * Redeems a one-time pairing code minted by the dashboard (Contract A). Unauthenticated
+ * on purpose -- the code is the credential -- and what comes back is a workspace-scoped
+ * `ccw_` token, never a user session, so this path never puts credentials that can act as
+ * the user into a terminal. Works without a prior `crosscode init`: pairing is allowed to
+ * be the very first thing a fresh checkout does.
+ */
+export async function redeemPairingCode(
+  directory: string,
+  code: string,
+  options: { serviceUrl?: string; replicaName?: string; actorId?: string } = {}
+): Promise<DaemonConfig> {
+  const existing = await readDaemonConfig(directory).catch(() => undefined);
+  const serviceUrl = options.serviceUrl ?? existing?.service?.url;
+  if (!serviceUrl) throw new Error("A service URL is required to pair; pass --service <url>");
+  const repository = await discoverRepository(directory);
+  const actorId = options.actorId ?? existing?.actorId ?? `${process.env.USER ?? "local-user"}@${hostname()}`;
+  const request = claimPairingCodeRequestSchema.parse({
+    code: code.trim().toUpperCase(),
+    actorId,
+    replicaName: options.replicaName ?? hostname(),
+    repoRoot: repository.root,
+    repoRemote: await repoRemoteUrl(repository.root, repository.remotes)
+  });
+  const response = await fetch(new URL("/v1/pairing-codes/claim", serviceUrl), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request),
+    signal: AbortSignal.timeout(5_000)
+  });
+  const envelope = await response.json().catch(() => undefined) as
+    | { ok: true; data: unknown }
+    | { ok: false; error: string }
+    | undefined;
+  if (!response.ok || !envelope?.ok) {
+    // 410 is the one status worth translating: the service deliberately cannot say
+    // whether the code was already claimed, expired, or never existed.
+    if (response.status === 410) throw new Error("Pairing code is no longer valid; generate a new one from the dashboard");
+    throw new Error(envelope && !envelope.ok ? envelope.error : `Pairing failed with status ${response.status}`);
+  }
+  const claimed = claimPairingCodeResponseSchema.parse(envelope.data);
+  const updated: DaemonConfig = {
+    ...existing,
+    workspaceId: claimed.workspaceId,
+    replicaId: claimed.replicaId,
+    actorId,
+    service: { ...existing?.service, url: serviceUrl, workspaceToken: claimed.token }
+  };
+  await writeDaemonConfig(directory, updated);
+  return updated;
+}
+
+async function repoRemoteUrl(root: string, remotes: string[]): Promise<string | null> {
+  const remote = remotes.includes("origin") ? "origin" : remotes[0];
+  if (!remote) return null;
+  const url = await execFile("git", ["-C", root, "remote", "get-url", remote])
+    .then(({ stdout }) => stdout.trim())
+    .catch(() => "");
+  return url || null;
+}
+
 export async function logout(directory: string): Promise<void> {
   const config = await readDaemonConfig(directory).catch(() => undefined);
   if (!config?.service?.session) return;
@@ -270,7 +339,9 @@ export async function runDaemonProcess(
       void synchronize();
       syncTimer = setInterval(synchronize, options.syncPollMs ?? 1_000);
       syncTimer.unref();
-      if (options.liveSync ?? true) {
+      // Live sync subscribes with a Supabase access token; a pairing-only install has a
+      // workspace token instead, and falls back to the polling loop above.
+      if ((options.liveSync ?? true) && config.service.session) {
         liveSync = new LiveSyncClient(config, config.service, client, {
           onOperation: (operation) => {
             if (operation.workspaceId === config.workspaceId) void synchronize();

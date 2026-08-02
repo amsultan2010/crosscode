@@ -3,6 +3,10 @@ import { createServer as createHttpsServer } from "node:https";
 import {
   claimIngestRequestSchema,
   claimIngestReceiptSchema,
+  claimPairingCodeRequestSchema,
+  claimPairingCodeResponseSchema,
+  createPairingCodeResponseSchema,
+  pairingStatusResponseSchema,
   createInviteRequestSchema,
   createWorkspaceRequestSchema,
   createWorkspaceResponseSchema,
@@ -28,13 +32,14 @@ import {
   validationIngestReceiptSchema,
   workspaceAutonomyResponseSchema,
   EPOCH_CURSOR,
+  WORKSPACE_TOKEN_PREFIX,
   type RemoteOperation
 } from "@crosscode/protocol";
 import { contentHash, redactPath } from "@crosscode/core";
 import { ZodError } from "zod";
 import type { JWTVerifyGetKey } from "jose";
 import { verifySupabaseAccessToken } from "./auth.js";
-import { PgStore, StoreConflictError, StoreUnauthorizedError, type Membership, type StoredOperation } from "./store.js";
+import { PgStore, StoreConflictError, StoreGoneError, StoreUnauthorizedError, type Membership, type StoredOperation } from "./store.js";
 import { attachWebSocketGateway } from "./ws.js";
 import { getWorkspaceBillingStatus } from "./billing.js";
 
@@ -86,7 +91,9 @@ async function handleRequest(
   const url = new URL(request.url ?? "/", "http://service.local");
   const route = rateLimitRoute(method, url.pathname);
   const remote = request.socket.remoteAddress ?? "unknown";
-  const rate = route === "POST /v1/replicas" ? 10 : 300;
+  // Claiming is unauthenticated and single-use, so per-IP throttling is the only thing
+  // standing between an attacker and brute-forcing the 40-bit code space (Contract A).
+  const rate = route === "POST /v1/replicas" || route === "POST /v1/pairing-codes/claim" ? 10 : 300;
   if (!limiter.take(`${remote}:${route}`, rate)) {
     response.setHeader("retry-after", "60");
     sendError(response, 429, "Rate limit exceeded");
@@ -118,8 +125,30 @@ async function handleRequest(
     return;
   }
 
+  // Unauthenticated by design: the pairing code is itself the credential, and the
+  // response deliberately carries a workspace-scoped token rather than a user session, so
+  // a terminal-side credential can never act as the user (Contract A).
+  if (method === "POST" && url.pathname === "/v1/pairing-codes/claim") {
+    const body = claimPairingCodeRequestSchema.parse(
+      await readJson(request, Math.min(options.bodyLimitBytes ?? 1_048_576, 16_384))
+    );
+    const claimed = await options.store.claimPairingCode({
+      code: body.code, actorId: body.actorId, replicaName: body.replicaName
+    });
+    // projectId is a literal null here on purpose: the projects workstream owns deriving
+    // it from repoRoot/repoRemote and extends this handler. See the ownership seam in
+    // docs/onboarding-contracts.md -- do not add a project upsert on this side of it.
+    send(response, 200, claimPairingCodeResponseSchema.parse({ ...claimed, projectId: null }));
+    return;
+  }
+
   if (method === "GET" && url.pathname === "/v1/memberships") {
-    const { userId } = await verifyToken(request, options);
+    const { userId, email } = await verifyToken(request, options);
+    // Contract C: a valid user never sees an empty membership list. Provisioning here
+    // rather than at signup keeps it independent of how the account was created (dashboard
+    // OAuth, `crosscode -- signup`, or an admin), and the partial unique index behind
+    // ensurePersonalWorkspace() makes concurrent first requests converge on one workspace.
+    await options.store.ensurePersonalWorkspace({ userId, actorId: email ?? userId });
     const memberships = await options.store.listMembershipsForUser(userId);
     send(response, 200, listMembershipsResponseSchema.parse({
       memberships: memberships.map((m) => ({ workspaceId: m.workspaceId, workspaceName: m.workspaceName, role: m.role }))
@@ -128,7 +157,33 @@ async function handleRequest(
   }
 
   const identity = await authenticate(request, options);
+
+  // Contract A: a `ccw_` token grants only the daemon ingest/read surface. Team and
+  // pairing management stay behind a Supabase session, so a leaked terminal-side token
+  // cannot invite members or mint further pairing codes.
+  if (method === "POST" && url.pathname === "/v1/pairing-codes") {
+    assertSupabaseCredential(identity, "/v1/pairing-codes");
+    // Contract A scopes minting to owner or member: a viewer's paired daemon could not
+    // ingest anything anyway, so handing one a workspace token has no legitimate use.
+    if (identity.role === "viewer") throw new HttpError(403, "Viewer membership cannot pair a device");
+    const minted = await options.store.createPairingCode(identity);
+    send(response, 201, createPairingCodeResponseSchema.parse(minted));
+    return;
+  }
+
+  const pairingStatusMatch = method === "GET" ? url.pathname.match(/^\/v1\/pairing-codes\/([^/]+)$/) : null;
+  if (pairingStatusMatch) {
+    assertSupabaseCredential(identity, "/v1/pairing-codes");
+    const pairingId = decodeURIComponent(pairingStatusMatch[1]!);
+    if (!UUID_PATTERN.test(pairingId)) throw new HttpError(400, "pairingId must be a UUID");
+    const status = await options.store.getPairingCodeStatus(identity, pairingId);
+    if (!status) throw new HttpError(404, "Pairing code was not found");
+    send(response, 200, pairingStatusResponseSchema.parse(status));
+    return;
+  }
+
   if (method === "POST" && url.pathname === "/v1/invites") {
+    assertSupabaseCredential(identity, "/v1/invites");
     if (identity.role !== "owner") throw new HttpError(403, "Only workspace owners can create invites");
     const body = createInviteRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
     const invite = await options.store.createInvite(identity, { role: body.role, ttlMs: body.ttlSeconds ? body.ttlSeconds * 1_000 : undefined });
@@ -137,6 +192,7 @@ async function handleRequest(
   }
 
   if (method === "GET" && url.pathname === "/v1/invites") {
+    assertSupabaseCredential(identity, "/v1/invites");
     if (identity.role !== "owner") throw new HttpError(403, "Only workspace owners can list invites");
     const invites = await options.store.listInvites(identity);
     send(response, 200, listInvitesResponseSchema.parse({ invites }));
@@ -145,6 +201,7 @@ async function handleRequest(
 
   const deleteInviteMatch = method === "DELETE" ? url.pathname.match(/^\/v1\/invites\/([^/]+)$/) : null;
   if (deleteInviteMatch) {
+    assertSupabaseCredential(identity, "/v1/invites");
     if (identity.role !== "owner") throw new HttpError(403, "Only workspace owners can revoke invites");
     await options.store.revokeInvite(identity, decodeURIComponent(deleteInviteMatch[1]!));
     send(response, 200, { revoked: true });
@@ -360,29 +417,64 @@ async function handleRequest(
   throw new HttpError(404, "Route not found");
 }
 
-// Verifies the bearer token only, without requiring an existing workspace membership --
-// for the self-serve routes (create workspace, redeem invite) that a brand-new Supabase
-// user must be able to call before they belong to any workspace.
-async function verifyToken(request: IncomingMessage, options: ServiceServerOptions): Promise<{ userId: string; email: string | undefined }> {
+// An authenticated principal plus which kind of credential proved it. Routes that must
+// stay Supabase-only (team management, pairing) branch on `credential` rather than on the
+// raw header, so the check is impossible to skip by reading the token a second way.
+type Identity = Membership & { credential: "supabase" | "workspace-token" };
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function assertSupabaseCredential(identity: Identity, surface: string): void {
+  if (identity.credential !== "supabase") throw new HttpError(403, `Workspace tokens cannot access ${surface}`);
+}
+
+function bearerToken(request: IncomingMessage): string {
   const authorization = request.headers.authorization;
   if (!authorization?.startsWith("Bearer ")) throw new HttpError(401, "Authentication required");
+  return authorization.slice(7);
+}
+
+// Verifies the bearer token only, without requiring an existing workspace membership --
+// for the self-serve routes (create workspace, redeem invite, list memberships) that a
+// brand-new Supabase user must be able to call before they belong to any workspace. These
+// routes act as the user, so a workspace token is refused outright rather than verified.
+async function verifyToken(request: IncomingMessage, options: ServiceServerOptions): Promise<{ userId: string; email: string | undefined }> {
+  const token = bearerToken(request);
+  if (token.startsWith(WORKSPACE_TOKEN_PREFIX)) throw new HttpError(403, "Workspace tokens cannot act on behalf of a user");
   try {
-    const claims = await verifySupabaseAccessToken(authorization.slice(7), options.jwks, options.supabaseUrl);
+    const claims = await verifySupabaseAccessToken(token, options.jwks, options.supabaseUrl);
     return { userId: claims.userId, email: claims.email };
   } catch {
     throw new HttpError(401, "Access token is invalid or expired");
   }
 }
 
-async function authenticate(request: IncomingMessage, options: ServiceServerOptions): Promise<Membership> {
-  if (!request.headers.authorization?.startsWith("Bearer ")) throw new HttpError(401, "Authentication required");
+async function authenticate(request: IncomingMessage, options: ServiceServerOptions): Promise<Identity> {
+  const token = bearerToken(request);
+  // A workspace token already names its workspace, so it does not need (and is not
+  // trusted to supply) the workspace header; when one is sent it must agree.
+  if (token.startsWith(WORKSPACE_TOKEN_PREFIX)) {
+    let resolved;
+    try {
+      resolved = await options.store.resolveWorkspaceToken(token);
+    } catch (error) {
+      if (error instanceof StoreUnauthorizedError) throw new HttpError(401, error.message);
+      throw error;
+    }
+    const declared = request.headers[WORKSPACE_HEADER];
+    if (typeof declared === "string" && declared.length > 0 && declared !== resolved.workspaceId) {
+      throw new HttpError(403, "Workspace token is scoped to a different workspace");
+    }
+    const { replicaId: _replicaId, ...membership } = resolved;
+    return { ...membership, credential: "workspace-token" };
+  }
   const workspaceId = request.headers[WORKSPACE_HEADER];
   if (typeof workspaceId !== "string" || workspaceId.length === 0) {
     throw new HttpError(400, `${WORKSPACE_HEADER} header is required`);
   }
   const { userId } = await verifyToken(request, options);
   try {
-    return await options.store.resolveMembership(userId, workspaceId);
+    return { ...await options.store.resolveMembership(userId, workspaceId), credential: "supabase" };
   } catch (error) {
     if (error instanceof StoreUnauthorizedError) throw new HttpError(401, error.message);
     throw error;
@@ -472,6 +564,7 @@ class FixedWindowRateLimiter {
 function rateLimitRoute(method: string, pathname: string): string {
   if (method === "POST" && /^\/v1\/invites\/[^/]+\/redeem$/.test(pathname)) return "POST /v1/invites/:code/redeem";
   if (method === "DELETE" && /^\/v1\/invites\/[^/]+$/.test(pathname)) return "DELETE /v1/invites/:id";
+  if (method === "GET" && /^\/v1\/pairing-codes\/[^/]+$/.test(pathname)) return "GET /v1/pairing-codes/:pairingId";
   const route = `${method} ${pathname}`;
   return new Set([
     "GET /healthz",
@@ -494,6 +587,8 @@ function rateLimitRoute(method: string, pathname: string): string {
     "POST /v1/workspaces",
     "POST /v1/invites",
     "GET /v1/invites",
+    "POST /v1/pairing-codes",
+    "POST /v1/pairing-codes/claim",
     "GET /v1/workspace/autonomy",
     "PUT /v1/workspace/autonomy"
   ]).has(route) ? route : "unknown";
@@ -504,10 +599,14 @@ function statusFor(error: unknown): number {
   if (error instanceof ZodError) return 400;
   if (error instanceof StoreUnauthorizedError) return 401;
   if (error instanceof StoreConflictError) return 409;
+  // 410, not 404/409: a claimed, expired, or unknown pairing code are one indistinguishable
+  // outcome, so the endpoint cannot be used to probe which codes ever existed.
+  if (error instanceof StoreGoneError) return 410;
   return 500;
 }
 
 function messageFor(error: unknown): string {
+  if (error instanceof StoreGoneError) return error.message;
   if (error instanceof HttpError || error instanceof StoreUnauthorizedError || error instanceof StoreConflictError) {
     return error.message;
   }

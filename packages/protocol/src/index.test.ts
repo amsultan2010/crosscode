@@ -2,8 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   changeTransactionSchema,
   checkpointRequestSchema,
+  claimPairingCodeRequestSchema,
+  claimPairingCodeResponseSchema,
   claimRequestSchema,
   cursorQuerySchema,
+  pairingCodeSchema,
+  pairingStatusResponseSchema,
+  workspaceTokenSchema,
   cursorResponseSchema,
   daemonConfigSchema,
   daemonConnectionSchema,
@@ -160,5 +165,29 @@ describe("protocol schemas", () => {
     expect(() => wsSubscribeAckSchema.parse({ type: "subscribed", cursor: -1 })).toThrow();
     expect(wsErrorMessageSchema.parse({ type: "error", message: "not authorized" }).message).toBe("not authorized");
     expect(() => wsErrorMessageSchema.parse({ type: "error", message: "" })).toThrow();
+  });
+
+  it("constrains pairing codes, claim payloads, and workspace tokens", () => {
+    expect(pairingCodeSchema.parse("K4T9-2WQZ")).toBe("K4T9-2WQZ");
+    // Crockford base32 excludes I/L/O/U so a spoken code cannot be mistranscribed.
+    for (const invalid of ["k4t9-2wqz", "K4T92WQZ", "K4T9-2WQI", "K4TO-2WQZ", "K4T9-2WQZ-1"]) {
+      expect(() => pairingCodeSchema.parse(invalid)).toThrow();
+    }
+
+    const claim = { code: "K4T9-2WQZ", actorId: "user@host", replicaName: "laptop", repoRoot: "/abs/path", repoRemote: null };
+    expect(claimPairingCodeRequestSchema.parse(claim)).toEqual(claim);
+    expect(() => claimPairingCodeRequestSchema.parse({ ...claim, extra: true })).toThrow();
+    expect(() => claimPairingCodeRequestSchema.parse({ ...claim, repoRemote: undefined })).toThrow();
+
+    const claimed = { workspaceId: "w", replicaId: "r", token: "ccw_token", projectId: null };
+    expect(claimPairingCodeResponseSchema.parse(claimed)).toEqual(claimed);
+    expect(claimPairingCodeResponseSchema.parse({ ...claimed, projectId: "p" }).projectId).toBe("p");
+
+    const status = { status: "claimed" as const, claimedAt: "2026-08-01T12:00:00.000Z", replicaId: "r", actorId: "user@host" };
+    expect(pairingStatusResponseSchema.parse(status)).toEqual(status);
+    expect(() => pairingStatusResponseSchema.parse({ ...status, status: "unknown" })).toThrow();
+
+    expect(workspaceTokenSchema.parse("ccw_abc")).toBe("ccw_abc");
+    expect(() => workspaceTokenSchema.parse("eyJhbGciOi")).toThrow();
   });
 });

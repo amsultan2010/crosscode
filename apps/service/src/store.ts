@@ -1,15 +1,22 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type {
   ChangeTransaction, Claim, ClaimCreatedEvent, ClaimReleasedEvent, EventEnvelope, Handoff, HandoffRequestedEvent,
-  HandoffRespondedEvent, Intent, IntentPublishedEvent, RemoteClaim, RemoteHandoff, RemoteIntent, RemoteOperation,
+  HandoffRespondedEvent, Intent, IntentPublishedEvent, PairingStatus, RemoteClaim, RemoteHandoff, RemoteIntent, RemoteOperation,
   RemoteTask, RemoteValidation, Task, TaskCreatedEvent, TaskUpdatedEvent, TransactionCreatedEvent, Validation, ValidationCompletedEvent
 } from "@crosscode/protocol";
+import { PAIRING_CODE_ALPHABET, PAIRING_CODE_TTL_MS, WORKSPACE_TOKEN_PREFIX } from "@crosscode/protocol";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
 import { hashCanonicalPayload } from "./crypto.js";
 
 export class StoreConflictError extends Error {}
 export class StoreUnauthorizedError extends Error {}
+/**
+ * A single-use credential that is gone: already claimed, expired, or never existed. All
+ * three collapse into one error deliberately -- Contract A requires the claim endpoint
+ * not to be an oracle that tells an attacker whether a guessed code was ever real.
+ */
+export class StoreGoneError extends Error {}
 
 export type StoredOperation = RemoteOperation & {
   event: EventEnvelope;
@@ -43,6 +50,34 @@ export type Invite = {
   createdAt: string;
 };
 
+export type PairingCodeMint = {
+  pairingId: string;
+  /** The only time the plaintext code exists server-side; only its hash is persisted. */
+  code: string;
+  expiresAt: string;
+};
+
+export type PairingCodeStatus = {
+  status: PairingStatus;
+  claimedAt: string | null;
+  replicaId: string | null;
+  actorId: string | null;
+};
+
+export type PairingClaimResult = {
+  workspaceId: string;
+  replicaId: string;
+  /** Plaintext `ccw_` workspace token; likewise only ever persisted as a hash. */
+  token: string;
+};
+
+/**
+ * What a `ccw_` workspace token resolves to. It borrows the membership of whoever minted
+ * the pairing code it came from, so downstream authorization (role checks, replica
+ * ownership) is the same code path a Supabase-authenticated request takes.
+ */
+export type WorkspaceTokenIdentity = Membership & { replicaId: string | null };
+
 const DEFAULT_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 
 export class PgStore {
@@ -52,7 +87,25 @@ export class PgStore {
     this.pool = new Pool(typeof config === "string" ? safePoolConfig(config) : config);
   }
 
+  /**
+   * The advisory lock below serializes concurrent migrators, but it cannot serialize a
+   * migrator against unrelated in-flight DML: 004/005's DROP/CREATE POLICY needs ACCESS
+   * EXCLUSIVE on tables another pool may already hold ACCESS SHARE on, and the two can
+   * deadlock. Postgres kills one side, so retry the whole (idempotent) sequence when we
+   * are the victim rather than failing a run for a transient lock ordering.
+   */
   async migrate(): Promise<void> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await this.runMigrations();
+        return;
+      } catch (error) {
+        if (attempt >= 4 || !isDeadlock(error)) throw error;
+      }
+    }
+  }
+
+  private async runMigrations(): Promise<void> {
     // Migrations 004/005 DROP+CREATE RLS policies, which (unlike the IF NOT EXISTS
     // DDL in 001-003) is not safe to run concurrently: two connections racing to
     // DROP/CREATE the same policy on the same table can deadlock in Postgres. Every
@@ -77,6 +130,8 @@ export class PgStore {
       await client.query(autonomyPolicySql);
       const billingSql = await readFile(new URL("../migrations/008_billing.sql", import.meta.url), "utf8");
       await client.query(billingSql);
+      const pairingSql = await readFile(new URL("../migrations/009_pairing.sql", import.meta.url), "utf8");
+      await client.query(pairingSql);
     } finally {
       await client.query("SELECT pg_advisory_unlock(hashtext('crosscode_migrate'))");
       client.release();
@@ -261,6 +316,152 @@ export class PgStore {
       await this.audit(client, invite.workspace_id, memberId, null, "invite.redeemed", { inviteId: invite.id });
       return { workspaceId: invite.workspace_id, memberId, role: invite.role };
     });
+  }
+
+  /**
+   * Contract C: a user with zero memberships gets a personal workspace and an owner
+   * membership, transactionally and idempotently. The idempotency is enforced by
+   * 009_pairing.sql's partial unique index on members(user_id) WHERE is_personal rather
+   * than by a check-then-insert, so two concurrent first requests cannot both provision:
+   * the loser's INSERT raises a unique violation and it re-reads the winner's row.
+   */
+  async ensurePersonalWorkspace(input: { userId: string; actorId: string; workspaceName?: string }): Promise<{ workspaceId: string; memberId: string; created: boolean }> {
+    const existing = await this.findPersonalWorkspace(input.userId);
+    if (existing) return { ...existing, created: false };
+    const workspaceId = randomUUID();
+    const memberId = randomUUID();
+    try {
+      await this.transaction(async (client) => {
+        await client.query("INSERT INTO workspaces (id, name, is_personal) VALUES ($1, $2, true)", [
+          workspaceId, input.workspaceName ?? `${input.actorId}'s workspace`
+        ]);
+        await client.query(
+          "INSERT INTO members (id, workspace_id, user_id, actor_id, role, is_personal) VALUES ($1, $2, $3, $4, 'owner', true)",
+          [memberId, workspaceId, input.userId, input.actorId]
+        );
+        await this.audit(client, workspaceId, memberId, null, "workspace.personal_provisioned", {});
+      });
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+      const winner = await this.findPersonalWorkspace(input.userId);
+      if (!winner) throw error;
+      return { ...winner, created: false };
+    }
+    return { workspaceId, memberId, created: true };
+  }
+
+  private async findPersonalWorkspace(userId: string): Promise<{ workspaceId: string; memberId: string } | undefined> {
+    const result = await this.pool.query<{ id: string; workspace_id: string }>(
+      "SELECT id, workspace_id FROM members WHERE user_id = $1 AND is_personal AND disabled_at IS NULL",
+      [userId]
+    );
+    const row = result.rows[0];
+    return row ? { workspaceId: row.workspace_id, memberId: row.id } : undefined;
+  }
+
+  async createPairingCode(identity: Membership): Promise<PairingCodeMint> {
+    const pairingId = randomUUID();
+    const expiresAt = new Date(Date.now() + PAIRING_CODE_TTL_MS);
+    const code = generatePairingCode();
+    return this.transaction(async (client) => {
+      await client.query(
+        `INSERT INTO pairing_codes (id, workspace_id, code_hash, created_by, expires_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [pairingId, identity.workspaceId, sha256(code), identity.memberId, expiresAt]
+      );
+      await this.audit(client, identity.workspaceId, identity.memberId, null, "pairing.code_created", { pairingId });
+      return { pairingId, code, expiresAt: expiresAt.toISOString() };
+    });
+  }
+
+  async getPairingCodeStatus(identity: Membership, pairingId: string): Promise<PairingCodeStatus | undefined> {
+    const result = await this.pool.query<{ expires_at: Date; claimed_at: Date | null; claimed_replica_id: string | null; claimed_actor_id: string | null }>(
+      `SELECT expires_at, claimed_at, claimed_replica_id, claimed_actor_id
+         FROM pairing_codes WHERE id = $1 AND workspace_id = $2`,
+      [pairingId, identity.workspaceId]
+    );
+    const row = result.rows[0];
+    if (!row) return undefined;
+    return {
+      status: row.claimed_at ? "claimed" : row.expires_at.getTime() <= Date.now() ? "expired" : "pending",
+      claimedAt: row.claimed_at ? new Date(row.claimed_at).toISOString() : null,
+      replicaId: row.claimed_replica_id,
+      actorId: row.claimed_actor_id
+    };
+  }
+
+  /**
+   * Redeems a pairing code, unauthenticated: the code is the credential. Single-use is
+   * enforced by the conditional UPDATE below -- zero rows back means already-claimed,
+   * expired, or never existed, and the caller cannot tell which (StoreGoneError -> 410).
+   * Everything after it runs in the same transaction, so a failure anywhere (a replica
+   * name that cannot be made unique, say) releases the code rather than burning it.
+   */
+  async claimPairingCode(input: { code: string; actorId: string; replicaName: string }): Promise<PairingClaimResult> {
+    return this.transaction(async (client) => {
+      const claimed = await client.query<{ id: string; workspace_id: string; created_by: string }>(
+        `UPDATE pairing_codes SET claimed_at = now(), claimed_actor_id = $2
+          WHERE code_hash = $1 AND claimed_at IS NULL AND expires_at > now()
+          RETURNING id, workspace_id, created_by`,
+        [sha256(input.code), input.actorId]
+      );
+      const pairing = claimed.rows[0];
+      if (!pairing) throw new StoreGoneError("Pairing code is no longer available");
+
+      const replicaId = randomUUID();
+      let registered = false;
+      // replicas are UNIQUE (workspace_id, name); a second machine called "laptop" must
+      // still be able to pair, so fall back to a disambiguated name rather than failing.
+      for (const name of [input.replicaName, `${input.replicaName}-${randomBytes(3).toString("hex")}`]) {
+        // A failed statement poisons the surrounding transaction, so each attempt runs
+        // inside a savepoint the unique violation can be rolled back to.
+        await client.query("SAVEPOINT crosscode_replica_insert");
+        try {
+          await client.query("INSERT INTO replicas (id, workspace_id, member_id, name) VALUES ($1, $2, $3, $4)", [
+            replicaId, pairing.workspace_id, pairing.created_by, name
+          ]);
+          await client.query("RELEASE SAVEPOINT crosscode_replica_insert");
+          registered = true;
+          break;
+        } catch (error) {
+          if (!isUniqueViolation(error)) throw error;
+          await client.query("ROLLBACK TO SAVEPOINT crosscode_replica_insert");
+        }
+      }
+      if (!registered) throw new StoreConflictError("Replica name is already registered");
+
+      await client.query("UPDATE pairing_codes SET claimed_replica_id = $2 WHERE id = $1", [pairing.id, replicaId]);
+
+      const token = generateWorkspaceToken();
+      await client.query(
+        `INSERT INTO workspace_tokens (id, workspace_id, member_id, replica_id, token_hash, pairing_id)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [randomUUID(), pairing.workspace_id, pairing.created_by, replicaId, sha256(token), pairing.id]
+      );
+      await this.audit(client, pairing.workspace_id, pairing.created_by, replicaId, "pairing.code_claimed", { pairingId: pairing.id });
+      return { workspaceId: pairing.workspace_id, replicaId, token };
+    });
+  }
+
+  /**
+   * Resolves a `ccw_` workspace token to the membership it was minted against. Lookup is
+   * by hash, so a stolen database dump does not yield usable tokens.
+   */
+  async resolveWorkspaceToken(token: string): Promise<WorkspaceTokenIdentity> {
+    const result = await this.pool.query<{ member_id: string; user_id: string; actor_id: string; role: Membership["role"]; workspace_id: string; replica_id: string | null }>(
+      `UPDATE workspace_tokens t SET last_used_at = now()
+         FROM members m
+        WHERE t.token_hash = $1 AND t.revoked_at IS NULL
+          AND m.id = t.member_id AND m.disabled_at IS NULL
+        RETURNING m.id AS member_id, m.user_id, m.actor_id, m.role, t.workspace_id, t.replica_id`,
+      [sha256(token)]
+    );
+    const row = result.rows[0];
+    if (!row) throw new StoreUnauthorizedError("Workspace token is invalid or revoked");
+    return {
+      memberId: row.member_id, userId: row.user_id, actorId: row.actor_id,
+      workspaceId: row.workspace_id, role: row.role, replicaId: row.replica_id
+    };
   }
 
   async registerReplica(userId: string, workspaceId: string, name: string): Promise<{ replicaId: string; createdAt: string }> {
@@ -809,6 +1010,31 @@ function generateInviteCode(): string {
   return code;
 }
 
+function sha256(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+// XXXX-XXXX over Crockford base32 is 40 bits of entropy behind a 15-minute TTL and a
+// 10-attempts-per-minute-per-IP claim limit. 256 is divisible by the 32-symbol alphabet,
+// so the modulo below is uniform rather than biased toward the first symbols.
+function generatePairingCode(): string {
+  const bytes = randomBytes(8);
+  let code = "";
+  for (const [index, byte] of bytes.entries()) {
+    if (index === 4) code += "-";
+    code += PAIRING_CODE_ALPHABET[byte % PAIRING_CODE_ALPHABET.length];
+  }
+  return code;
+}
+
+function generateWorkspaceToken(): string {
+  return `${WORKSPACE_TOKEN_PREFIX}${randomBytes(32).toString("base64url")}`;
+}
+
 function isUniqueViolation(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "23505";
+}
+
+function isDeadlock(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "40P01";
 }
