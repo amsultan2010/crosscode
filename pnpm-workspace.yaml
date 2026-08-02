@@ -2,7 +2,11 @@ packages:
   - apps/*
   - packages/*
 overrides:
-  glob>minimatch: ^10.2.5
+  glob>minimatch: ^10.2.6
+  # @types/pg, @types/ws and vite each pull @types/node@22 transitively, which put Node 22
+  # type definitions in a workspace whose engines field requires Node >=24. skipLibCheck
+  # currently hides the mismatch; pin the whole tree to the major we actually run on.
+  '@types/node': ^24
 onlyBuiltDependencies:
   - esbuild
 allowBuilds:
