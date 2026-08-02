@@ -6,6 +6,8 @@ import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
 import { DaemonClient } from "../../daemon/src/client.js";
 import { login, logout, readDaemonConfig, writeDaemonConfig } from "../../daemon/src/runtime.js";
+import { PgStore } from "../../service/src/store.js";
+import { getWorkspaceBillingStatus } from "../../service/src/billing.js";
 
 type CliResult = { value?: unknown; exitCode?: number };
 
@@ -284,6 +286,23 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
         if (!confirmed) throw new CliError("CANCELLED", "Publish cancelled");
       }
       result = { value: await (await client()).publish(input) };
+    });
+
+  const billing = program.command("billing").description("billing plan and usage (read-only)");
+  billing
+    .command("status")
+    .description("show a workspace's plan and current usage counters")
+    .option("--workspace <id>", "workspace id")
+    .action(async (options: { workspace?: string }) => {
+      if (!options.workspace) throw new CliError("USAGE_ERROR", "Usage: crosscode billing status --workspace <workspaceId>");
+      const databaseUrl = process.env.DATABASE_URL ?? process.env.MIGRATION_DATABASE_URL;
+      if (!databaseUrl) throw new CliError("USAGE_ERROR", "DATABASE_URL or MIGRATION_DATABASE_URL is required");
+      const store = new PgStore(databaseUrl);
+      try {
+        result = { value: await getWorkspaceBillingStatus(store, options.workspace) };
+      } finally {
+        await store.close();
+      }
     });
 
   program

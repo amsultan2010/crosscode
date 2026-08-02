@@ -31,3 +31,24 @@ describe("crosscode run -- <tool>", () => {
     await expect(runCli(["run", "--"])).rejects.toThrow("Usage: crosscode run -- <command> [args]");
   });
 });
+
+describe("crosscode billing status", () => {
+  it("rejects when --workspace is missing", async () => {
+    await expect(runCli(["billing", "status"])).rejects.toThrow("Usage: crosscode billing status --workspace <workspaceId>");
+  });
+
+  it("rejects when neither DATABASE_URL nor MIGRATION_DATABASE_URL is set", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousMigrationDatabaseUrl = process.env.MIGRATION_DATABASE_URL;
+    delete process.env.DATABASE_URL;
+    delete process.env.MIGRATION_DATABASE_URL;
+    try {
+      await expect(runCli(["billing", "status", "--workspace", "workspace-1"])).rejects.toThrow(
+        "DATABASE_URL or MIGRATION_DATABASE_URL is required"
+      );
+    } finally {
+      if (previousDatabaseUrl !== undefined) process.env.DATABASE_URL = previousDatabaseUrl;
+      if (previousMigrationDatabaseUrl !== undefined) process.env.MIGRATION_DATABASE_URL = previousMigrationDatabaseUrl;
+    }
+  });
+});
