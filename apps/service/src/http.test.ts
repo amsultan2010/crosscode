@@ -146,6 +146,96 @@ describe("service HTTP boundary", () => {
     expect((await post(base, "/v1/replicas", { name: "laptop", extra: true }, accessToken, membership.workspaceId)).status).toBe(400);
     expect((await post(base, "/v1/replicas", { name: "x".repeat(200) }, accessToken, membership.workspaceId)).status).toBe(413);
   });
+
+  it("self-serve creates a workspace for a token that has no membership yet", async () => {
+    const store = {
+      createWorkspace: async (input: { workspaceName: string; userId: string; actorId: string }) => {
+        expect(input).toEqual({ workspaceName: "acme", userId: "user-2", actorId: "member@example.com" });
+        return { workspaceId: "workspace-2", memberId: "member-2" };
+      }
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken("user-2");
+
+    // No WORKSPACE_HEADER: a brand-new user has no workspace to scope one to yet.
+    const created = await post(base, "/v1/workspaces", { name: "acme" }, accessToken);
+    expect(created.status).toBe(201);
+    expect(await created.json()).toEqual({ ok: true, data: { workspaceId: "workspace-2", memberId: "member-2" } });
+
+    expect((await post(base, "/v1/workspaces", { name: "acme" })).status).toBe(401);
+  });
+
+  it("lets a workspace owner create, list, and revoke invites, and rejects a non-owner", async () => {
+    const owner: Membership = { ...membership, role: "owner" };
+    const invite = {
+      id: "invite-1", workspaceId: owner.workspaceId, code: "ABCDEFGHJK", role: "member" as const,
+      createdBy: owner.memberId, expiresAt: "2026-01-08T00:00:00.000Z", redeemedAt: null, redeemedBy: null,
+      createdAt: "2026-01-01T00:00:00.000Z"
+    };
+    const store = {
+      resolveMembership: async () => owner,
+      createInvite: async () => invite,
+      listInvites: async () => [invite],
+      revokeInvite: async () => {}
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken(owner.userId);
+
+    const created = await post(base, "/v1/invites", {}, accessToken, owner.workspaceId);
+    expect(created.status).toBe(201);
+    expect(await created.json()).toEqual({ ok: true, data: invite });
+
+    const listed = await fetch(`${base}/v1/invites`, { headers: { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: owner.workspaceId } });
+    expect((await listed.json()) as any).toEqual({ ok: true, data: { invites: [invite] } });
+
+    const revoked = await fetch(`${base}/v1/invites/${invite.id}`, { method: "DELETE", headers: { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: owner.workspaceId } });
+    expect(revoked.status).toBe(200);
+
+    const memberStore = { resolveMembership: async () => membership } as unknown as PgStore;
+    const memberBase = await listen(memberStore);
+    const memberToken = await signToken(membership.userId);
+    expect((await post(memberBase, "/v1/invites", {}, memberToken, membership.workspaceId)).status).toBe(403);
+    expect((await fetch(`${memberBase}/v1/invites`, { headers: { authorization: `Bearer ${memberToken}`, [WORKSPACE_HEADER]: membership.workspaceId } })).status).toBe(403);
+    expect((await fetch(`${memberBase}/v1/invites/invite-1`, { method: "DELETE", headers: { authorization: `Bearer ${memberToken}`, [WORKSPACE_HEADER]: membership.workspaceId } })).status).toBe(403);
+  });
+
+  it("redeems a valid invite without requiring an existing membership", async () => {
+    const store = {
+      redeemInvite: async (input: { code: string; userId: string; actorId: string }) => {
+        expect(input).toEqual({ code: "ABCDEFGHJK", userId: "user-3", actorId: "member@example.com" });
+        return { workspaceId: "workspace-1", memberId: "member-3", role: "member" as const };
+      }
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken("user-3");
+
+    const redeemed = await fetch(`${base}/v1/invites/ABCDEFGHJK/redeem`, { method: "POST", headers: { authorization: `Bearer ${accessToken}` } });
+    expect(redeemed.status).toBe(200);
+    expect(await redeemed.json()).toEqual({ ok: true, data: { workspaceId: "workspace-1", memberId: "member-3", role: "member" } });
+  });
+
+  it("rejects redeeming an invalid, expired, or already-redeemed invite code", async () => {
+    const { StoreConflictError, StoreUnauthorizedError } = await import("./store.js");
+    const store = {
+      redeemInvite: async (input: { code: string }) => {
+        if (input.code === "MISSING") throw new StoreUnauthorizedError("Invite code is not valid");
+        if (input.code === "EXPIRED") throw new StoreConflictError("Invite has expired");
+        if (input.code === "REDEEMED") throw new StoreConflictError("Invite has already been redeemed");
+        throw new Error("unexpected code");
+      }
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken("user-4");
+
+    const redeem = (code: string, token?: string) => fetch(`${base}/v1/invites/${code}/redeem`, {
+      method: "POST",
+      headers: token ? { authorization: `Bearer ${token}` } : {}
+    });
+    expect((await redeem("MISSING", accessToken)).status).toBe(401);
+    expect((await redeem("EXPIRED", accessToken)).status).toBe(409);
+    expect((await redeem("REDEEMED", accessToken)).status).toBe(409);
+    expect((await redeem("ANY")).status).toBe(401);
+  });
 });
 
 async function signToken(userId: string): Promise<string> {

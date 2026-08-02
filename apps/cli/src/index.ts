@@ -5,7 +5,7 @@ import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
 import { DaemonClient } from "../../daemon/src/client.js";
-import { login, logout, readDaemonConfig, writeDaemonConfig } from "../../daemon/src/runtime.js";
+import { login, logout, readDaemonConfig, redeemInvite, signup, writeDaemonConfig } from "../../daemon/src/runtime.js";
 
 type CliResult = { value?: unknown; exitCode?: number };
 
@@ -88,12 +88,17 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
   program
     .command("join")
     .description("join a workspace")
-    .argument("[workspaceId]", "workspace id (or use --workspace)")
+    .argument("[workspaceId]", "workspace id (or use --workspace / --invite)")
     .option("--workspace <id>", "workspace id")
-    .action(async (positional: string | undefined, options: { workspace?: string }) => {
+    .option("--invite <code>", "invite code (alternative to --workspace)")
+    .action(async (positional: string | undefined, options: { workspace?: string; invite?: string }) => {
+      if (options.invite) {
+        result = { value: await redeemInvite(directory, options.invite) };
+        return;
+      }
       const settings = await readDaemonConfig(directory);
       const workspaceId = options.workspace ?? positional;
-      if (!workspaceId) throw new CliError("USAGE_ERROR", "Usage: crosscode join --workspace <workspaceId> (run `crosscode -- login` first)");
+      if (!workspaceId) throw new CliError("USAGE_ERROR", "Usage: crosscode join --workspace <workspaceId> | --invite <code> (run `crosscode -- login` first)");
       const updated = { ...settings, workspaceId };
       await writeDaemonConfig(directory, updated);
       result = { value: updated };
@@ -119,6 +124,31 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
         throw new CliError("USAGE_ERROR", "Usage: crosscode -- login --email <email> --password <password> [--service <url>] (or set CROSSCODE_EMAIL/CROSSCODE_PASSWORD)");
       }
       const updated = await login(directory, { email, password, serviceUrl });
+      result = { value: { workspaceId: updated.workspaceId, actorId: updated.actorId, service: { url: updated.service!.url, loggedIn: true } } };
+    });
+
+  program
+    .command("signup")
+    .description("create an account and log in to the crosscode service")
+    .option("--email <email>", "account email")
+    .option("--password <password>", "account password")
+    .option("--invite <code>", "invite code to redeem after signing up")
+    .option("--service <url>", "service URL")
+    .action(async (options: { email?: string; password?: string; invite?: string; service?: string }) => {
+      let email = options.email ?? process.env.CROSSCODE_EMAIL;
+      let password = options.password ?? process.env.CROSSCODE_PASSWORD;
+      const serviceUrl = options.service;
+      if ((!email || !password) && process.stdout.isTTY) {
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        if (!email) email = await rl.question("Email: ");
+        if (!password) password = await rl.question("Password: ");
+        rl.close();
+      }
+      if (!email || !password) {
+        throw new CliError("USAGE_ERROR", "Usage: crosscode -- signup --email <email> --password <password> [--invite <code>] [--service <url>] (or set CROSSCODE_EMAIL/CROSSCODE_PASSWORD)");
+      }
+      let updated = await signup(directory, { email, password, serviceUrl });
+      if (options.invite) updated = await redeemInvite(directory, options.invite);
       result = { value: { workspaceId: updated.workspaceId, actorId: updated.actorId, service: { url: updated.service!.url, loggedIn: true } } };
     });
 
