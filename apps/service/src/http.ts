@@ -362,7 +362,7 @@ async function handleRequest(
     await options.store.ensurePersonalWorkspace({ userId, actorId: email ?? userId });
     const memberships = await options.store.listMembershipsForUser(userId);
     send(response, 200, listMembershipsResponseSchema.parse({
-      memberships: memberships.map((m) => ({ workspaceId: m.workspaceId, workspaceName: m.workspaceName, role: m.role }))
+      memberships: memberships.map((m) => ({ workspaceId: m.workspaceId, workspaceName: m.workspaceName, role: m.role, isPersonal: m.isPersonal }))
     }));
     return;
   }

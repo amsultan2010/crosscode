@@ -4,6 +4,25 @@
 `@modelcontextprotocol/sdk`. It speaks MCP over stdio and proxies tool calls to the
 local Crosscode daemon for the current worktree.
 
+## The short version
+
+```bash
+npm install -g @crosscode/cli
+crosscode start
+```
+
+`crosscode start` writes the entry for you — `.mcp.json` for Claude Code by
+default, or `--mcp cursor` / `--mcp gemini` / `--mcp opencode` — alongside signing
+you in and starting the daemon. Everything below is what it writes, for anyone
+configuring a client by hand or using Codex CLI, whose TOML config `start` does not
+touch.
+
+Without a global install, `npx --yes @crosscode/cli start` does the same thing, and
+writes an `npx`-based MCP command because npm's cache is not somewhere a config may
+point at long-term.
+
+## What runs, and when
+
 You do not need to start the daemon yourself. On first connection, the MCP server
 calls `ensureDaemonRunning` (`apps/mcp-server/src/bootstrap.ts`): if no daemon is
 already listening for the worktree, it writes a local replica identity if one
@@ -11,11 +30,19 @@ doesn't exist yet, spawns the daemon as a detached background process, and waits
 for it to come up before serving any tool calls. If `CROSSCODE_SERVICE_URL` is set
 in the server's `env` but the worktree has no logged-in Supabase session yet,
 bootstrap fails fast with an explicit error asking you to log in first rather
-than guessing at a fix. From an agent, resolve that with the headless sign-in
-(`crosscode login --email <e> --password <p>`) or a pairing code
-(`crosscode join --pair <code>`) — not the browser flow, which needs a TTY and
-a human. The daemon keeps running in the background after the MCP client
-disconnects, so it survives individual agent sessions.
+than guessing at a fix. From an agent, resolve that with `crosscode start --email
+<e> --password <p>`, the headless sign-in (`crosscode login --email <e> --password
+<p>`), or a pairing code (`crosscode join --pair <code>`) — not the browser flow,
+which needs a TTY and a human. The daemon keeps running in the background after the
+MCP client disconnects, so it survives individual agent sessions.
+
+That bootstrap reads the raw `CROSSCODE_SERVICE_URL` rather than falling back to
+the hosted default, which is what lets a fresh MCP install run local-only without
+being forced through a login. `crosscode start` deliberately does not change this:
+it is the explicit opt-in to the hosted service, while an MCP client connecting is
+implicit, and treating the compiled-in default as "a service is configured" would
+turn every local-only checkout into a login prompt. A worktree set up by
+`crosscode start` already holds a session, so it is unaffected either way.
 
 The server takes no arguments; it discovers the repository from its working
 directory, so each client must launch it with `cwd` set to the worktree root.
@@ -104,12 +131,28 @@ Add a server entry to `.cursor/mcp.json` at the worktree root (project-scoped) o
 }
 ```
 
+## Without a global install
+
+`npx` works anywhere the short command does, and is what `crosscode start` writes
+when Crosscode isn't installed durably. Pin the version so an agent session cannot
+be moved to a new major release underneath you:
+
+```json
+{
+  "command": "npx",
+  "args": ["-y", "--package", "@crosscode/cli@0.1.0", "crosscode-mcp"]
+}
+```
+
+On Windows, use `crosscode mcp` instead of the `crosscode-mcp` bin. Both published
+bins are the same file and tell themselves apart by the name they were invoked
+under; npm's Windows `.cmd` shims pass the resolved script path instead, so that
+name is not available there.
+
 ## Running from source
 
-Crosscode is not published to npm yet, so every client above runs it directly from
-a cloned checkout of this repository with `tsx`, using the `tsx` binary installed
-inside that checkout (so no global install is required) and `cwd` set to the
-worktree you want Crosscode to manage:
+A clone of this repository runs the same server through `tsx`, with `cwd` set to
+the worktree you want Crosscode to manage:
 
 ```json
 {
@@ -121,12 +164,14 @@ worktree you want Crosscode to manage:
 
 `/absolute/path/to/crosscode` is wherever you cloned this repository (after
 `pnpm install`); `/absolute/path/to/your/project` is the Git repository you want
-Crosscode to watch. This is exactly what `docs/install-prompt.md` generates.
+Crosscode to watch. This is for working on Crosscode itself — to use it, install
+from npm.
 
 All configs above are transcribed from each client's own published MCP
 documentation and config schema (stdio server registration under an
-`mcpServers`/`mcp_servers` block); none of them have been launched end-to-end
-against a running Crosscode daemon in this environment.
+`mcpServers`/`mcp_servers` block); the Claude Code, Cursor, Gemini CLI, and
+OpenCode shapes are additionally what `crosscode start` writes and what its tests
+assert.
 
 ## Available tools
 

@@ -16,66 +16,55 @@ and their agents are doing in their own checkouts, and they can see what we do h
 — within seconds, instead of at pull-request time. Their work arrives as proposals
 we review, never as writes into our files. Do the following:
 
-1. Check whether `~/.crosscode` already exists.
-   - If it does not exist: run `git clone https://github.com/amsultan2010/crosscode.git ~/.crosscode`.
-   - If it does exist: run `git -C ~/.crosscode pull --ff-only`.
-2. Make sure pnpm is available (`pnpm --version`). If it is not installed, run
-   `npm install -g pnpm`.
-3. Run `pnpm install` inside `~/.crosscode`.
-4. Determine the absolute path of this project's Git root (`git rev-parse --show-toplevel`
-   from the current directory). Call this `$PROJECT_ROOT`.
-5. Add a `crosscode` MCP server entry to whichever MCP config applies to you:
-   - If you are Claude Code: create or edit `.mcp.json` in `$PROJECT_ROOT`.
-   - If you are Codex CLI: create or edit `~/.codex/config.toml`.
-   - If you are OpenCode: create or edit `opencode.json` in `$PROJECT_ROOT` (or the
-     global OpenCode config).
-   - If you are another MCP-capable agent: use whatever MCP config file or command
-     you use to register a local stdio MCP server.
+1. Check that Node 24 or newer is available (`node --version`). If it is not, stop
+   and tell me — everything below needs it.
+2. From this project's Git root, run:
 
-   Use these exact values (do not change them):
-   - command: `~/.crosscode/node_modules/.bin/tsx` (expand `~` to the real home
-     directory path)
-   - args: `["~/.crosscode/apps/mcp-server/src/main.ts"]` (expand `~` here too)
-   - cwd: `$PROJECT_ROOT`
-
-   For Claude Code's `.mcp.json`, that looks like:
-   ```json
-   {
-     "mcpServers": {
-       "crosscode": {
-         "command": "/absolute/home/.crosscode/node_modules/.bin/tsx",
-         "args": ["/absolute/home/.crosscode/apps/mcp-server/src/main.ts"],
-         "cwd": "$PROJECT_ROOT"
-       }
-     }
-   }
    ```
-   Merge this into the file if it already has other `mcpServers` entries; don't
-   overwrite unrelated entries.
+   npx --yes @crosscode/cli start --no-browser
+   ```
 
-6. Tell me the config was written and that I need to restart/reload you (or
-   reconnect MCP servers) for the new "crosscode" server to be picked up.
-7. Once reconnected, call the `get_workspace_state` tool once to confirm it works.
-   You do not need to run any install/init command yourself first — the first tool
-   call automatically creates a local Crosscode identity for this checkout and
-   starts its background daemon if one isn't already running. If the call fails,
-   report the exact error back to me instead of guessing at a fix.
+   `start` does the whole setup: it configures this checkout, signs me in, attaches
+   it to my personal workspace, starts the background daemon, and writes the
+   Crosscode MCP server into this project's MCP config. It registers with Claude
+   Code (`.mcp.json`) by default; pass `--mcp cursor`, `--mcp gemini`, or
+   `--mcp opencode` if I use one of those instead.
+3. `--no-browser` makes it print a sign-in URL instead of trying to open a browser
+   you cannot see. Show me that URL and wait — I have to open it and sign in (or
+   create an account) before the command finishes. Do not try to sign in for me,
+   and do not ask me for my password.
+4. If I say I would rather not use a browser at all, run it headlessly instead:
+   `npx --yes @crosscode/cli start --email <my email> --password <my password>`,
+   using credentials I give you. If I have no account yet, that path needs
+   `npx --yes @crosscode/cli signup --email <e> --password <p>` first.
+5. Once `start` reports success, tell me the config was written and that I need to
+   restart/reload you (or reconnect MCP servers) for the new "crosscode" server to
+   be picked up.
+6. Once reconnected, call the `get_workspace_state` tool once to confirm it works.
+   If the call fails, report the exact error back to me instead of guessing at a
+   fix.
+
+If I am joining a teammate's workspace rather than using my own, run
+`npx --yes @crosscode/cli join --invite <code>` with the invite code I give you
+after step 5, then restart as above.
 ````
 
 ## Notes for whoever is embedding this prompt
 
-- The clone target (`~/.crosscode`) is a fixed, shared location so re-running the
-  prompt in a second project reuses the same installation instead of re-cloning.
-- Nothing here requires `pnpm build` — the MCP server and daemon both run directly
-  from TypeScript source via `tsx`, so `pnpm install` is the only setup step.
-- Joining an existing workspace (so proposals from other people/agents show up)
-  isn't wired into this prompt yet. It needs `CROSSCODE_SERVICE_URL` set in the
-  MCP server's `env` block plus, in the worktree, either a prior sign-in
-  (`crosscode login --email <e> --password <p>` — the headless path, since an
-  agent has no browser) or a one-time pairing code (`crosscode join --pair
-  <code>`, which needs no login at all). The daemon-side support already exists
-  (`apps/mcp-server/src/bootstrap.ts` reads `CROSSCODE_SERVICE_URL` and checks
-  for a logged-in session).
-- Nothing here opens a web page, and nothing here needs one. Account creation is
-  the only step that has a website form, and `crosscode signup --email <e>
-  --password <p>` covers it from a terminal.
+- Nothing is cloned and nothing is built. `npx` fetches the published
+  `@crosscode/cli` package, whose `dist/` bundle carries the CLI, the daemon, and
+  the MCP server. Node 24 is the only requirement.
+- The MCP entry `start` writes points at `npx` when Crosscode is not installed
+  durably, and at the short `crosscode-mcp` command when it is — see
+  `resolveMcpLaunch` in `apps/cli/src/mcp-config.ts`. Suggest
+  `npm install -g @crosscode/cli` to anyone who will use it daily: agent sessions
+  then launch from a stable path instead of re-resolving through npm's cache.
+- `--no-browser` is deliberate. An agent has no browser, and the default flow would
+  otherwise open a tab nobody is looking at; `crosscode start` refuses to try when
+  it has no TTY rather than hanging on one.
+- Codex CLI's MCP config is TOML (`~/.codex/config.toml`) and `start` does not
+  write it, because merging TOML into a global file holding model, approval, and
+  sandbox settings is not something to do without a TOML parser. Codex users add
+  the three-line entry from [`mcp-clients.md`](./mcp-clients.md) by hand.
+- Creating the account is the only step with a website form, and `crosscode signup
+  --email <e> --password <p>` covers it from a terminal for anyone who prefers that.

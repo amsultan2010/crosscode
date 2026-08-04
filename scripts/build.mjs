@@ -32,9 +32,12 @@ const EXTERNAL = [
 ];
 
 const ENTRYPOINTS = [
-  // `crosscode` bin.
+  // Both bins: `crosscode` and `crosscode-mcp` point at this file and it dispatches on the
+  // name it was invoked under, because npm only auto-resolves `npx <pkg>` when every bin
+  // entry names one file. See the comment on invokedAsMcpBin in apps/cli/src/index.ts.
   { in: "apps/cli/src/index.ts", out: "cli" },
-  // `crosscode-mcp` bin.
+  // Not a bin any more: imported by the bundle above when it is serving MCP. Kept a separate
+  // bundle so `crosscode <anything else>` does not pay to load the MCP SDK.
   { in: "apps/mcp-server/src/main.ts", out: "mcp" },
   // Not a bin: spawned by the MCP bootstrap, which locates it next to its own bundle.
   { in: "apps/daemon/src/main.ts", out: "daemon" }

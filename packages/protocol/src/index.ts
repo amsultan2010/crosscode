@@ -377,7 +377,12 @@ export const listMembershipsResponseSchema = z.object({
   memberships: z.array(z.object({
     workspaceId: z.string().min(1),
     workspaceName: z.string().min(1),
-    role: workspaceRoleSchema
+    role: workspaceRoleSchema,
+    // Contract C's auto-provisioned workspace, which is what `crosscode start` attaches a
+    // checkout to when it has not been pointed at a team. Optional so a client built
+    // against this schema still parses a response from a service deployed before the field
+    // existed; a client that sees it missing everywhere falls back to "the only membership".
+    isPersonal: z.boolean().optional()
   }))
 }).strict();
 export type ListMembershipsResponse = z.infer<typeof listMembershipsResponseSchema>;

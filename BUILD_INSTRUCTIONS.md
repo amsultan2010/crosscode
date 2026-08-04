@@ -109,12 +109,19 @@ What did **not** change, deliberately: the coordination service and every migrat
 **Verification baseline (re-measured 2026-08-04).** Treat the numbers below as a dated observation, not a spec — run the commands rather than trusting the transcription. This paragraph sat at "25 files / 231 tests" for two days after the real figures moved, which is exactly the failure mode of hand-copied counts.
 
 - `pnpm build` — `tsc --noEmit` under `strict`, then `scripts/build.mjs` bundles the three entrypoints to `dist/`. Passes.
-- `pnpm test` — **30 files passed, 8 skipped (38); 353 tests passed, 39 skipped (392)**. The skips are the PostgreSQL-gated suites, which deliberately get no `CROSSCODE_TEST_DATABASE_URL` here.
-- `pnpm test:postgres` — **8 files, 39 tests, none skipped.** Suites are discovered by the gate they read, and the run fails if a selected test reports as skipped rather than passed.
+- `pnpm test` — **32 files passed, 8 skipped (40); 369 tests passed, 39 skipped (408)**. The skips are the PostgreSQL-gated suites, which deliberately get no `CROSSCODE_TEST_DATABASE_URL` here.
+- `pnpm test:postgres` — **8 files, 39 tests, none skipped.** Suites are discovered by the gate they read, and the run fails if a selected test reports as skipped rather than passed. `live-coordination.integration.test.ts` is still occasionally flaky under CPU contention (it timed out on one run against a plain Postgres 16 container, and passed on a rerun and on an unmodified tree); the 2026-08-01 flakiness work reduced this class of failure but has not eliminated it.
 - `pnpm docs:build` — passes; emits the landing page, four auth pages, and eight docs pages.
 - `docker build -f apps/service/Dockerfile -t crosscode-service .` — passes, and the container refuses to start without `DATABASE_URL`, as intended.
 
 Node 24 is required (`engines.node`); the repo pins it and CI runs it.
+
+**Distribution and hosting — the two things standing between this and a working stranger install (2026-08-04).** Both are operational, not code:
+
+1. **`@crosscode/cli` is not published.** The package builds, packs, and installs — `npm pack` yields `dist/` + README + LICENSE, both bins run outside the repo on nothing but Node 24, and `npx <tarball>` resolves the default bin — but the npm token in the environment is expired (`401` on `npm whoami`), and `npm login` needs an interactive session. Every install path in `README.md`, `docs/install-prompt.md`, `docs/mcp-clients.md`, and the marketing site is already written for the published package, so they are wrong until someone runs `npm publish` (which needs the `@crosscode` scope to exist on the account).
+2. **The hosted API is deployed but broken.** `https://www.getcrosscode.dev/api/v1/*` answers `500 FUNCTION_INVOCATION_FAILED`: `ERR_MODULE_NOT_FOUND` for `@crosscode/service/src/serverless.ts`. The workspace package's `exports` point at TypeScript source, which Vercel's function tracer copies as-is and Node then refuses to load from `node_modules`. It needs `@crosscode/service` to emit JavaScript (or the function to be bundled) plus a redeploy; the DNS/URL half is fixed in this pass — `DEFAULT_SERVICE_URL` named an `api.` subdomain that was never created, so every unflagged `login`/`signup` resolved to a nonexistent host, and it is now the site origin with `/v1/*` rewritten into the function.
+
+Until (2) is fixed, `crosscode start` completes locally and signs in against Supabase (which is live), but sync against the hosted service fails.
 
 **Phases 8/9/10 v1 — implemented (2026-08-02).** Invite-by-code/link, self-serve workspace creation, the autonomy slider, and a billing placeholder all landed together against the same hosted Supabase project this repo already used for dev. Detail and remaining gaps are under each phase below — none is fully "done" against its original exit criteria yet, but each has a working v1.
 
@@ -147,6 +154,14 @@ Three initiatives, in this order. Each is a precondition for the next in practic
 **Shipped (v1):** self-serve `crosscode signup` (with an optional `--invite <code>`), invite create/list/revoke (`POST/GET/DELETE /v1/invites`) and redeem (`crosscode join --invite`, `POST /v1/invites/:code/redeem`), and self-serve `POST /v1/workspaces`. All running against the same Supabase project this repo already used for dev — "hosted" here means the code path exists and works against a real project, not that a separate production deployment/ops setup has been stood up yet.
 
 **Onboarding (per [`docs/onboarding-contracts.md`](./docs/onboarding-contracts.md)).** Onboarding is the CLI: create an account on the site or with `crosscode signup`, `crosscode login`, `crosscode init`, `crosscode join`. Signup auto-provisions a personal workspace (Contract C), so nothing gates on creating a team. The pairing-code flow (Contract A) survives as a way to attach a checkout to a workspace without a login at all — mint with `POST /v1/pairing-codes`, redeem with `crosscode join --pair <code>`.
+
+**One command to first value — `crosscode start` (2026-08-04).** Those steps are all still there, but a five-command setup is where a first-time user is lost, not at any one of the five. `crosscode start` is the path through them: init, sign in or sign up, attach to the account's personal workspace, start the daemon, register the MCP server. It adds no capability on purpose — it is the ordering plus the defaults that make every flag optional, and each step is idempotent, so re-running it in a configured checkout reports state rather than setting up twice. Implementation is `apps/cli/src/start.ts` (orchestration) and `apps/cli/src/mcp-config.ts` (client registration).
+
+Three decisions worth not relitigating:
+
+- **The MCP bootstrap's raw `CROSSCODE_SERVICE_URL` read stays raw.** `apps/mcp-server/src/bootstrap.ts` deliberately does not call `resolveDefaultServiceUrl()`, because the compiled-in hosted default would make that variable always set — which would turn every fresh MCP install into a forced login and make every pre-existing local-only checkout start demanding one. `crosscode start` is an explicit opt-in a person ran; an MCP client connecting is implicit. Different questions, different answers. A worktree that went through `start` already holds a session, so it is unaffected either way.
+- **Both published bins point at `dist/cli.js`**, which dispatches on the name it was invoked under. npm only auto-resolves `npx <package>` when every `bin` entry names one file (or one is named after the package), and `@crosscode/cli`'s unscoped name is `cli` — so two distinct bin targets made `npx @crosscode/cli start` fail with "could not determine executable to run". Windows `.cmd` shims lose the invoked name, so `crosscode mcp` is the portable spelling and is what `start` writes into an MCP config there.
+- **MCP registration covers the JSON-configured clients only** (Claude Code, Cursor, Gemini CLI, OpenCode). Codex CLI's `~/.codex/config.toml` is a global file holding model, approval, and sandbox settings, and merging TOML into it without a TOML parser risks corrupting settings unrelated to us; those three lines stay a manual step in `docs/mcp-clients.md`.
 
 ### Phase 9 — Autonomy slider (auto-apply vs. always-approve) (v1 shipped)
 
