@@ -69,8 +69,20 @@ export function createServerlessHandler(environment: NodeJS.ProcessEnv = process
     allowedOrigins: parseAllowedOrigins(environment.CROSSCODE_ALLOWED_ORIGINS),
     gateway: silentGateway
   });
-  cached = { handler, store };
-  return handler;
+  // main.ts refuses to start when the runtime role can update or delete immutable
+  // operations and audit rows. A function platform has no startup to refuse at, so the
+  // check runs once per cold instance and fails that instance's requests instead -- a
+  // misconfigured role must not quietly become an append-only log that isn't append-only.
+  // Deliberately not awaited inline: the check is one query, and blocking every first
+  // request behind it would add a round-trip to each cold start.
+  const privileged = store.assertRuntimePrivileges().then(() => undefined, (error: unknown) => error);
+  const guarded: ServerlessHandler = async (request, response) => {
+    const failure = await privileged;
+    if (failure) throw failure;
+    await handler(request, response);
+  };
+  cached = { handler: guarded, store };
+  return guarded;
 }
 
 function required(value: string | undefined, name: string): string {
