@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createSupabaseJwks } from "./auth.js";
 import { createRequestHandler } from "./http.js";
+import { createObservability, observeRequest } from "./observability.js";
 import { PgStore } from "./store.js";
 import type { WebSocketGateway } from "./ws.js";
 
@@ -83,10 +84,22 @@ export function createServerlessHandler(environment: NodeJS.ProcessEnv = process
   // Deliberately not awaited inline: the check is one query, and blocking every first
   // request behind it would add a round-trip to each cold start.
   const privileged = store.assertRuntimePrivileges().then(() => undefined, (error: unknown) => error);
+  // Inert unless SENTRY_DSN is set in the function's environment.
+  const reporter = createObservability(environment);
   const guarded: ServerlessHandler = async (request, response) => {
-    const failure = await privileged;
-    if (failure) throw failure;
-    await handler(request, response);
+    const context = observeRequest(reporter, request, response);
+    try {
+      const failure = await privileged;
+      if (failure) throw failure;
+      await handler(request, response);
+    } catch (error) {
+      reporter.capture(error, { ...context, status: 500 });
+      throw error;
+    } finally {
+      // A function instance can be frozen the moment the invocation returns, so a report
+      // started during it has to be awaited here or it may never leave the machine.
+      await reporter.flush();
+    }
   };
   cached = { handler: guarded, store };
   return guarded;
