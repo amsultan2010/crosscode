@@ -3,6 +3,7 @@ import { EPOCH_CURSOR, type HandoffRequestedEvent, type IntentPublishedEvent, ty
 import { contentHash } from "@crosscode/core";
 import { describe, expect, it } from "vitest";
 import { StoreConflictError, StoreUnauthorizedError, PgStore, type Membership } from "./store.js";
+import { BillingLimitError, MAX_SELF_SERVE_WORKSPACES_PER_USER } from "./billing.js";
 
 const databaseUrl = process.env.CROSSCODE_TEST_DATABASE_URL;
 
@@ -240,6 +241,66 @@ function makeEvent(membership: Membership, replicaId: string, id: string, client
     }
   };
 }
+
+describe.skipIf(!databaseUrl)("PostgreSQL self-serve workspace cap", () => {
+  it("stops one account farming free workspaces, without touching the personal one", async () => {
+    const store = new PgStore(databaseUrl!);
+    try {
+      await store.migrate();
+      const userId = randomUUID();
+      const actorId = `farmer-${randomUUID()}@example.com`;
+
+      // Contract C's personal workspace is provisioned separately and must never count
+      // against the cap, or a user could be locked out of the workspace their first
+      // authenticated request depends on.
+      const personal = await store.ensurePersonalWorkspace({ userId, actorId });
+      expect(personal.created).toBe(true);
+      expect(await store.countOwnedSelfServeWorkspaces(userId)).toBe(0);
+
+      for (let index = 0; index < MAX_SELF_SERVE_WORKSPACES_PER_USER; index += 1) {
+        await store.createWorkspace({ workspaceName: `farm-${index}-${randomUUID()}`, userId, actorId });
+      }
+      expect(await store.countOwnedSelfServeWorkspaces(userId)).toBe(MAX_SELF_SERVE_WORKSPACES_PER_USER);
+
+      await expect(store.createWorkspace({ workspaceName: `over-${randomUUID()}`, userId, actorId }))
+        .rejects.toBeInstanceOf(BillingLimitError);
+
+      // The personal workspace still resolves, so the account is not bricked by its own cap.
+      const stillThere = await store.ensurePersonalWorkspace({ userId, actorId });
+      expect(stillThere.created).toBe(false);
+      expect(stillThere.workspaceId).toBe(personal.workspaceId);
+
+      // A different account is unaffected.
+      const otherUser = randomUUID();
+      await expect(store.createWorkspace({ workspaceName: `other-${randomUUID()}`, userId: otherUser, actorId: `other-${randomUUID()}@example.com` }))
+        .resolves.toBeDefined();
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("holds the cap under concurrent creates from the same account", async () => {
+    const store = new PgStore(databaseUrl!);
+    try {
+      await store.migrate();
+      const userId = randomUUID();
+      const actorId = `racer-${randomUUID()}@example.com`;
+
+      // All at once: without the advisory lock these each read a count of 0 and every one
+      // of them inserts, blowing straight through the cap.
+      const attempts = await Promise.allSettled(
+        Array.from({ length: MAX_SELF_SERVE_WORKSPACES_PER_USER + 6 }, (_, index) =>
+          store.createWorkspace({ workspaceName: `race-${index}-${randomUUID()}`, userId, actorId })
+        )
+      );
+      const created = attempts.filter((attempt) => attempt.status === "fulfilled").length;
+      expect(created).toBe(MAX_SELF_SERVE_WORKSPACES_PER_USER);
+      expect(await store.countOwnedSelfServeWorkspaces(userId)).toBe(MAX_SELF_SERVE_WORKSPACES_PER_USER);
+    } finally {
+      await store.close();
+    }
+  });
+});
 
 describe.skipIf(!databaseUrl)("PostgreSQL plan limits", () => {
   it("refuses the seat a plan does not have, and counts only active members", async () => {

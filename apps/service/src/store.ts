@@ -7,7 +7,7 @@ import type {
 } from "@crosscode/protocol";
 import { PAIRING_CODE_ALPHABET, PAIRING_CODE_TTL_MS, WORKSPACE_TOKEN_PREFIX } from "@crosscode/protocol";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
-import { assertPlanAllowsAutonomyTier, assertSeatCapAvailable, type AutonomyTier, type Plan } from "./billing.js";
+import { assertPlanAllowsAutonomyTier, assertSeatCapAvailable, assertSelfServeWorkspaceAvailable, type AutonomyTier, type Plan } from "./billing.js";
 import { hashCanonicalPayload } from "./crypto.js";
 import { normalizeRepoRemote, normalizeRepoRoot, projectNameFrom } from "./projects.js";
 
@@ -223,6 +223,16 @@ export class PgStore {
     const workspaceId = randomUUID();
     const memberId = randomUUID();
     await this.transaction(async (client) => {
+      // Serialize concurrent creates by the same user so two in-flight requests cannot both
+      // read a count under the cap and both insert. Keyed on the user, so it never contends
+      // with anybody else's create.
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`crosscode:workspace-create:${input.userId}`]);
+      const owned = await client.query<{ count: string }>(
+        `SELECT count(*) FROM members
+           WHERE user_id = $1 AND role = 'owner' AND NOT is_personal AND disabled_at IS NULL`,
+        [input.userId]
+      );
+      assertSelfServeWorkspaceAvailable(Number(owned.rows[0]!.count));
       await client.query("INSERT INTO workspaces (id, name) VALUES ($1, $2)", [workspaceId, input.workspaceName]);
       await client.query(
         "INSERT INTO members (id, workspace_id, user_id, actor_id, role) VALUES ($1, $2, $3, $4, 'owner')",
@@ -231,6 +241,16 @@ export class PgStore {
       await this.audit(client, workspaceId, memberId, null, "workspace.self_serve_created", {});
     });
     return { workspaceId, memberId };
+  }
+
+  /** Self-serve workspaces this user owns, which is what MAX_SELF_SERVE_WORKSPACES_PER_USER caps. */
+  async countOwnedSelfServeWorkspaces(userId: string): Promise<number> {
+    const result = await this.pool.query<{ count: string }>(
+      `SELECT count(*) FROM members
+         WHERE user_id = $1 AND role = 'owner' AND NOT is_personal AND disabled_at IS NULL`,
+      [userId]
+    );
+    return Number(result.rows[0]!.count);
   }
 
   async addMember(input: {
