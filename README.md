@@ -3,15 +3,17 @@
 [![CI](https://github.com/amsultan2010/crosscode/actions/workflows/ci.yml/badge.svg)](https://github.com/amsultan2010/crosscode/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-**Crosscode lets several people and coding agents work on the same repository at the same time without overwriting each other.**
+**Crosscode makes working on a codebase together feel closer to working on one document together.**
 
-Each person (or agent) works in their own normal Git checkout. A small background program — the daemon — watches that checkout and notices whenever an edit has settled. It sends a record of that edit to a shared coordination service, which passes it on to everyone else's checkout.
+Google Docs solved this for writing. Code did not get that: everyone works on their own copy, nobody sees anyone else's work until a pull request lands, and the team spends real time stitching it all back together at the end. That gap is what Crosscode closes.
 
-The important part: those incoming edits are **never written to your files automatically**. They show up as *proposals*. You look at the diff and decide to accept or reject it, exactly like reviewing a pull request, except it happens in seconds instead of after a push.
+Each person (or agent) works in their own normal Git checkout. A small background program — the daemon — watches that checkout and notices whenever an edit has settled, then sends a record of it to a shared coordination service, which passes it on to everyone else. Within seconds, your teammates can see what you just built.
+
+It stops one step short of a shared document, deliberately: incoming edits are **never written to your files automatically**. They show up as *proposals* — you look at the diff and pull it in with one command. Live typing into someone else's working tree is the one thing you do not want in code, so that decision stays yours.
 
 Everything stays ordinary Git. Crosscode doesn't replace your editor, your agent, your Git host, your branches, your staging area, or your commits — and if you turn it off, your repository is unchanged.
 
-**Who it's for.** Teams sharing one codebase where the people are all running coding agents. That is the case Crosscode is built for, and the one it is worth setting up for. It keeps working when you are the only person online that day — the project is still shared, and your teammates' agents will land work on it again — but a repository only you will ever touch has nothing to coordinate with, and plain Git is the better tool for it. Human-only teams can use it too, though the review-before-it-lands workflow pays off most once agents are in the mix.
+**Who it's for.** Teams building something together on one codebase, where the people are all running coding agents — a startup, a hackathon crew, any project moving faster than its pull requests. It keeps working when you are the only person online that day, because the project is still shared and your teammates' work will land on it again. What it is *not* for is a repository only one person will ever touch: there is nothing to coordinate with, and plain Git is the better tool. Human-only teams can use it too, though it pays off most once agents are in the mix.
 
 **There is no web app.** Everything you do day to day — signing in, claiming work, reviewing proposals, accepting, publishing — is a `crosscode` command or an MCP tool call your agent makes against your local daemon. The website is only a landing page, sign-up/sign-in, and these docs.
 
