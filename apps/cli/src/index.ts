@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
 import { DaemonClient, DaemonUnavailableError } from "../../daemon/src/client.js";
 import { BrowserLoginError, resolveWebUrl } from "../../daemon/src/browser-login.js";
+import { SupabaseConfigError } from "../../daemon/src/supabase-client.js";
 import { browserLogin, login, logout, readDaemonConfig, redeemInvite, redeemPairingCode, serviceRequest, signup, writeDaemonConfig } from "../../daemon/src/runtime.js";
 
 type CliResult = { value?: unknown; exitCode?: number };
@@ -460,6 +461,8 @@ function formatError(error: unknown): { error: { code: string; message: string; 
   if (error instanceof CliError) return { error: { code: error.code, message: error.message, hint: error.hint } };
   // The browser-login errors already carry the frozen contract's codes and their own hints.
   if (error instanceof BrowserLoginError) return { error: { code: error.code, message: error.message, hint: error.hint } };
+  // Same shape: a stable code plus a hint naming the two variables to set.
+  if (error instanceof SupabaseConfigError) return { error: { code: error.code, message: error.message, hint: error.hint } };
   if (error instanceof DaemonUnavailableError) {
     return { error: { code: error.code, message: error.message, hint: "Run `crosscode init` if this checkout has no configuration, then start the daemon with `pnpm daemon` (or make one MCP tool call, which starts it for you)." } };
   }
