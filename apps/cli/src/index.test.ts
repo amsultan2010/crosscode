@@ -1,7 +1,9 @@
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { daemonConfigPath } from "../../daemon/src/runtime.js";
@@ -171,6 +173,48 @@ describe("crosscode devices / members", () => {
   it("lists retained checkpoints, which the daemon has always exposed but the CLI could not reach", async () => {
     const commands = (await runCli(["commands"])).value as Array<{ command: string }>;
     expect(commands.map((entry) => entry.command)).toContain("checkpoint list");
+  });
+});
+
+// The envelope lives in main(), which only runs in a spawned process, so the documented
+// contract has to be asserted by running the CLI for real rather than by calling runCli().
+const cliEntry = fileURLToPath(new URL("./index.ts", import.meta.url));
+const tsxLoader = createRequire(import.meta.url).resolve("tsx");
+
+async function crosscode(args: string[], cwd: string): Promise<{ stdout: string; exitCode: number }> {
+  try {
+    const { stdout } = await exec(process.execPath, ["--import", tsxLoader, cliEntry, ...args], { cwd });
+    return { stdout, exitCode: 0 };
+  } catch (error) {
+    const failure = error as { stdout?: string; code?: number };
+    return { stdout: failure.stdout ?? "", exitCode: failure.code ?? 1 };
+  }
+}
+
+describe("--json output envelope", () => {
+  it("wraps a success in {\"value\":…}", async () => {
+    const { stdout, exitCode } = await crosscode(["init", "--json"], await repo());
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({
+      value: { workspaceId: expect.any(String), replicaId: expect.any(String), actorId: expect.any(String) }
+    });
+  });
+
+  it("wraps a failure in {\"error\":{code,message,hint}}", async () => {
+    const { stdout, exitCode } = await crosscode(["status", "--json"], await repo());
+    expect(exitCode).toBe(1);
+    expect(JSON.parse(stdout)).toEqual({
+      error: { code: "DAEMON_UNAVAILABLE", message: expect.any(String), hint: expect.any(String) }
+    });
+  });
+
+  it("writes no envelope of its own for `run --`, even with --json, and keeps the child's exit code", async () => {
+    const { stdout, exitCode } = await crosscode(
+      ["run", "--json", "--", process.execPath, "-e", "console.log('child'); process.exit(7)"],
+      await repo()
+    );
+    expect(stdout).toBe("child\n");
+    expect(exitCode).toBe(7);
   });
 });
 
