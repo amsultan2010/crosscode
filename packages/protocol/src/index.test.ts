@@ -201,7 +201,7 @@ describe("protocol schemas", () => {
       projectId: "project-1"
     };
     // The fan-out frame must preserve projectId, not merely accept it: this is the live
-    // path the dashboard reads to attribute an edit to a project.
+    // path a consumer reads to attribute an edit to a project.
     expect(wsFanOutMessageSchema.parse({ type: "operation", operation })).toEqual({ type: "operation", operation });
     expect(wsFanOutMessageSchema.parse({ type: "operation", operation }).type).toBe("operation");
     expect(wsFanOutMessageSchema.parse({ type: "presence", presence }).type).toBe("presence");

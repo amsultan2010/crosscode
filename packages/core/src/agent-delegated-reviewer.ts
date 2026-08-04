@@ -1,11 +1,32 @@
 import { randomUUID } from "node:crypto";
-import { UNCERTAIN_FALLBACK, type SemanticReview, type SemanticReviewer, type SemanticReviewRequest } from "./semantic-review.js";
+import {
+  buildSemanticReviewPrompt, UNCERTAIN_FALLBACK,
+  type SemanticReview, type SemanticReviewer, type SemanticReviewPrompt, type SemanticReviewRequest
+} from "./semantic-review.js";
 
 type PendingReview = {
   request: SemanticReviewRequest;
+  prompt: SemanticReviewPrompt;
   resolve: (review: unknown) => void;
   requestedAt: string;
   timer: ReturnType<typeof setTimeout>;
+};
+
+export type PendingSemanticReview = {
+  requestId: string;
+  requestedAt: string;
+  request: SemanticReviewRequest;
+  /**
+   * The same bundle rendered for a model: the fixed policy preamble plus the file
+   * content wrapped in explicit `<untrusted-content>` delimiters.
+   *
+   * This is what makes the prompt-injection guarantee in docs/security.md true for the
+   * delegated path. The reviewing agent is another LLM reading repository text that may
+   * contain instructions aimed at it, so it must receive that text already framed as
+   * data -- handing over only the raw request left the preamble unused and the framing
+   * up to whatever the agent happened to do with a bare JSON blob.
+   */
+  prompt: SemanticReviewPrompt;
 };
 
 const DEFAULT_TIMEOUT_MS = 600_000;
@@ -27,17 +48,20 @@ export class AgentDelegatedReviewer implements SemanticReviewer {
 
   review(request: SemanticReviewRequest): Promise<SemanticReview> {
     const requestId = randomUUID();
+    const prompt = buildSemanticReviewPrompt(request);
     return new Promise<SemanticReview>((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
         resolve({ ...UNCERTAIN_FALLBACK });
       }, this.timeoutMs);
-      this.pending.set(requestId, { request, resolve: resolve as (review: unknown) => void, requestedAt: new Date().toISOString(), timer });
+      this.pending.set(requestId, { request, prompt, resolve: resolve as (review: unknown) => void, requestedAt: new Date().toISOString(), timer });
     });
   }
 
-  listPending(): Array<{ requestId: string; requestedAt: string; request: SemanticReviewRequest }> {
-    return [...this.pending.entries()].map(([requestId, entry]) => ({ requestId, requestedAt: entry.requestedAt, request: entry.request }));
+  listPending(): PendingSemanticReview[] {
+    return [...this.pending.entries()].map(([requestId, entry]) => ({
+      requestId, requestedAt: entry.requestedAt, request: entry.request, prompt: entry.prompt
+    }));
   }
 
   submit(requestId: string, review: unknown): { ok: true } | { ok: false; error: string } {

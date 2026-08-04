@@ -73,6 +73,31 @@ right, so the same defenses apply.
   Supabase directly with no loopback server and no `state` involved, so agents
   and CI never exercise the browser surface at all.
 
+## Revocation
+
+Three credentials can be taken away, and none of them requires waiting for an expiry:
+
+- **A member.** `crosscode members remove <memberId>` (`DELETE /v1/members/:id`, owner
+  only) sets `members.disabled_at`. Every authorization path — `resolveMembership`,
+  `resolveWorkspaceToken`, `assertReplicaOwnership` — already filters on it, so access
+  ends on the next request. The row is disabled rather than deleted because operations,
+  validations, and audit events reference it and history has to stay attributable. The
+  same transaction retires their replicas and revokes their workspace tokens, so removing
+  someone does not leave their machines still ingesting. A workspace always keeps at least
+  one owner, and an owner cannot remove themselves.
+- **A paired device.** `crosscode devices revoke <tokenId>`
+  (`DELETE /v1/workspace-tokens/:id`, owner only) sets `workspace_tokens.revoked_at` and
+  disables the associated replica. `ccw_` tokens never expire and are not
+  self-describing — they are opaque random bytes resolved against the database on every
+  single request — which is exactly what makes immediate revocation possible.
+- **A Supabase session.** `crosscode logout` clears this checkout's session (and any
+  `ccw_` token) from the config file and the OS keychain, and signs out of Supabase.
+
+Both server-side revocations are refused to a `ccw_` token
+(`assertSupabaseCredential`): team management stays behind a real Supabase session, so a
+leaked terminal-side credential cannot revoke its peers or remove the owner who would
+revoke it. Both are audited (`member.removed`, `workspace_token.revoked`).
+
 ## Provisioning and replica self-registration
 
 Workspace and member provisioning is still an administrator-side operation
@@ -121,9 +146,12 @@ regardless of automation elsewhere:
 - Requesting a semantic review when not pre-approved by workspace policy
   (`configuredAiReviewPolicy`'s `externalAiReview: "approved"` plus
   `requireLocalConfirmation`).
-- Publishing Git commits or pushes (`publish` requires a prior passing
-  validation and, outside `dryRun`, an explicit confirmation or `--yes`).
-- Changing remotes, branch policy, or workspace membership.
+- Publishing a Git commit (`publish` requires a prior passing validation and, outside
+  `dryRun`, an explicit confirmation or `--yes`). Publishing writes a commit and moves a
+  local branch ref; it never pushes to a remote, and nothing in Crosscode does.
+- Changing remotes, branch policy, or workspace membership. Removing a member
+  (`crosscode members remove`) and revoking a paired device (`crosscode devices revoke`)
+  both prompt unless `--yes` is passed, and both are owner-only.
 
 The AI semantic reviewer (BUILD_INSTRUCTIONS.md section 12) is bounded and
 non-authoritative: it cannot write files or publish commits directly, must
@@ -142,6 +170,16 @@ separate AI provider credentials for this — the redaction, prompt-injection
 resistance, risk safety gate, and audit-record guarantees described above and
 in BUILD_INSTRUCTIONS.md section 12 apply identically to the agent-delegated
 bundle.
+
+Concretely, prompt-injection resistance on that path means each pending review carries a
+`prompt` alongside its structured `request`: `SEMANTIC_REVIEW_SYSTEM_PREAMBLE` plus the
+file content wrapped in explicit `<untrusted-content>` delimiters
+(`buildSemanticReviewPrompt`, `packages/core/src/semantic-review.ts`). The reviewing agent
+is itself an LLM reading repository text that may contain instructions aimed at it, so it
+receives that text already framed as data rather than as a bare JSON blob it has to decide
+how to interpret. The preamble states that the delimited content is never instructions,
+that the reviewer has no tool, file, Git, or publish capability, and that a human decides
+what happens next — which is true: `resolveSemanticReview` only writes an audit record.
 
 ### `policy.autoApplyRisk`
 

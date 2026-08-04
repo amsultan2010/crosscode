@@ -3,6 +3,7 @@ import type { HandoffRequestedEvent, IntentPublishedEvent, TransactionCreatedEve
 import { contentHash } from "@crosscode/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createServiceServer } from "./http.js";
+import { BillingLimitError } from "./billing.js";
 import type { Membership, PgStore, StoredOperation } from "./store.js";
 import { signTestSupabaseToken, testSupabaseJwks } from "./test-jwks.js";
 
@@ -377,7 +378,7 @@ describe("service HTTP boundary", () => {
     expect((await put(base, "/v1/workspace/autonomy", { tier: 3 }, accessToken, "owner-workspace")).status).toBe(400);
   });
 
-  it("lists every workspace a user belongs to, for the dashboard's team switcher", async () => {
+  it("lists every workspace a user belongs to, for the CLI's workspace switching", async () => {
     const store = {
       ensurePersonalWorkspace: async () => ({ workspaceId: "workspace-a", memberId: "m1", created: false }),
       listMembershipsForUser: async (userId: string) => {
@@ -620,8 +621,11 @@ async function signToken(userId: string): Promise<string> {
   return signTestSupabaseToken(supabaseUrl, { sub: userId });
 }
 
-async function listen(store: PgStore, bodyLimitBytes?: number, allowedOrigins?: readonly string[]): Promise<string> {
-  const server = createServiceServer({ store, jwks: await testSupabaseJwks(), supabaseUrl, bodyLimitBytes, allowedOrigins });
+async function listen(
+  store: PgStore, bodyLimitBytes?: number, allowedOrigins?: readonly string[],
+  extra: { trustProxy?: boolean; onError?: (error: unknown) => void } = {}
+): Promise<string> {
+  const server = createServiceServer({ store, jwks: await testSupabaseJwks(), supabaseUrl, bodyLimitBytes, allowedOrigins, ...extra });
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -684,3 +688,188 @@ function storedOperation(event: TransactionCreatedEvent, projectId: string | nul
     event: { ...event, serverSequence: 1 }
   };
 }
+
+describe("rate limiting behind a proxy", () => {
+  // Every request from a load balancer shares one socket address, so without
+  // trustProxy the whole deployment shares one bucket and runs into the 10/min
+  // pairing-claim limit at once -- self-DoS, and the per-IP brute-force defense gone.
+  const claimBody = { code: "ABCD-EFGH", actorId: "a", replicaName: "laptop", repoRoot: "/repo", repoRemote: null };
+
+  it("keys on the last x-forwarded-for hop when a proxy is trusted", async () => {
+    const store = {
+      claimPairingCode: async () => ({ workspaceId: "workspace-1", replicaId: "replica-1", token: "ccw_token" }),
+      attachReplicaToProject: async () => null
+    } as unknown as PgStore;
+    const base = await listen(store, undefined, undefined, { trustProxy: true });
+
+    // A proxy appends the address it received the connection from, so the rightmost
+    // entry is the real client and everything to its left is whatever the client itself
+    // claimed. Here "10.0.0.1" is a spoofed prefix the client sent.
+    const send = (clientIp: string) => fetch(`${base}/v1/pairing-codes/claim`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": `10.0.0.1, ${clientIp}` },
+      body: JSON.stringify(claimBody)
+    });
+
+    // One client exhausts its own 10/min budget...
+    for (let attempt = 0; attempt < 10; attempt += 1) expect((await send("203.0.113.7")).status).toBe(200);
+    expect((await send("203.0.113.7")).status).toBe(429);
+    // ...and a different client behind the same proxy is unaffected, which is the whole
+    // point: on the socket address they would have shared one bucket.
+    expect((await send("203.0.113.8")).status).toBe(200);
+  });
+
+  it("cannot be evaded by a client prepending its own x-forwarded-for entries", async () => {
+    const store = {
+      claimPairingCode: async () => ({ workspaceId: "workspace-1", replicaId: "replica-1", token: "ccw_token" }),
+      attachReplicaToProject: async () => null
+    } as unknown as PgStore;
+    const base = await listen(store, undefined, undefined, { trustProxy: true });
+
+    // The same client rotating the spoofable left-hand entries every time.
+    const send = (spoofed: string) => fetch(`${base}/v1/pairing-codes/claim`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": `${spoofed}, 203.0.113.9` },
+      body: JSON.stringify(claimBody)
+    });
+
+    for (let attempt = 0; attempt < 10; attempt += 1) expect((await send(`192.0.2.${attempt}`)).status).toBe(200);
+    expect((await send("192.0.2.200")).status).toBe(429);
+  });
+
+  it("ignores x-forwarded-for when no proxy is trusted, so a client cannot rotate its own key", async () => {
+    const store = {
+      claimPairingCode: async () => ({ workspaceId: "workspace-1", replicaId: "replica-1", token: "ccw_token" }),
+      attachReplicaToProject: async () => null
+    } as unknown as PgStore;
+    const base = await listen(store);
+
+    const send = (clientIp: string) => fetch(`${base}/v1/pairing-codes/claim`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": clientIp },
+      body: JSON.stringify(claimBody)
+    });
+
+    for (let attempt = 0; attempt < 10; attempt += 1) expect((await send(`198.51.100.${attempt}`)).status).toBe(200);
+    expect((await send("198.51.100.250")).status).toBe(429);
+  });
+});
+
+describe("unexpected failures", () => {
+  it("reports a 500 rather than swallowing it, while keeping the detail out of the response", async () => {
+    const reported: unknown[] = [];
+    const store = {
+      resolveMembership: async () => membership,
+      listPresence: async () => { throw new Error("connection terminated unexpectedly"); }
+    } as unknown as PgStore;
+    const base = await listen(store, undefined, undefined, { onError: (error) => reported.push(error) });
+    const accessToken = await signToken(membership.userId);
+
+    const response = await fetch(`${base}/v1/presence`, {
+      headers: { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId }
+    });
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ ok: false, error: "Internal server error" });
+    expect(reported).toHaveLength(1);
+    expect((reported[0] as Error).message).toBe("connection terminated unexpectedly");
+  });
+
+  it("does not report deliberate refusals as failures", async () => {
+    const reported: unknown[] = [];
+    const store = { resolveMembership: async () => membership } as unknown as PgStore;
+    const base = await listen(store, undefined, undefined, { onError: (error) => reported.push(error) });
+    const accessToken = await signToken(membership.userId);
+
+    const response = await fetch(`${base}/v1/nope`, {
+      headers: { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId }
+    });
+
+    expect(response.status).toBe(404);
+    expect(reported).toHaveLength(0);
+  });
+});
+
+describe("device and member revocation", () => {
+  const owner: Membership = { ...membership, role: "owner" };
+
+  it("lists and revokes a paired device's workspace token", async () => {
+    const summary = {
+      id: "11111111-1111-4111-8111-111111111111", workspaceId: owner.workspaceId, replicaId: "22222222-2222-4222-8222-222222222222",
+      replicaName: "laptop", actorId: "actor-1", lastUsedAt: null, revokedAt: null, createdAt: "2026-01-01T00:00:00.000Z"
+    };
+    const store = {
+      resolveMembership: async () => owner,
+      listWorkspaceTokens: async () => [summary],
+      revokeWorkspaceToken: async () => ({ ...summary, revokedAt: "2026-01-02T00:00:00.000Z" })
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken(owner.userId);
+
+    const list = await fetch(`${base}/v1/workspace-tokens`, {
+      headers: { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: owner.workspaceId }
+    });
+    expect((await list.json() as any).data.tokens).toHaveLength(1);
+
+    const revoked = await fetch(`${base}/v1/workspace-tokens/${summary.id}`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: owner.workspaceId }
+    });
+    expect(revoked.status).toBe(200);
+    expect((await revoked.json() as any).data.revokedAt).toBe("2026-01-02T00:00:00.000Z");
+  });
+
+  it("refuses to let a workspace token revoke devices or remove members", async () => {
+    const store = {
+      resolveWorkspaceToken: async () => ({ ...owner, replicaId: "replica-1" })
+    } as unknown as PgStore;
+    const base = await listen(store);
+
+    // A leaked terminal-side credential must not be able to retire its peers or itself
+    // out of an audit trail: team management stays behind a real Supabase session.
+    const list = await fetch(`${base}/v1/workspace-tokens`, { headers: { authorization: "Bearer ccw_leaked-token" } });
+    expect(list.status).toBe(403);
+    const remove = await fetch(`${base}/v1/members/33333333-3333-4333-8333-333333333333`, {
+      method: "DELETE", headers: { authorization: "Bearer ccw_leaked-token" }
+    });
+    expect(remove.status).toBe(403);
+  });
+
+  it("refuses a non-owner and a malformed id", async () => {
+    const store = { resolveMembership: async () => membership } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken(membership.userId);
+    const headers = { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId };
+
+    expect((await fetch(`${base}/v1/workspace-tokens`, { headers })).status).toBe(403);
+
+    const ownerStore = { resolveMembership: async () => owner } as unknown as PgStore;
+    const ownerBase = await listen(ownerStore);
+    const ownerToken = await signToken(owner.userId);
+    const malformed = await fetch(`${ownerBase}/v1/members/not-a-uuid`, {
+      method: "DELETE", headers: { authorization: `Bearer ${ownerToken}`, [WORKSPACE_HEADER]: owner.workspaceId }
+    });
+    expect(malformed.status).toBe(400);
+  });
+});
+
+describe("plan limits", () => {
+  it("answers 402, not 403, when only the plan is refusing", async () => {
+    const store = {
+      resolveMembership: async () => ({ ...membership, role: "owner" as const }),
+      setWorkspaceAutonomyTier: async () => { throw new BillingLimitError("Plan 'free' does not unlock autonomy tier 'auto-always'"); }
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken(membership.userId);
+
+    const response = await fetch(`${base}/v1/workspace/autonomy`, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId, "content-type": "application/json" },
+      body: JSON.stringify({ tier: 2 })
+    });
+
+    expect(response.status).toBe(402);
+    // The message names the plan and the tier, so a client can say what to upgrade to.
+    expect((await response.json() as any).error).toContain("auto-always");
+  });
+});

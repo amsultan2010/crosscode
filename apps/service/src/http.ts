@@ -17,6 +17,10 @@ import {
   intentIngestReceiptSchema,
   inviteSchema,
   listInvitesResponseSchema,
+  listMembersResponseSchema,
+  listWorkspaceTokensResponseSchema,
+  memberSummarySchema,
+  workspaceTokenSummarySchema,
   listProjectsResponseSchema,
   projectSchema,
   upsertProjectRequestSchema,
@@ -44,7 +48,7 @@ import type { JWTVerifyGetKey } from "jose";
 import { verifySupabaseAccessToken } from "./auth.js";
 import { PgStore, StoreConflictError, StoreGoneError, StoreUnauthorizedError, type Membership, type StoredOperation } from "./store.js";
 import { attachWebSocketGateway } from "./ws.js";
-import { getWorkspaceBillingStatus } from "./billing.js";
+import { BillingLimitError, getWorkspaceBillingStatus } from "./billing.js";
 
 export type ServiceServerOptions = {
   store: PgStore;
@@ -62,6 +66,20 @@ export type ServiceServerOptions = {
    * credentials against this API.
    */
   allowedOrigins?: readonly string[];
+  /**
+   * Set when a reverse proxy in front of this process terminates TLS (see
+   * CROSSCODE_TRUST_PROXY_TLS). Rate limiting then keys on the last hop in
+   * `x-forwarded-for` rather than the socket address, which behind a proxy is the
+   * load balancer itself -- without this every client on the deployment shares one
+   * bucket, so the whole service runs into the 10/min pairing-claim limit at once
+   * and the per-IP brute-force defense that limit exists for is gone.
+   *
+   * Off by default: on a directly-exposed socket the header is attacker-controlled,
+   * and trusting it would let a caller rotate their own rate-limit key at will.
+   */
+  trustProxy?: boolean;
+  /** Where unexpected (500-class) failures are reported. Defaults to stderr. */
+  onError?: (error: unknown) => void;
 };
 
 const JSON_TYPE = "application/json";
@@ -86,7 +104,12 @@ export function createServiceServer(options: ServiceServerOptions): Server {
   const limiter = new FixedWindowRateLimiter();
   const listener = (request: IncomingMessage, response: ServerResponse) => {
     void handleRequest(request, response, options, limiter, gateway).catch((error: unknown) => {
-      sendError(response, statusFor(error), messageFor(error));
+      const status = statusFor(error);
+      // Everything below 500 is a deliberate, described refusal the client can act
+      // on. A 500 is a bug or an outage, and its detail is deliberately not in the
+      // response body -- so if it is not reported here it is lost entirely.
+      if (status >= 500) reportError(options, request, error);
+      sendError(response, status, messageFor(error));
     });
   };
   const server = options.tls ? createHttpsServer(options.tls, listener) : createHttpServer(listener);
@@ -113,7 +136,7 @@ async function handleRequest(
     return;
   }
   const route = rateLimitRoute(method, url.pathname);
-  const remote = request.socket.remoteAddress ?? "unknown";
+  const remote = clientAddress(request, options.trustProxy);
   // Claiming is unauthenticated and single-use, so per-IP throttling is the only thing
   // standing between an attacker and brute-forcing the 40-bit code space (Contract A).
   const rate = route === "POST /v1/replicas" || route === "POST /v1/pairing-codes/claim" ? 10 : 300;
@@ -159,7 +182,7 @@ async function handleRequest(
       code: body.code, actorId: body.actorId, replicaName: body.replicaName
     });
     // Attribute the freshly paired replica to the repository it is a checkout of, so the
-    // dashboard can group its activity by project from the very first pairing. Reported by
+    // CLI can group its activity by project from the very first pairing. Reported by
     // the daemon rather than trusted blindly: a checkout with neither a remote nor a repo
     // root yields null, which consumers group as "Unassigned".
     const projectId = await options.store.attachReplicaToProject(claimed.workspaceId, claimed.replicaId, {
@@ -172,8 +195,8 @@ async function handleRequest(
   if (method === "GET" && url.pathname === "/v1/memberships") {
     const { userId, email } = await verifyToken(request, options);
     // Contract C: a valid user never sees an empty membership list. Provisioning here
-    // rather than at signup keeps it independent of how the account was created (dashboard
-    // OAuth, `crosscode -- signup`, or an admin), and the partial unique index behind
+    // rather than at signup keeps it independent of how the account was created (website
+    // OAuth, `crosscode signup`, or an admin), and the partial unique index behind
     // ensurePersonalWorkspace() makes concurrent first requests converge on one workspace.
     await options.store.ensurePersonalWorkspace({ userId, actorId: email ?? userId });
     const memberships = await options.store.listMembershipsForUser(userId);
@@ -232,6 +255,46 @@ async function handleRequest(
     if (identity.role !== "owner") throw new HttpError(403, "Only workspace owners can revoke invites");
     await options.store.revokeInvite(identity, decodeURIComponent(deleteInviteMatch[1]!));
     send(response, 200, { revoked: true });
+    return;
+  }
+
+  // Paired devices. A `ccw_` token never expires, so revoking one is the only way to
+  // retire a lost or compromised machine -- and a workspace token must not be able to
+  // revoke itself out of trouble or enumerate its peers, hence Supabase-only.
+  if (method === "GET" && url.pathname === "/v1/workspace-tokens") {
+    assertSupabaseCredential(identity, "/v1/workspace-tokens");
+    if (identity.role !== "owner") throw new HttpError(403, "Only workspace owners can list paired devices");
+    const tokens = await options.store.listWorkspaceTokens(identity);
+    send(response, 200, listWorkspaceTokensResponseSchema.parse({ tokens }));
+    return;
+  }
+
+  const revokeTokenMatch = method === "DELETE" ? url.pathname.match(/^\/v1\/workspace-tokens\/([^/]+)$/) : null;
+  if (revokeTokenMatch) {
+    assertSupabaseCredential(identity, "/v1/workspace-tokens");
+    if (identity.role !== "owner") throw new HttpError(403, "Only workspace owners can revoke paired devices");
+    const tokenId = decodeURIComponent(revokeTokenMatch[1]!);
+    if (!UUID_PATTERN.test(tokenId)) throw new HttpError(400, "Workspace token id must be a UUID");
+    const revoked = await options.store.revokeWorkspaceToken(identity, tokenId);
+    send(response, 200, workspaceTokenSummarySchema.parse(revoked));
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v1/members") {
+    assertSupabaseCredential(identity, "/v1/members");
+    const members = await options.store.listMembers(identity);
+    send(response, 200, listMembersResponseSchema.parse({ members }));
+    return;
+  }
+
+  const removeMemberMatch = method === "DELETE" ? url.pathname.match(/^\/v1\/members\/([^/]+)$/) : null;
+  if (removeMemberMatch) {
+    assertSupabaseCredential(identity, "/v1/members");
+    if (identity.role !== "owner") throw new HttpError(403, "Only workspace owners can remove members");
+    const memberId = decodeURIComponent(removeMemberMatch[1]!);
+    if (!UUID_PATTERN.test(memberId)) throw new HttpError(400, "memberId must be a UUID");
+    const removed = await options.store.disableMember(identity, memberId);
+    send(response, 200, memberSummarySchema.parse(removed));
     return;
   }
 
@@ -637,11 +700,36 @@ class FixedWindowRateLimiter {
   }
 }
 
+/**
+ * The address rate limiting keys on. Behind a trusted proxy that is the last entry in
+ * `x-forwarded-for` -- the last hop is the only one the proxy itself appended, so it is
+ * the only one a client cannot forge by sending its own header. The socket address is
+ * used otherwise, and whenever the header is absent or unparseable.
+ */
+function clientAddress(request: IncomingMessage, trustProxy: boolean | undefined): string {
+  const socketAddress = request.socket.remoteAddress ?? "unknown";
+  if (!trustProxy) return socketAddress;
+  const forwarded = request.headers["x-forwarded-for"];
+  const chain = (Array.isArray(forwarded) ? forwarded.join(",") : forwarded ?? "").split(",");
+  return chain.map((entry) => entry.trim()).filter(Boolean).at(-1) ?? socketAddress;
+}
+
+function reportError(options: ServiceServerOptions, request: IncomingMessage, error: unknown): void {
+  if (options.onError) {
+    options.onError(error);
+    return;
+  }
+  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  process.stderr.write(`Crosscode service request failed: ${request.method ?? "GET"} ${request.url ?? "/"}\n${detail}\n`);
+}
+
 function rateLimitRoute(method: string, pathname: string): string {
   if (method === "POST" && /^\/v1\/invites\/[^/]+\/redeem$/.test(pathname)) return "POST /v1/invites/:code/redeem";
   if (method === "DELETE" && /^\/v1\/invites\/[^/]+$/.test(pathname)) return "DELETE /v1/invites/:id";
   if (method === "GET" && /^\/v1\/pairing-codes\/[^/]+$/.test(pathname)) return "GET /v1/pairing-codes/:pairingId";
   if (method === "GET" && /^\/v1\/projects\/[^/]+$/.test(pathname)) return "GET /v1/projects/:id";
+  if (method === "DELETE" && /^\/v1\/workspace-tokens\/[^/]+$/.test(pathname)) return "DELETE /v1/workspace-tokens/:id";
+  if (method === "DELETE" && /^\/v1\/members\/[^/]+$/.test(pathname)) return "DELETE /v1/members/:id";
   const route = `${method} ${pathname}`;
   return new Set([
     "GET /healthz",
@@ -669,7 +757,9 @@ function rateLimitRoute(method: string, pathname: string): string {
     "POST /v1/pairing-codes",
     "POST /v1/pairing-codes/claim",
     "GET /v1/workspace/autonomy",
-    "PUT /v1/workspace/autonomy"
+    "PUT /v1/workspace/autonomy",
+    "GET /v1/workspace-tokens",
+    "GET /v1/members"
   ]).has(route) ? route : "unknown";
 }
 
@@ -677,6 +767,10 @@ function statusFor(error: unknown): number {
   if (error instanceof HttpError) return error.status;
   if (error instanceof ZodError) return 400;
   if (error instanceof StoreUnauthorizedError) return 401;
+  // 402: the request was well-formed and authorized, and the only thing refusing it is
+  // the workspace's plan. Distinct from a 403 so a client can tell "you may not" from
+  // "you have run out", and act on the second by upgrading.
+  if (error instanceof BillingLimitError) return 402;
   if (error instanceof StoreConflictError) return 409;
   // 410, not 404/409: a claimed, expired, or unknown pairing code are one indistinguishable
   // outcome, so the endpoint cannot be used to probe which codes ever existed.
@@ -686,7 +780,10 @@ function statusFor(error: unknown): number {
 
 function messageFor(error: unknown): string {
   if (error instanceof StoreGoneError) return error.message;
-  if (error instanceof HttpError || error instanceof StoreUnauthorizedError || error instanceof StoreConflictError) {
+  if (
+    error instanceof HttpError || error instanceof StoreUnauthorizedError ||
+    error instanceof StoreConflictError || error instanceof BillingLimitError
+  ) {
     return error.message;
   }
   if (error instanceof ZodError) return "Request validation failed";

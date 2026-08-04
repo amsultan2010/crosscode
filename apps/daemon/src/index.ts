@@ -10,7 +10,7 @@ import {
   isReviewEligible, looksLikeInterfaceChange, pathOverlaps, redactPath, riskRank, transactionRisk, validateSemanticReview,
   type OperationAnalysis, type SemanticReviewer
 } from "@crosscode/core";
-import { createCheckpoint, discoverRepository, findAstDependentFiles, findSymbolReferences, inspectCheckpoint, publishCommit, readRevisionFile, restoreCheckpointFile, safeRepositoryPath, snapshotWorktreeTree, threeWayMerge, unifiedDiff } from "@crosscode/git";
+import { createCheckpoint, discoverRepository, findAstDependentFiles, findSymbolReferences, inspectCheckpoint, pruneCheckpointRefs, publishCommit, readRevisionFile, restoreCheckpointFile, safeRepositoryPath, snapshotWorktreeTree, threeWayMerge, unifiedDiff } from "@crosscode/git";
 import {
   acceptOperationRequestSchema,
   captureRequestSchema,
@@ -34,6 +34,7 @@ import {
   EPOCH_CURSOR,
   type CaptureKind,
   type ChangeTransaction,
+  type EventEnvelope,
   type Claim,
   type ClaimCreatedEvent,
   type ClaimReleasedEvent,
@@ -53,11 +54,10 @@ import {
   type Validation,
   type ValidationCompletedEvent
 } from "@crosscode/protocol";
-import type { CoordinationService } from "../../service/src/index.js";
 import { configuredAiReviewPolicy, configuredAutoApplyRisk, configuredExcludedPaths, matchesConfiguredExclusion, validationCommands } from "./config.js";
 import { DaemonStateStore, type CheckpointRecord, type ClaimOutboundRecord, type ConflictArtifactRecord, type GitState, type HandoffOutboundRecord, type IntentOutboundRecord, type OutboundRecord, type TaskOutboundRecord, type ValidationOutboundRecord } from "./state.js";
 import type { LocalEvent } from "./local-event.js";
-import type { SemanticReviewRecord, StoredOperation } from "./types.js";
+import type { LocalOperation, SemanticReviewRecord, StoredOperation } from "./types.js";
 
 const exec = promisify(execFile);
 const now = () => new Date().toISOString();
@@ -87,11 +87,31 @@ function changesOverlap(left: ChangeTransaction["changes"][number], right: Chang
   if (left.kind === "delete" || right.kind === "delete") return true;
   return hunksOverlap(left.unifiedPatch, right.unifiedPatch);
 }
+/**
+ * How many of this replica's checkpoints to keep. Deep enough that `checkpoint restore`
+ * still reaches back across a normal working session, bounded so a long-lived checkout
+ * does not accumulate refs forever. Checkpoints named by an in-flight operation are kept
+ * on top of this, however old.
+ */
+const CHECKPOINT_RETENTION = 200;
+
 export type AutonomyTier = 0 | 1 | 2;
 export type DaemonOptions = { workspaceId: string; replicaId: string; actorId: string; reviewer?: SemanticReviewer; transport?: RemoteSyncTransport };
+
+/**
+ * The in-process coordination sink `capture()` optionally publishes to. Structural rather
+ * than a named import of the service's `CoordinationService`, so the daemon does not
+ * reach across an app boundary for a type; anything with these two methods fits.
+ */
+export type LocalCoordinationSink = {
+  receive(event: EventEnvelope, transaction: ChangeTransaction): LocalOperation;
+  list(workspaceId: string, afterSequence?: number): LocalOperation[];
+  getAutonomyTier(workspaceId: string): AutonomyTier;
+};
+
 export type RemoteSyncTransport = {
-  upload(record: OutboundRecord): Promise<import("../../service/src/index.js").RemoteOperation>;
-  list(after: number): Promise<{ operations: import("../../service/src/index.js").RemoteOperation[]; nextCursor: number }>;
+  upload(record: OutboundRecord): Promise<LocalOperation>;
+  list(after: number): Promise<{ operations: LocalOperation[]; nextCursor: number }>;
   uploadTask(record: TaskOutboundRecord): Promise<RemoteTask>;
   listTasks(after: string): Promise<{ tasks: RemoteTask[]; nextCursor: string }>;
   uploadClaim(record: ClaimOutboundRecord): Promise<RemoteClaim>;
@@ -208,8 +228,36 @@ export class LocalDaemon {
     const checkpoint = await createCheckpoint(this.root, this.options.replicaId, message);
     const record = { ...checkpoint, message, createdAt: now() };
     this.checkpoints.push(record);
-    try { await this.persist("checkpoint.created", record); } catch (error) { this.checkpoints.pop(); throw error; }
+    const pruned = await this.pruneCheckpoints();
+    try { await this.persist("checkpoint.created", record); }
+    catch (error) { this.checkpoints.pop(); this.checkpoints.push(...pruned); throw error; }
     return checkpoint;
+  }
+
+  /**
+   * Drops this replica's oldest checkpoints once there are more than CHECKPOINT_RETENTION
+   * of them, and mirrors the deletion into the in-memory list so the projection stops
+   * carrying rows for refs that no longer exist.
+   *
+   * Anything an operation still names as its `materializationCheckpoint` is retained
+   * regardless of age -- that is the ref reconcileInterruptedMaterializations() and the
+   * accept() failure path roll back to, so collecting it would turn a recoverable
+   * interruption into a permanently conflicted operation.
+   */
+  private async pruneCheckpoints(): Promise<CheckpointRecord[]> {
+    const retain = new Set<string>();
+    for (const operation of this.operations.values()) {
+      if (operation.materializationCheckpoint && operation.status !== "rejected") retain.add(operation.materializationCheckpoint);
+    }
+    const deleted = await pruneCheckpointRefs(this.root, this.options.replicaId, CHECKPOINT_RETENTION, [...retain])
+      .catch(() => [] as string[]);
+    if (!deleted.length) return [];
+    const gone = new Set(deleted);
+    const removed = this.checkpoints.filter((entry) => gone.has(entry.ref));
+    for (let index = this.checkpoints.length - 1; index >= 0; index -= 1) {
+      if (gone.has(this.checkpoints[index]!.ref)) this.checkpoints.splice(index, 1);
+    }
+    return removed;
   }
   async inspectCheckpoint(ref: string) { return inspectCheckpoint(this.root, ref); }
   async requestHandoff(input: { operationId: string; note?: string }): Promise<Handoff> {
@@ -320,7 +368,7 @@ export class LocalDaemon {
     return watcher;
   }
 
-  async capture(intent: string, service?: CoordinationService, kind: CaptureKind = "intent"): Promise<StoredOperation> {
+  async capture(intent: string, service?: LocalCoordinationSink, kind: CaptureKind = "intent"): Promise<StoredOperation> {
     let snapshot: { repository: Awaited<ReturnType<typeof discoverRepository>>; checkpoint: Awaited<ReturnType<LocalDaemon["checkpoint"]>>; changes: Array<{ path: string; kind: "add" | "modify" | "delete" | "rename"; previousPath?: string; beforeHash?: string; afterHash?: string; afterContent?: string; afterEncoding?: "base64"; unifiedPatch?: string }> } | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const repository = await discoverRepository(this.root); const names = await this.changedPaths();
@@ -540,7 +588,7 @@ export class LocalDaemon {
     }
   }
 
-  async sync(service: CoordinationService): Promise<StoredOperation[]> {
+  async sync(service: LocalCoordinationSink): Promise<StoredOperation[]> {
     this.autonomyTier = service.getAutonomyTier(this.options.workspaceId);
     const incoming = service.list(this.options.workspaceId, this.remoteCursor); this.remoteCursor = Math.max(this.remoteCursor, ...incoming.map((operation) => operation.sequence), 0);
     const proposals = incoming.filter((operation) => operation.senderReplicaId !== this.options.replicaId).map((operation) => {
@@ -1189,7 +1237,6 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
         else if (method === "POST" && releaseClaimId) data = await daemon.releaseClaim(releaseClaimId);
         else if (method === "GET" && pathname === "/v1/operations") data = [...daemon.operations.values()];
         else if (method === "GET" && pathname === "/v1/checkpoints") data = [...daemon.checkpoints];
-        else if (method === "GET" && pathname === "/v1/claims") data = [...daemon.claims.values()];
         else if (method === "GET" && analysisId) data = { operation: daemon.operations.get(analysisId), analysis: await daemon.analyzeProposal(analysisId) };
         else if (method === "GET" && diffId) data = await daemon.diffProposal(diffId);
         else if (method === "GET" && artifactsId) data = daemon.conflictArtifacts(artifactsId);
@@ -1215,8 +1262,14 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
     } catch (error) {
       if (error instanceof HttpError) { sendJson(response, error.status, { ok: false, error: error.message }); return; }
       if (error && typeof error === "object" && "name" in error && error.name === "ZodError") { sendJson(response, 400, { ok: false, error: "Invalid request" }); return; }
-      console.error("Crosscode request failed", error instanceof Error ? error.message.replaceAll(daemon.root, "<repository>") : "Unknown error");
-      sendJson(response, 500, { ok: false, error: "Request failed" });
+      // The caller already proved it holds the daemon's secret over loopback, so it is
+      // as trusted as the process itself -- there is nothing to withhold from it, and a
+      // bare "Request failed" left every real failure (a missing validation profile, a
+      // stale base, an unreadable file) undiagnosable from the CLI or an agent. The
+      // repository root is still masked so absolute paths stay out of agent transcripts.
+      const detail = error instanceof Error ? error.message.replaceAll(daemon.root, "<repository>") : "Unknown error";
+      console.error("Crosscode request failed", detail);
+      sendJson(response, 500, { ok: false, error: detail });
     }
   });
   await new Promise<void>((resolveListen, rejectListen) => {

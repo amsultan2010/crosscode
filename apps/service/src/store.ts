@@ -7,6 +7,7 @@ import type {
 } from "@crosscode/protocol";
 import { PAIRING_CODE_ALPHABET, PAIRING_CODE_TTL_MS, WORKSPACE_TOKEN_PREFIX } from "@crosscode/protocol";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
+import { assertPlanAllowsAutonomyTier, assertSeatCapAvailable, type AutonomyTier, type Plan } from "./billing.js";
 import { hashCanonicalPayload } from "./crypto.js";
 import { normalizeRepoRemote, normalizeRepoRoot, projectNameFrom } from "./projects.js";
 
@@ -54,6 +55,31 @@ export type Invite = {
   createdAt: string;
 };
 
+/**
+ * A minted `ccw_` token, without the secret. Only the metadata a workspace owner needs
+ * to recognise a device and decide whether to revoke it -- the plaintext exists once, in
+ * the claim response, and only its hash is ever stored.
+ */
+export type WorkspaceTokenSummary = {
+  id: string;
+  workspaceId: string;
+  replicaId: string | null;
+  replicaName: string | null;
+  actorId: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+};
+
+export type MemberSummary = {
+  memberId: string;
+  actorId: string;
+  role: Membership["role"];
+  isPersonal: boolean;
+  disabledAt: string | null;
+  createdAt: string;
+};
+
 export type PairingCodeMint = {
   pairingId: string;
   /** The only time the plaintext code exists server-side; only its hash is persisted. */
@@ -83,6 +109,13 @@ export type PairingClaimResult = {
 export type WorkspaceTokenIdentity = Membership & { replicaId: string | null };
 
 const DEFAULT_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
+
+/** workspaces.autonomy_tier is stored as 0/1/2; PLAN_LIMITS names the same three tiers. */
+const AUTONOMY_TIER_NAMES: Record<0 | 1 | 2, AutonomyTier> = {
+  0: "always-ask",
+  1: "auto-if-clean",
+  2: "auto-always"
+};
 
 export class PgStore {
   readonly pool: Pool;
@@ -206,8 +239,9 @@ export class PgStore {
   }): Promise<{ workspaceId: string; memberId: string }> {
     const memberId = randomUUID();
     return this.transaction(async (client) => {
-      const workspace = await client.query("SELECT id FROM workspaces WHERE id = $1", [input.workspaceId]);
+      const workspace = await client.query<{ plan: Plan }>("SELECT plan FROM workspaces WHERE id = $1 FOR UPDATE", [input.workspaceId]);
       if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
+      await assertSeatAvailable(client, input.workspaceId, workspace.rows[0].plan);
       try {
         await client.query(
           `INSERT INTO members (id, workspace_id, user_id, actor_id, role) VALUES ($1, $2, $3, $4, $5)`,
@@ -232,7 +266,7 @@ export class PgStore {
     return { memberId: row.id, userId, actorId: row.actor_id, workspaceId, role: row.role };
   }
 
-  // Powers the dashboard's "your teams" / workspace switcher -- every workspace a
+  // Powers `GET /v1/memberships` and the CLI's workspace switching -- every workspace a
   // user currently belongs to, with the workspace name for display.
   async listMembershipsForUser(userId: string): Promise<Array<Membership & { workspaceName: string }>> {
     const result = await this.pool.query<{ member_id: string; actor_id: string; role: Membership["role"]; workspace_id: string; workspace_name: string }>(
@@ -308,6 +342,13 @@ export class PgStore {
       if (!invite) throw new StoreUnauthorizedError("Invite code is not valid");
       if (invite.redeemed_at) throw new StoreConflictError("Invite has already been redeemed");
       if (invite.expires_at.getTime() <= Date.now()) throw new StoreConflictError("Invite has expired");
+      // The seat cap is checked at the moment a seat is actually taken, not when the
+      // invite was minted: an owner can hand out more invites than seats, and the plan
+      // can change in between. FOR UPDATE on the workspace serialises concurrent
+      // redemptions so two invites cannot both slip past the last free seat.
+      const workspace = await client.query<{ plan: Plan }>("SELECT plan FROM workspaces WHERE id = $1 FOR UPDATE", [invite.workspace_id]);
+      if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
+      await assertSeatAvailable(client, invite.workspace_id, workspace.rows[0].plan);
       const memberId = randomUUID();
       try {
         await client.query(
@@ -471,6 +512,154 @@ export class PgStore {
   }
 
   /**
+   * Every `ccw_` token minted for this workspace, secret excluded. Owner-gated at the
+   * route, and re-gated here so a new call site cannot hand a member the device list.
+   */
+  async listWorkspaceTokens(identity: Membership): Promise<WorkspaceTokenSummary[]> {
+    if (identity.role !== "owner") throw new StoreUnauthorizedError("Only workspace owners can list workspace tokens");
+    const result = await this.pool.query<{
+      id: string; workspace_id: string; replica_id: string | null; replica_name: string | null;
+      actor_id: string; last_used_at: Date | null; revoked_at: Date | null; created_at: Date;
+    }>(
+      `SELECT t.id, t.workspace_id, t.replica_id, r.name AS replica_name, m.actor_id,
+              t.last_used_at, t.revoked_at, t.created_at
+         FROM workspace_tokens t
+         JOIN members m ON m.id = t.member_id
+         LEFT JOIN replicas r ON r.id = t.replica_id
+        WHERE t.workspace_id = $1
+        ORDER BY t.created_at DESC`,
+      [identity.workspaceId]
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      workspaceId: row.workspace_id,
+      replicaId: row.replica_id,
+      replicaName: row.replica_name,
+      actorId: row.actor_id,
+      lastUsedAt: row.last_used_at ? new Date(row.last_used_at).toISOString() : null,
+      revokedAt: row.revoked_at ? new Date(row.revoked_at).toISOString() : null,
+      createdAt: new Date(row.created_at).toISOString()
+    }));
+  }
+
+  /**
+   * Revokes a paired device's `ccw_` token. resolveWorkspaceToken() already refuses a
+   * token with revoked_at set, so this takes effect on the very next request -- there is
+   * no cached session to wait out, which is the whole reason the tokens are opaque and
+   * resolved against the database on every call rather than being self-describing.
+   */
+  async revokeWorkspaceToken(identity: Membership, tokenId: string): Promise<WorkspaceTokenSummary> {
+    if (identity.role !== "owner") throw new StoreUnauthorizedError("Only workspace owners can revoke workspace tokens");
+    return this.transaction(async (client) => {
+      const result = await client.query<{ id: string; replica_id: string | null; member_id: string; last_used_at: Date | null; revoked_at: Date; created_at: Date }>(
+        `UPDATE workspace_tokens SET revoked_at = now()
+          WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL
+          RETURNING id, replica_id, member_id, last_used_at, revoked_at, created_at`,
+        [tokenId, identity.workspaceId]
+      );
+      const row = result.rows[0];
+      if (!row) throw new StoreConflictError("Workspace token is not available to revoke");
+      // Retiring the replica too, so a revoked device stops appearing as a live
+      // participant: assertReplicaOwnership already refuses a disabled replica, which
+      // closes the ingest path even for a credential that somehow survives.
+      if (row.replica_id) {
+        await client.query("UPDATE replicas SET disabled_at = now() WHERE id = $1 AND workspace_id = $2", [row.replica_id, identity.workspaceId]);
+      }
+      const actor = await client.query<{ actor_id: string; name: string | null }>(
+        `SELECT m.actor_id, r.name FROM members m LEFT JOIN replicas r ON r.id = $2 WHERE m.id = $1`,
+        [row.member_id, row.replica_id]
+      );
+      await this.audit(client, identity.workspaceId, identity.memberId, row.replica_id, "workspace_token.revoked", { tokenId });
+      return {
+        id: row.id,
+        workspaceId: identity.workspaceId,
+        replicaId: row.replica_id,
+        replicaName: actor.rows[0]?.name ?? null,
+        actorId: actor.rows[0]?.actor_id ?? "",
+        lastUsedAt: row.last_used_at ? new Date(row.last_used_at).toISOString() : null,
+        revokedAt: new Date(row.revoked_at).toISOString(),
+        createdAt: new Date(row.created_at).toISOString()
+      };
+    });
+  }
+
+  async listMembers(identity: Membership): Promise<MemberSummary[]> {
+    const result = await this.pool.query<{ id: string; actor_id: string; role: Membership["role"]; is_personal: boolean; disabled_at: Date | null; created_at: Date }>(
+      `SELECT id, actor_id, role, is_personal, disabled_at, created_at
+         FROM members WHERE workspace_id = $1 ORDER BY created_at ASC`,
+      [identity.workspaceId]
+    );
+    return result.rows.map((row) => ({
+      memberId: row.id,
+      actorId: row.actor_id,
+      role: row.role,
+      isPersonal: row.is_personal,
+      disabledAt: row.disabled_at ? new Date(row.disabled_at).toISOString() : null,
+      createdAt: new Date(row.created_at).toISOString()
+    }));
+  }
+
+  /**
+   * Removes a member's access. Sets disabled_at rather than deleting the row: operations,
+   * validations, and audit events reference members, and history must stay attributable
+   * after someone leaves. Every authorization path already filters on
+   * `disabled_at IS NULL`, so this takes effect on the member's next request -- including
+   * for any `ccw_` token minted from their pairing codes, which resolveWorkspaceToken
+   * joins through the same member row.
+   */
+  async disableMember(identity: Membership, memberId: string): Promise<MemberSummary> {
+    if (identity.role !== "owner") throw new StoreUnauthorizedError("Only workspace owners can remove members");
+    if (memberId === identity.memberId) throw new StoreConflictError("A workspace owner cannot remove themselves");
+    return this.transaction(async (client) => {
+      // Lock the workspace's members before counting owners, so two concurrent removals
+      // cannot each see the other's owner as still active and leave the workspace ownerless.
+      const owners = await client.query<{ id: string }>(
+        "SELECT id FROM members WHERE workspace_id = $1 AND role = 'owner' AND disabled_at IS NULL FOR UPDATE",
+        [identity.workspaceId]
+      );
+      const target = await client.query<{ id: string; actor_id: string; role: Membership["role"]; is_personal: boolean; created_at: Date }>(
+        "SELECT id, actor_id, role, is_personal, created_at FROM members WHERE id = $1 AND workspace_id = $2 AND disabled_at IS NULL",
+        [memberId, identity.workspaceId]
+      );
+      const row = target.rows[0];
+      if (!row) throw new StoreConflictError("Member is not available to remove");
+      if (row.role === "owner" && owners.rows.length <= 1) throw new StoreConflictError("A workspace must keep at least one owner");
+      const disabled = await client.query<{ disabled_at: Date }>(
+        "UPDATE members SET disabled_at = now() WHERE id = $1 RETURNING disabled_at",
+        [memberId]
+      );
+      // Their devices go with them: the replicas stop being able to ingest and the
+      // tokens stop resolving, without waiting for anything to expire.
+      await client.query("UPDATE replicas SET disabled_at = now() WHERE member_id = $1 AND disabled_at IS NULL", [memberId]);
+      await client.query("UPDATE workspace_tokens SET revoked_at = now() WHERE member_id = $1 AND revoked_at IS NULL", [memberId]);
+      await this.audit(client, identity.workspaceId, identity.memberId, null, "member.removed", { memberId });
+      return {
+        memberId: row.id,
+        actorId: row.actor_id,
+        role: row.role,
+        isPersonal: row.is_personal,
+        disabledAt: new Date(disabled.rows[0]!.disabled_at).toISOString(),
+        createdAt: new Date(row.created_at).toISOString()
+      };
+    });
+  }
+
+  /** Active (non-disabled) member count, for the plan seat cap. */
+  async countActiveMembers(workspaceId: string): Promise<number> {
+    const result = await this.pool.query<{ count: string }>(
+      "SELECT count(*) FROM members WHERE workspace_id = $1 AND disabled_at IS NULL",
+      [workspaceId]
+    );
+    return Number(result.rows[0]!.count);
+  }
+
+  async getWorkspacePlan(workspaceId: string): Promise<string> {
+    const result = await this.pool.query<{ plan: string }>("SELECT plan FROM workspaces WHERE id = $1", [workspaceId]);
+    if (!result.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
+    return result.rows[0].plan;
+  }
+
+  /**
    * Idempotent upsert of a project (Contract B), keyed by the normalized git remote when
    * the checkout has one and by the absolute repo root otherwise. Returns null when the
    * caller reported neither usable key, so every call site can safely do
@@ -493,15 +682,47 @@ export class PgStore {
     const conflictTarget = repoRemote
       ? "(workspace_id, repo_remote) WHERE repo_remote IS NOT NULL"
       : "(workspace_id, repo_root) WHERE repo_remote IS NULL AND repo_root IS NOT NULL";
-    const result = await this.pool.query<ProjectRow>(
-      `INSERT INTO projects (id, workspace_id, name, repo_remote, repo_root, last_activity_at)
-       VALUES ($1, $2, $3, $4, $5, now())
-       ON CONFLICT ${conflictTarget} DO UPDATE
-         SET repo_root = COALESCE(excluded.repo_root, projects.repo_root), last_activity_at = now()
-       RETURNING id, workspace_id, name, repo_remote, repo_root, created_at, last_activity_at`,
-      [randomUUID(), workspaceId, name, repoRemote, repoRoot]
-    );
-    return mapProject(result.rows[0]!);
+    const columns = "id, workspace_id, name, repo_remote, repo_root, created_at, last_activity_at";
+    return this.transaction(async (client) => {
+      // A checkout that first registered without a remote is already filed under its
+      // repo_root. The moment it reports one, the remote-keyed conflict target below
+      // stops seeing that row -- it would insert a second project for the same checkout
+      // and split its activity across both. Promote the existing row instead. Skipped
+      // when something else already holds the remote, in which case the two rows really
+      // are distinct and the ordinary upsert converges on the remote-keyed one.
+      if (repoRemote && repoRoot) {
+        await client.query("SAVEPOINT crosscode_project_adopt");
+        try {
+          const adopted = await client.query<ProjectRow>(
+            `UPDATE projects SET repo_remote = $3, name = $4, last_activity_at = now()
+              WHERE workspace_id = $1 AND repo_root = $2 AND repo_remote IS NULL
+                AND NOT EXISTS (
+                  SELECT 1 FROM projects claimed
+                   WHERE claimed.workspace_id = $1 AND claimed.repo_remote = $3
+                )
+              RETURNING ${columns}`,
+            [workspaceId, repoRoot, repoRemote, name]
+          );
+          await client.query("RELEASE SAVEPOINT crosscode_project_adopt");
+          if (adopted.rows[0]) return mapProject(adopted.rows[0]);
+        } catch (error) {
+          // Two checkouts reporting the same new remote at once: one adoption wins and
+          // the loser trips the partial unique index. Fall through to the upsert, which
+          // resolves onto the winner's row.
+          if (!isUniqueViolation(error)) throw error;
+          await client.query("ROLLBACK TO SAVEPOINT crosscode_project_adopt");
+        }
+      }
+      const result = await client.query<ProjectRow>(
+        `INSERT INTO projects (id, workspace_id, name, repo_remote, repo_root, last_activity_at)
+         VALUES ($1, $2, $3, $4, $5, now())
+         ON CONFLICT ${conflictTarget} DO UPDATE
+           SET repo_root = COALESCE(excluded.repo_root, projects.repo_root), last_activity_at = now()
+         RETURNING ${columns}`,
+        [randomUUID(), workspaceId, name, repoRemote, repoRoot]
+      );
+      return mapProject(result.rows[0]!);
+    });
   }
 
   async listProjects(workspaceId: string): Promise<Project[]> {
@@ -672,12 +893,19 @@ export class PgStore {
    */
   async setWorkspaceAutonomyTier(identity: Membership, tier: 0 | 1 | 2): Promise<0 | 1 | 2> {
     if (identity.role !== "owner") throw new StoreUnauthorizedError("Only the workspace owner can change the autonomy tier");
-    const result = await this.pool.query<{ autonomy_tier: number }>(
-      "UPDATE workspaces SET autonomy_tier = $2 WHERE id = $1 RETURNING autonomy_tier",
-      [identity.workspaceId, tier]
-    );
-    if (!result.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
-    return result.rows[0].autonomy_tier as 0 | 1 | 2;
+    return this.transaction(async (client) => {
+      const workspace = await client.query<{ plan: Plan }>("SELECT plan FROM workspaces WHERE id = $1 FOR UPDATE", [identity.workspaceId]);
+      if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
+      // The tier a plan unlocks is checked here rather than only at the route, for the
+      // same reason the owner check is: this is the single write path, so a new caller
+      // cannot reach a tier the workspace has not paid for by skipping a gate.
+      assertPlanAllowsAutonomyTier(workspace.rows[0].plan, AUTONOMY_TIER_NAMES[tier]);
+      const result = await client.query<{ autonomy_tier: number }>(
+        "UPDATE workspaces SET autonomy_tier = $2 WHERE id = $1 RETURNING autonomy_tier",
+        [identity.workspaceId, tier]
+      );
+      return result.rows[0]!.autonomy_tier as 0 | 1 | 2;
+    });
   }
 
   async listOperations(workspaceId: string, cursor: number, limit: number): Promise<{
@@ -930,6 +1158,19 @@ export class PgStore {
     );
     return result.rowCount ?? result.rows.length;
   }
+}
+
+/**
+ * Enforces the plan's seat cap inside the caller's transaction, so the count and the
+ * INSERT that follows it cannot be separated by a concurrent redemption. Callers are
+ * expected to hold FOR UPDATE on the workspace row first.
+ */
+async function assertSeatAvailable(client: PoolClient, workspaceId: string, plan: Plan): Promise<void> {
+  const result = await client.query<{ count: string }>(
+    "SELECT count(*) FROM members WHERE workspace_id = $1 AND disabled_at IS NULL",
+    [workspaceId]
+  );
+  assertSeatCapAvailable(plan, Number(result.rows[0]!.count));
 }
 
 function assertPositiveInteger(value: number, name: string): void {

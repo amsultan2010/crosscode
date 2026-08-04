@@ -80,7 +80,7 @@ Paste the prompt in [`docs/install-prompt.md`](./docs/install-prompt.md) into an
 
 - A coordination service backed by Supabase-hosted PostgreSQL, with an immutable audit log
 - Uploads are idempotent, and after a disconnect the daemon resumes from exactly where it left off
-- Live presence, tasks, claims, handoffs, and intents over WebSocket, falling back to polling when the socket drops
+- Live presence, tasks, claims, handoffs, and intents over WebSocket, falling back to polling when the socket drops. Paired installs (`crosscode join --pair`) subscribe with their workspace token and get the same live updates as a logged-in one
 - Text and binary files (binaries travel base64-encoded and are restored byte-for-byte), and renames tracked as real renames rather than a delete plus an add
 
 **Reviewing before anything lands**
@@ -224,12 +224,22 @@ Crosscode's multi-tenant machinery is intact — workspaces, memberships, invite
 | --- | --- |
 | Create a workspace | `POST /v1/workspaces`, or automatically: a user with no memberships gets a personal workspace on their first authenticated request |
 | List your memberships | `GET /v1/memberships` |
-| Create / list / revoke an invite | `POST /v1/invites`, `GET /v1/invites`, `DELETE /v1/invites/:code` (owner only) |
+| Create / list / revoke an invite | `POST /v1/invites`, `GET /v1/invites`, `DELETE /v1/invites/:id` (owner only) |
 | Redeem an invite | `crosscode join --invite <code>`, or `POST /v1/invites/:code/redeem` |
 | Mint a one-time pairing code | `POST /v1/pairing-codes` (owner or member) |
 | Redeem a pairing code from a checkout | `crosscode join --pair <code>` — no prior `init` and no login required |
+| List / revoke a paired device | `crosscode devices list` / `crosscode devices revoke <tokenId>`, or `GET`/`DELETE /v1/workspace-tokens[/:id]` (owner only) |
+| List / remove a member | `crosscode members list` / `crosscode members remove <memberId>`, or `GET /v1/members`, `DELETE /v1/members/:id` (owner only) |
 | Set the autonomy tier | `crosscode workspace autonomy get` / `crosscode workspace autonomy set <tier>` |
-| Read plan and usage | `crosscode billing status --workspace <id>` |
+| Read plan and usage | `crosscode billing status [--workspace <id>]` |
+
+Revoking a device or removing a member takes effect on that credential's very next
+request: `ccw_` workspace tokens are opaque and resolved against the database on every
+call, and every authorization path filters on the member's `disabled_at`. Removing a
+member also retires their replicas and revokes their workspace tokens in the same
+transaction. A workspace always keeps at least one owner, and an owner cannot remove
+themselves. Both actions are refused to a `ccw_` token: team management needs a real
+Supabase session, so a leaked terminal-side credential cannot retire its own audit trail.
 
 `pnpm service:provision` remains available as an administrator-side command for the self-hosted case. It creates or invites a Supabase Auth user by email (via the Supabase admin API, using `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`) and writes the corresponding workspace/member row directly to Postgres (`MIGRATION_DATABASE_URL` or `DATABASE_URL`).
 
@@ -375,10 +385,18 @@ Crosscode never stages, unstages, commits, pushes, force-pushes, resets, rebases
 ## Development and verification
 
 ```bash
-pnpm build
-pnpm test
+pnpm build                 # tsc --noEmit, strict
+pnpm test                  # unit + local-daemon suites
+pnpm test:postgres         # PostgreSQL suites, serialized; needs CROSSCODE_TEST_DATABASE_URL
+pnpm docs:build            # regenerates the docs site from docs/*.md
 pnpm audit --audit-level high
 ```
+
+`pnpm test` skips the PostgreSQL suites unless `CROSSCODE_TEST_DATABASE_URL` is set, and
+they should be run through `pnpm test:postgres` rather than by setting that variable for
+`pnpm test`: they share one database, and running them alongside parallel test files lets
+unrelated suites interleave session and presence rows. CI runs both steps separately for
+the same reason.
 
 The current suite covers protocol boundaries, authenticated daemon HTTP, Git checkpoints, filesystem capture, SQLite restart recovery, outbox identity, stale-base refusal, exclusions, binary safety, crash rollback, Git transitions, MCP-to-daemon mapping, and real daemon child-process restart behavior.
 
@@ -394,7 +412,9 @@ For the implementation plan and current milestone ledger, see [BUILD_INSTRUCTION
 - There is no hosted/managed coordination service yet — you run a Supabase project and the service yourself.
 - There is no production website deployed yet, so `crosscode login` has no default site to open. Pass `--web <url>` or set `CROSSCODE_WEB_URL`, or use the headless `--email`/`--password` path, which needs neither.
 - Workspace, membership, invite, and billing management is CLI- and API-only. There is no web UI for any of it, by decision — the website is landing, sign-up/sign-in, and docs.
-- Billing is a placeholder: the plan/usage data model and enforcement helpers exist, but there is no Stripe account behind them yet (see BUILD_INSTRUCTIONS.md Phase 10).
+- Billing has no payment provider behind it yet (see BUILD_INSTRUCTIONS.md Phase 10). The limits themselves are enforced: seat caps are checked inside the transaction that adds a member, and the autonomy tier a plan unlocks is checked on the write path, both answering `402` rather than `403` so a client can tell "out of seats" from "not allowed". The semantic-review call counter is deliberately not metered — review is delegated to your own already-connected MCP agent and never leaves your machine, so there is no per-call cost to bill and `GET /v1/workspace/billing` correctly reports zero calls used.
+- `pnpm test` skips the PostgreSQL integration suites unless `CROSSCODE_TEST_DATABASE_URL` is set, so a local run leaves the service's store, pairing, and reconnect paths unexercised. CI sets it; to run them locally use `pnpm test:postgres`.
+- There is no linter or formatter configured. `pnpm build` (`tsc --noEmit`) under `strict` is the only static gate.
 - Deliberately not published to npm or any editor marketplace — the supported surface is the daemon + MCP server, run from a cloned checkout via `pnpm install` and `tsx` (see `docs/install-prompt.md`).
 
 ## Contributing

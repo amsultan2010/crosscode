@@ -4,11 +4,9 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
-import { DaemonClient } from "../../daemon/src/client.js";
+import { DaemonClient, DaemonUnavailableError } from "../../daemon/src/client.js";
 import { BrowserLoginError, resolveWebUrl } from "../../daemon/src/browser-login.js";
-import { browserLogin, login, logout, readDaemonConfig, redeemInvite, redeemPairingCode, signup, writeDaemonConfig } from "../../daemon/src/runtime.js";
-import { PgStore } from "../../service/src/store.js";
-import { getWorkspaceBillingStatus } from "../../service/src/billing.js";
+import { browserLogin, login, logout, readDaemonConfig, redeemInvite, redeemPairingCode, serviceRequest, signup, writeDaemonConfig } from "../../daemon/src/runtime.js";
 
 type CliResult = { value?: unknown; exitCode?: number };
 
@@ -178,7 +176,7 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
         rl.close();
       }
       if (!email || !password) {
-        throw new CliError("USAGE_ERROR", "Usage: crosscode -- signup --email <email> --password <password> [--invite <code>] [--service <url>] (or set CROSSCODE_EMAIL/CROSSCODE_PASSWORD)", "Set CROSSCODE_EMAIL and CROSSCODE_PASSWORD to sign up without a terminal prompt.");
+        throw new CliError("USAGE_ERROR", "Usage: crosscode signup --email <email> --password <password> [--invite <code>] [--service <url>] (or set CROSSCODE_EMAIL/CROSSCODE_PASSWORD)", "Set CROSSCODE_EMAIL and CROSSCODE_PASSWORD to sign up without a terminal prompt.");
       }
       const updated = await signup(directory, { email, password, invite: options.invite, serviceUrl });
       result = { value: { workspaceId: updated.workspaceId, actorId: updated.actorId, service: { url: updated.service!.url, loggedIn: true } } };
@@ -186,10 +184,10 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
 
   program
     .command("logout")
-    .description("log out of the crosscode service")
+    .description("log out of the crosscode service, clearing this checkout's session and any pairing token")
     .action(async () => {
-      await logout(directory);
-      result = { value: { loggedOut: true } };
+      const cleared = await logout(directory);
+      result = { value: { loggedOut: true, ...cleared } };
     });
 
   program
@@ -227,6 +225,12 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
     .option("--message <message>", "checkpoint message")
     .action(async (options: { message?: string }) => {
       result = { value: await (await client()).checkpoint(options.message) };
+    });
+  checkpoint
+    .command("list")
+    .description("list the checkpoints this daemon still retains")
+    .action(async () => {
+      result = { value: await (await client()).checkpoints() };
     });
   checkpoint
     .command("inspect")
@@ -369,17 +373,61 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
   billing
     .command("status")
     .description("show a workspace's plan and current usage counters")
-    .option("--workspace <id>", "workspace id")
+    .option("--workspace <id>", "workspace id (defaults to this checkout's workspace)")
     .action(async (options: { workspace?: string }) => {
-      if (!options.workspace) throw new CliError("USAGE_ERROR", "Usage: crosscode billing status --workspace <workspaceId>", "Run `crosscode status` to see the workspace id for this checkout.");
-      const databaseUrl = process.env.DATABASE_URL ?? process.env.MIGRATION_DATABASE_URL;
-      if (!databaseUrl) throw new CliError("USAGE_ERROR", "DATABASE_URL or MIGRATION_DATABASE_URL is required", "Billing status reads the service database directly; export DATABASE_URL before running it.");
-      const store = new PgStore(databaseUrl);
-      try {
-        result = { value: await getWorkspaceBillingStatus(store, options.workspace) };
-      } finally {
-        await store.close();
+      // Goes through the service's own GET /v1/workspace/billing rather than opening a
+      // PostgreSQL connection: this is an end-user command, and requiring DATABASE_URL
+      // meant it could only ever run on a machine holding the production database
+      // credentials -- which is nobody who would want to read their own plan.
+      result = { value: await serviceRequest(directory, "/v1/workspace/billing", { workspaceId: options.workspace, describe: "Billing status" }) };
+    });
+
+  const devices = program.command("devices").description("paired devices holding a workspace token (owner only)");
+  devices
+    .command("list")
+    .description("list every device paired into this workspace, and whether it is still active")
+    .option("--workspace <id>", "workspace id (defaults to this checkout's workspace)")
+    .action(async (options: { workspace?: string }) => {
+      result = { value: await serviceRequest(directory, "/v1/workspace-tokens", { workspaceId: options.workspace, describe: "Device list" }) };
+    });
+  devices
+    .command("revoke")
+    .description("revoke a paired device's workspace token, immediately and permanently")
+    .argument("<tokenId>", "token id from `crosscode devices list`")
+    .option("--workspace <id>", "workspace id (defaults to this checkout's workspace)")
+    .option("--yes", "skip the confirmation prompt")
+    .action(async (tokenId: string, options: { workspace?: string; yes?: boolean }) => {
+      if (!options.yes) {
+        if (!process.stdout.isTTY) throw new CliError("CONFIRMATION_REQUIRED", "Revoking a device requires confirmation; pass --yes in noninteractive environments", "Pass --yes to revoke without an interactive prompt.");
+        if (!await confirm(`Revoke device token ${tokenId}? It cannot be un-revoked. [y/N] `)) {
+          throw new CliError("CANCELLED", "Revocation cancelled", "Re-run with --yes to revoke without the confirmation prompt.");
+        }
       }
+      result = { value: await serviceRequest(directory, `/v1/workspace-tokens/${encodeURIComponent(tokenId)}`, { method: "DELETE", workspaceId: options.workspace, describe: "Device revocation" }) };
+    });
+
+  const members = program.command("members").description("workspace membership");
+  members
+    .command("list")
+    .description("list this workspace's members and their roles")
+    .option("--workspace <id>", "workspace id (defaults to this checkout's workspace)")
+    .action(async (options: { workspace?: string }) => {
+      result = { value: await serviceRequest(directory, "/v1/members", { workspaceId: options.workspace, describe: "Member list" }) };
+    });
+  members
+    .command("remove")
+    .description("remove a member's access, along with their devices and workspace tokens (owner only)")
+    .argument("<memberId>", "member id from `crosscode members list`")
+    .option("--workspace <id>", "workspace id (defaults to this checkout's workspace)")
+    .option("--yes", "skip the confirmation prompt")
+    .action(async (memberId: string, options: { workspace?: string; yes?: boolean }) => {
+      if (!options.yes) {
+        if (!process.stdout.isTTY) throw new CliError("CONFIRMATION_REQUIRED", "Removing a member requires confirmation; pass --yes in noninteractive environments", "Pass --yes to remove without an interactive prompt.");
+        if (!await confirm(`Remove member ${memberId} and revoke their devices? [y/N] `)) {
+          throw new CliError("CANCELLED", "Member removal cancelled", "Re-run with --yes to remove without the confirmation prompt.");
+        }
+      }
+      result = { value: await serviceRequest(directory, `/v1/members/${encodeURIComponent(memberId)}`, { method: "DELETE", workspaceId: options.workspace, describe: "Member removal" }) };
     });
 
   program
@@ -412,11 +460,11 @@ function formatError(error: unknown): { error: { code: string; message: string; 
   if (error instanceof CliError) return { error: { code: error.code, message: error.message, hint: error.hint } };
   // The browser-login errors already carry the frozen contract's codes and their own hints.
   if (error instanceof BrowserLoginError) return { error: { code: error.code, message: error.message, hint: error.hint } };
+  if (error instanceof DaemonUnavailableError) {
+    return { error: { code: error.code, message: error.message, hint: "Run `crosscode init` if this checkout has no configuration, then start the daemon with `pnpm daemon` (or make one MCP tool call, which starts it for you)." } };
+  }
   const message = error instanceof Error ? error.message : "Command failed";
   if (message === "Unknown command") return { error: { code: "UNKNOWN_COMMAND", message, hint: "Run `crosscode commands --json` to see available commands." } };
-  if (message.startsWith("Crosscode daemon is unavailable")) {
-    return { error: { code: "DAEMON_UNAVAILABLE", message, hint: "Run `crosscode init` and make sure the daemon is running." } };
-  }
   return { error: { code: "COMMAND_FAILED", message } };
 }
 

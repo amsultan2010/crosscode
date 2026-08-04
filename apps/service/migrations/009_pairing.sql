@@ -1,6 +1,7 @@
 -- Phase 11 (onboarding rework): Contract A (pairing & verification) and Contract C
 -- (auto-provisioned personal workspace) from docs/onboarding-contracts.md. A pairing
--- code is a short-lived single-use bearer secret the dashboard mints and a local daemon
+-- code is a short-lived single-use bearer secret a workspace owner or member mints and a
+-- local daemon
 -- redeems unauthenticated; redeeming hands back a workspace-scoped service token. Both
 -- secrets are stored only as SHA-256 hashes -- the plaintext exists exactly once, in the
 -- response body that mints it, the same way 001_initial.sql's enrollments.token_hash did.

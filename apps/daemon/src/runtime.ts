@@ -40,7 +40,7 @@ export async function readDaemonConfig(directory: string): Promise<DaemonConfig>
   const config = daemonConfigSchema.parse(JSON.parse(await readFile(await daemonConfigPath(directory), "utf8")));
   if (!config.service?.session || config.service.session.refreshToken !== KEYCHAIN_REFRESH_TOKEN_SENTINEL) return config;
   const refreshToken = await readSecret(keychainAccount(config));
-  if (!refreshToken) throw new Error("Supabase session was not found in the config file or the OS keychain; run `crosscode -- login` again");
+  if (!refreshToken) throw new Error("Supabase session was not found in the config file or the OS keychain; run `crosscode login` again");
   return { ...config, service: { ...config.service, session: { ...config.service.session, refreshToken } } };
 }
 
@@ -125,13 +125,13 @@ async function loginTarget(directory: string): Promise<DaemonConfig> {
 // but no session -- surfaced here as an error telling the caller to confirm and log in.
 export async function signup(directory: string, credentials: { email: string; password: string; invite?: string; workspaceName?: string; serviceUrl?: string }): Promise<DaemonConfig> {
   const config = await readDaemonConfig(directory).catch(() => undefined);
-  if (!config) throw new Error("Run `crosscode init` before `crosscode -- signup`");
+  if (!config) throw new Error("Run `crosscode init` before `crosscode signup`");
   const serviceUrl = credentials.serviceUrl ?? config.service?.url;
   if (!serviceUrl) throw new Error("A service URL is required to sign up; pass --service or run `crosscode join` first");
   const supabase = getSupabaseClient();
   const { data, error } = await supabase.auth.signUp({ email: credentials.email, password: credentials.password });
   if (error || !data.session) {
-    throw new Error(`Supabase sign-up failed: ${error?.message ?? "no session returned (email confirmation may be required; confirm and run `crosscode -- login`)"}`);
+    throw new Error(`Supabase sign-up failed: ${error?.message ?? "no session returned (email confirmation may be required; confirm and run `crosscode login`)"}`);
   }
   // actorId must match what the service records as the member's actor_id, which for
   // invite-redeemed and self-serve-created members is the account email (see
@@ -139,7 +139,7 @@ export async function signup(directory: string, credentials: { email: string; pa
   let updated: DaemonConfig = { ...config, actorId: credentials.email, service: { url: serviceUrl, session: toStoredSession(data.session) } };
   await writeDaemonConfig(directory, updated);
   // A brand-new account has no workspace yet: redeem the given invite, or self-serve
-  // create one so `crosscode -- signup` always lands the user somewhere usable rather
+  // create one so `crosscode signup` always lands the user somewhere usable rather
   // than leaving an authenticated-but-workspace-less account (see BUILD_INSTRUCTIONS.md
   // Phase 8's self-serve workspace creation exit criteria).
   updated = credentials.invite
@@ -148,24 +148,50 @@ export async function signup(directory: string, credentials: { email: string; pa
   return updated;
 }
 
-export async function createWorkspace(directory: string, name: string): Promise<DaemonConfig> {
+/**
+ * One authenticated call to the coordination service using this checkout's stored
+ * session. Every CLI-side service call goes through here so the auth header, the
+ * workspace header, the timeout, and the `{ ok, data | error }` envelope are handled in
+ * exactly one place -- and so a plan or permission refusal surfaces as the service's own
+ * message rather than a bare status code.
+ */
+export async function serviceRequest<T>(
+  directory: string,
+  path: string,
+  init: { method?: "GET" | "POST" | "PUT" | "DELETE"; body?: unknown; workspaceId?: string; describe?: string } = {}
+): Promise<T> {
   const config = await readDaemonConfig(directory).catch(() => undefined);
-  if (!config) throw new Error("Run `crosscode init` before creating a workspace");
-  if (!config.service?.session) throw new Error("Run `crosscode -- login` or `crosscode -- signup` before creating a workspace");
-  const response = await fetch(new URL("/v1/workspaces", config.service.url), {
-    method: "POST",
-    headers: { authorization: `Bearer ${config.service.session.accessToken}`, "content-type": "application/json" },
-    body: JSON.stringify({ name }),
-    signal: AbortSignal.timeout(5_000)
+  if (!config) throw new Error("Run `crosscode init` before talking to the coordination service");
+  if (!config.service?.url) throw new Error("No coordination service is configured; run `crosscode login --service <url>`");
+  if (!config.service.session) throw new Error("Run `crosscode login` first; this command acts as your user account and a pairing token cannot");
+  const response = await fetch(new URL(path, config.service.url), {
+    method: init.method ?? "GET",
+    headers: {
+      authorization: `Bearer ${config.service.session.accessToken}`,
+      "x-crosscode-workspace-id": init.workspaceId ?? config.workspaceId,
+      ...(init.body === undefined ? {} : { "content-type": "application/json" })
+    },
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    signal: AbortSignal.timeout(10_000)
   });
   const envelope = await response.json().catch(() => undefined) as
-    | { ok: true; data: { workspaceId: string; memberId: string } }
+    | { ok: true; data: T }
     | { ok: false; error: string }
     | undefined;
   if (!response.ok || !envelope?.ok) {
-    throw new Error(envelope && !envelope.ok ? envelope.error : `Workspace creation failed with status ${response.status}`);
+    throw new Error(envelope && !envelope.ok ? envelope.error : `${init.describe ?? "Service request"} failed with status ${response.status}`);
   }
-  const updated: DaemonConfig = { ...config, workspaceId: envelope.data.workspaceId };
+  return envelope.data;
+}
+
+export async function createWorkspace(directory: string, name: string): Promise<DaemonConfig> {
+  const config = await readDaemonConfig(directory).catch(() => undefined);
+  if (!config) throw new Error("Run `crosscode init` before creating a workspace");
+  if (!config.service?.session) throw new Error("Run `crosscode login` or `crosscode signup` before creating a workspace");
+  const created = await serviceRequest<{ workspaceId: string; memberId: string }>(directory, "/v1/workspaces", {
+    method: "POST", body: { name }, describe: "Workspace creation"
+  });
+  const updated: DaemonConfig = { ...config, workspaceId: created.workspaceId };
   await writeDaemonConfig(directory, updated);
   return updated;
 }
@@ -176,21 +202,11 @@ export async function createWorkspace(directory: string, name: string): Promise<
 export async function redeemInvite(directory: string, code: string): Promise<DaemonConfig> {
   const config = await readDaemonConfig(directory).catch(() => undefined);
   if (!config) throw new Error("Run `crosscode init` before `crosscode join --invite`");
-  if (!config.service?.session) throw new Error("Run `crosscode -- login` or `crosscode -- signup` before `crosscode join --invite`");
-  const response = await fetch(new URL(`/v1/invites/${encodeURIComponent(code)}/redeem`, config.service.url), {
-    method: "POST",
-    headers: { authorization: `Bearer ${config.service.session.accessToken}`, "content-type": "application/json" },
-    body: JSON.stringify({}),
-    signal: AbortSignal.timeout(5_000)
-  });
-  const envelope = await response.json().catch(() => undefined) as
-    | { ok: true; data: { workspaceId: string; memberId: string; role: string } }
-    | { ok: false; error: string }
-    | undefined;
-  if (!response.ok || !envelope?.ok) {
-    throw new Error(envelope && !envelope.ok ? envelope.error : `Invite redemption failed with status ${response.status}`);
-  }
-  const updated: DaemonConfig = { ...config, workspaceId: envelope.data.workspaceId };
+  if (!config.service?.session) throw new Error("Run `crosscode login` or `crosscode signup` before `crosscode join --invite`");
+  const redeemed = await serviceRequest<{ workspaceId: string; memberId: string; role: string }>(
+    directory, `/v1/invites/${encodeURIComponent(code)}/redeem`, { method: "POST", body: {}, describe: "Invite redemption" }
+  );
+  const updated: DaemonConfig = { ...config, workspaceId: redeemed.workspaceId };
   await writeDaemonConfig(directory, updated);
   return updated;
 }
@@ -256,13 +272,27 @@ async function repoRemoteUrl(root: string, remotes: string[]): Promise<string | 
   return url || null;
 }
 
-export async function logout(directory: string): Promise<void> {
+/**
+ * Drops every credential this checkout holds -- a Supabase session and/or a `ccw_`
+ * workspace token. The token case matters: it used to return early whenever there was no
+ * session, so on a pairing-only install (`crosscode join --pair`) logout was a no-op that
+ * silently left a live bearer credential on disk.
+ *
+ * Local only. Revoking a workspace token server-side is a workspace owner's action
+ * (`crosscode devices revoke`), since a device cannot be trusted to retire itself.
+ */
+export async function logout(directory: string): Promise<{ session: boolean; workspaceToken: boolean }> {
   const config = await readDaemonConfig(directory).catch(() => undefined);
-  if (!config?.service?.session) return;
-  const supabase = getSupabaseClient();
-  await supabase.auth.signOut().catch(() => {});
+  if (!config?.service) return { session: false, workspaceToken: false };
+  const cleared = { session: Boolean(config.service.session), workspaceToken: Boolean(config.service.workspaceToken) };
+  if (cleared.session) {
+    const supabase = getSupabaseClient();
+    await supabase.auth.signOut().catch(() => {});
+  }
   await deleteSecret(keychainAccount(config));
+  if (!cleared.session && !cleared.workspaceToken) return cleared;
   await writeDaemonConfig(directory, { ...config, service: { url: config.service.url } });
+  return cleared;
 }
 
 async function writeConnection(path: string, connection: DaemonConnection): Promise<void> {
@@ -360,7 +390,7 @@ export async function runDaemonProcess(
         config = { ...config, replicaId: await serviceClient.ensureReplicaRegistered(options.replicaName, await describeRepository(directory)) };
       }
     } else if (!config.replicaId) {
-      throw new Error("No replica identity configured; run `crosscode -- login` to enable self-service replica registration, or `crosscode init` for a local-only identity");
+      throw new Error("No replica identity configured; run `crosscode login` to enable self-service replica registration, or `crosscode init` for a local-only identity");
     }
   } catch (error) { await removeOwnedLock(lock); throw error; }
   const daemonOptions = { workspaceId: config.workspaceId, replicaId: config.replicaId!, actorId: config.actorId, reviewer: new AgentDelegatedReviewer(), transport: serviceClient };
@@ -397,9 +427,11 @@ export async function runDaemonProcess(
       void synchronize();
       syncTimer = setInterval(synchronize, options.syncPollMs ?? 1_000);
       syncTimer.unref();
-      // Live sync subscribes with a Supabase access token; a pairing-only install has a
-      // workspace token instead, and falls back to the polling loop above.
-      if ((options.liveSync ?? true) && config.service.session) {
+      // Live sync subscribes with whichever credential this checkout holds -- a Supabase
+      // session or a `ccw_` workspace token -- so a paired install gets the same push
+      // updates as a logged-in one. The polling loop above stays as the fallback for
+      // whenever the socket is down.
+      if (options.liveSync ?? true) {
         liveSync = new LiveSyncClient(config, config.service, client, {
           onOperation: (operation) => {
             if (operation.workspaceId === config.workspaceId) void synchronize();

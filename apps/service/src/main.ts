@@ -27,7 +27,10 @@ export async function main(environment: NodeJS.ProcessEnv = process.env): Promis
   let server: ReturnType<typeof createServiceServer>;
   try {
     await store.assertRuntimePrivileges();
-    server = createServiceServer({ store, jwks, supabaseUrl, tls, allowedOrigins });
+    // trustProxy rides the same flag: it is the operator asserting there is a real
+    // reverse proxy in front, which is exactly the condition under which
+    // x-forwarded-for is trustworthy and the socket address is not.
+    server = createServiceServer({ store, jwks, supabaseUrl, tls, allowedOrigins, trustProxy: trustProxyTls });
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(port, host, () => {

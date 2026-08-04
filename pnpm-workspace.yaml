@@ -7,6 +7,19 @@ overrides:
   # type definitions in a workspace whose engines field requires Node >=24. skipLibCheck
   # currently hides the mismatch; pin the whole tree to the major we actually run on.
   '@types/node': ^24
+  # GHSA-rgw5-rvv9-x895: DoS via unbounded intermediate arrays. Reached through
+  # minimatch (daemon path globbing) and through test-exclude in the coverage
+  # reporter. Nothing depends on the vulnerable major directly, so pin the tree.
+  brace-expansion: ^5.0.9
+  # GHSA-7p8r-x3mc-p8w7: host confusion via a backslash authority introducer.
+  # Reached only through @modelcontextprotocol/sdk > ajv (and ajv-formats > ajv),
+  # whose own range is ^3.0.1, so stay on 3.x rather than jumping to 4.
+  fast-uri: ^3.1.5
+  # Two moderate transitive advisories with the same shape as the two above:
+  # postcss via vitest's reporter, hono via @modelcontextprotocol/sdk's HTTP
+  # transport. Neither is a direct dependency; pin both to the patched range.
+  postcss: ^8.5.23
+  hono: ^4.12.34
 onlyBuiltDependencies:
   - esbuild
 allowBuilds:

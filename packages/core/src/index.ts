@@ -23,7 +23,13 @@ export function hunksOverlap(left: string | undefined, right: string | undefined
   const leftRanges = parseHunkRanges(left);
   const rightRanges = parseHunkRanges(right);
   if (!leftRanges.length || !rightRanges.length) return true;
-  return leftRanges.some((a) => rightRanges.some((b) => a.start < b.start + b.length && b.start < a.start + a.length));
+  // A pure insertion is `@@ -5,0 +5,3 @@`: it removes nothing, so its old-side length is
+  // 0. Compared literally, a zero-length range can never overlap anything -- two agents
+  // inserting at the same point would both read as independent. Give every hunk at least
+  // one line of extent so an insertion point still collides with itself and with a change
+  // to the line it lands against; over-reporting an overlap only costs a review.
+  const extent = (range: HunkRange) => Math.max(range.length, 1);
+  return leftRanges.some((a) => rightRanges.some((b) => a.start < b.start + extent(b) && b.start < a.start + extent(a)));
 }
 const exportedSymbolPattern = /^\s*export\s+(function|class|interface|type|const)\s+/;
 export function looksLikeInterfaceChange(before: string | undefined, after: string | undefined, path: string): boolean {

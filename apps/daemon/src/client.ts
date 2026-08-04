@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import type { CaptureKind, Claim, Handoff, Intent, Task, Validation } from "@crosscode/protocol";
 import { daemonConnectionSchema, type DaemonConnection } from "@crosscode/protocol";
-import type { SemanticReview, SemanticReviewRequest } from "@crosscode/core";
+import type { PendingSemanticReview, SemanticReview } from "@crosscode/core";
 import type { CheckpointRecord, ConflictArtifactRecord } from "./state.js";
 import type { SemanticReviewRecord, StoredOperation } from "./types.js";
 import { daemonConnectionPath } from "./runtime.js";
@@ -25,17 +25,43 @@ type Status = {
   service: { configured: boolean; online: boolean; lastSyncAt?: string; lastSyncError?: string };
 };
 
+/**
+ * No usable daemon for this worktree. Carries the `DAEMON_UNAVAILABLE` contract the CLI
+ * and MCP server branch on, so every way of not reaching a daemon -- no descriptor, an
+ * unreadable or corrupt one, or a descriptor whose daemon is gone -- reports the same
+ * actionable code instead of leaking a raw errno and an absolute path.
+ */
+export class DaemonUnavailableError extends Error {
+  readonly code = "DAEMON_UNAVAILABLE";
+  constructor(reason: string) {
+    super(`Crosscode daemon is unavailable: ${reason}`);
+  }
+}
+
 export class DaemonClient {
   private constructor(private readonly connection: DaemonConnection) {}
 
   static async connect(directory: string): Promise<DaemonClient> {
     const path = await daemonConnectionPath(directory);
-    const metadata = await stat(path);
-    if ((metadata.mode & 0o077) !== 0) throw new Error("Crosscode daemon descriptor permissions are unsafe");
-    if (typeof process.getuid === "function" && metadata.uid !== process.getuid()) throw new Error("Crosscode daemon descriptor is owned by another user");
-    const connection = daemonConnectionSchema.parse(JSON.parse(await readFile(path, "utf8")));
+    let connection: DaemonConnection;
+    try {
+      const metadata = await stat(path);
+      if ((metadata.mode & 0o077) !== 0) throw new Error("the daemon descriptor's permissions are unsafe");
+      if (typeof process.getuid === "function" && metadata.uid !== process.getuid()) throw new Error("the daemon descriptor is owned by another user");
+      connection = daemonConnectionSchema.parse(JSON.parse(await readFile(path, "utf8")));
+    } catch (error) {
+      // ENOENT is the overwhelmingly common case -- no daemon has been started for this
+      // worktree -- and it used to escape as a bare `stat` failure, so the one error an
+      // agent is told to branch on was unreachable in exactly the situation it names.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new DaemonUnavailableError("no daemon is running for this worktree");
+      }
+      throw new DaemonUnavailableError(error instanceof Error ? error.message : "the daemon descriptor could not be read");
+    }
     const client = new DaemonClient(connection);
-    await client.status().catch((error) => { throw new Error(`Crosscode daemon is unavailable: ${error instanceof Error ? error.message : "connection failed"}`); });
+    await client.status().catch((error: unknown) => {
+      throw new DaemonUnavailableError(error instanceof Error ? error.message : "connection failed");
+    });
     return client;
   }
 
@@ -63,7 +89,7 @@ export class DaemonClient {
   semanticReviews(operationId: string): Promise<SemanticReviewRecord[]> { return this.request("GET", `/v1/operations/${encodeURIComponent(operationId)}/reviews`); }
   acceptSemanticReview(reviewId: string): Promise<SemanticReviewRecord> { return this.request("POST", `/v1/reviews/${encodeURIComponent(reviewId)}/accept`, {}); }
   rejectSemanticReview(reviewId: string): Promise<SemanticReviewRecord> { return this.request("POST", `/v1/reviews/${encodeURIComponent(reviewId)}/reject`, {}); }
-  pendingSemanticReviews(): Promise<Array<{ requestId: string; requestedAt: string; request: SemanticReviewRequest }>> { return this.request("GET", "/v1/semantic-reviews/pending"); }
+  pendingSemanticReviews(): Promise<PendingSemanticReview[]> { return this.request("GET", "/v1/semantic-reviews/pending"); }
   submitSemanticReview(requestId: string, review: SemanticReview): Promise<{ ok: true }> { return this.request("POST", `/v1/semantic-reviews/${encodeURIComponent(requestId)}/submit`, review); }
   checkpoints(): Promise<CheckpointRecord[]> { return this.request("GET", "/v1/checkpoints"); }
   checkpoint(message?: string): Promise<{ ref: string; commit: string; tree: string }> { return this.request("POST", "/v1/checkpoints", message ? { message } : {}); }

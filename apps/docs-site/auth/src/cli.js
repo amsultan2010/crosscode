@@ -29,8 +29,9 @@ async function main() {
 }
 
 async function handOff(session) {
+  let response;
   try {
-    await fetch(`http://127.0.0.1:${encodeURIComponent(port)}/callback`, {
+    response = await fetch(`http://127.0.0.1:${encodeURIComponent(port)}/callback`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -48,7 +49,24 @@ async function handOff(session) {
     );
     return;
   }
+  // fetch only rejects on a transport failure, so without this a 400 from the CLI --
+  // a state mismatch, or a session the callback schema rejected -- rendered as success
+  // while the terminal was failing with LOGIN_STATE_MISMATCH or LOGIN_CALLBACK_INVALID.
+  if (!response.ok) {
+    const detail = await response.json().then((body) => body?.error).catch(() => undefined);
+    renderMessage(
+      "Your terminal rejected this sign-in",
+      `${detail ? `It reported: <code>${escapeHtml(detail)}</code>. ` : ""}Run <code>crosscode login</code> again and complete the sign-in in the tab it opens, so the page and the command belong to the same login.`
+    );
+    return;
+  }
   renderMessage("You're signed in — return to your terminal.", "You can close this tab.");
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[character]);
 }
 
 function renderMessage(heading, body) {
