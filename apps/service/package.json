@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "node ../../scripts/build-serverless.mjs",
     "start": "tsx src/main.ts",
     "migrate": "tsx src/migrate.ts",
     "billing-sweep": "tsx src/billing-sweep.ts",
@@ -23,7 +24,10 @@
   },
   "exports": {
     ".": "./src/http.ts",
-    "./serverless": "./src/serverless.ts",
+    "./serverless": {
+      "types": "./src/serverless.ts",
+      "default": "./dist/serverless.js"
+    },
     "./store": "./src/store.ts"
   }
 }

@@ -20,7 +20,7 @@
   },
   "scripts": {
     "dev": "pnpm --filter @crosscode/docs-site dev",
-    "build": "tsc --noEmit && node scripts/build.mjs",
+    "build": "tsc --noEmit && node scripts/build.mjs && node scripts/build-serverless.mjs",
     "prepublishOnly": "pnpm build",
     "test": "vitest run --coverage",
     "test:postgres": "node scripts/postgres-tests.mjs",
