@@ -92,6 +92,14 @@ const NAV_GROUPS = [
       { href: "/docs/cli.html", label: "CLI reference", key: "cli" },
       { href: "/docs/limitations.html", label: "Limitations", key: "limitations" }
     ]
+  },
+  {
+    label: "Support & legal",
+    links: [
+      { href: "/docs/support.html", label: "Support", key: "support" },
+      { href: "/docs/terms.html", label: "Terms of Service", key: "terms" },
+      { href: "/docs/refund-policy.html", label: "Refund policy", key: "refund-policy" }
+    ]
   }
 ];
 
@@ -138,6 +146,30 @@ const GENERATED_PAGES = [
     htmlOut: "mcp-clients.html",
     nextHref: "/docs/cli.html",
     nextLabel: "CLI reference"
+  },
+  {
+    key: "support",
+    title: "Support",
+    mdFile: "support.md",
+    htmlOut: "support.html",
+    nextHref: "/docs/terms.html",
+    nextLabel: "Terms of Service"
+  },
+  {
+    key: "terms",
+    title: "Terms of Service",
+    mdFile: "terms.md",
+    htmlOut: "terms.html",
+    nextHref: "/docs/refund-policy.html",
+    nextLabel: "Refund policy"
+  },
+  {
+    key: "refund-policy",
+    title: "Refund policy",
+    mdFile: "refund-policy.md",
+    htmlOut: "refund-policy.html",
+    nextHref: "/docs/index.html",
+    nextLabel: "Docs overview"
   }
 ];
 
