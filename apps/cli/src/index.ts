@@ -473,7 +473,10 @@ async function main(): Promise<void> {
   const json = args.includes("--json");
   try {
     const result = await runCli(args);
-    if (result.value !== undefined) process.stdout.write(json ? `${JSON.stringify(result.value)}\n` : `${typeof result.value === "string" ? result.value : JSON.stringify(result.value, null, 2)}\n`);
+    // --json wraps success in {"value":…} so it is symmetric with the {"error":…}
+    // failure shape: an agent can branch on which key is present. Without --json the
+    // value is printed bare, because the envelope is only noise for a human reader.
+    if (result.value !== undefined) process.stdout.write(json ? `${JSON.stringify({ value: result.value })}\n` : `${typeof result.value === "string" ? result.value : JSON.stringify(result.value, null, 2)}\n`);
     process.exitCode = result.exitCode ?? 0;
   } catch (error) {
     const value = formatError(error);

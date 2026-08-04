@@ -315,7 +315,7 @@ Crosscode is designed to be driven by an agent with shell access and no browser.
 crosscode commands --json
 ```
 
-**Output.** `--json` is a position-independent flag accepted on every command. With it, stdout is exactly one line of compact JSON: `{"value":…}` on success, `{"error":{"code":…,"message":…,"hint":…}}` on failure. Without it, the same objects are pretty-printed. Nothing else is written to stdout, so it is safe to parse directly.
+**Output.** `--json` is a position-independent flag accepted on every command. With it, stdout is exactly one line of compact JSON: `{"value":…}` on success, `{"error":{"code":…,"message":…,"hint":…}}` on failure. Without it, the same data is pretty-printed for a human: the success value on its own, without the `value` envelope, and errors still under `error`. Nothing else is written to stdout, so it is safe to parse directly.
 
 **Login.** Never shell out to a browser. Use the non-interactive path:
 
