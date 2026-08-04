@@ -11,7 +11,7 @@ const BEGIN_MARKER = "<!-- BEGIN GENERATED TOOL CATALOG (apps/mcp-server/src/gen
 const END_MARKER = "<!-- END GENERATED TOOL CATALOG -->";
 
 function renderCatalog(): string {
-  const lines = mcpToolCatalog().map((tool) => `- **\`${tool.name}\`** — ${tool.description}`);
+  const lines = mcpToolCatalog().map((tool) => `- **\`${tool.name}\`**: ${tool.description}`);
   return [BEGIN_MARKER, "", ...lines, "", END_MARKER].join("\n");
 }
 

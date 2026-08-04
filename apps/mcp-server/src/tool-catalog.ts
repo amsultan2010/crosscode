@@ -90,9 +90,9 @@ export const toolDescriptions: Record<ToolName, string> = {
   claim_task:
     "Create a task, optionally scoped to a set of paths, so other agents can see what you're about to work on. Call before editing; use claim_scope afterward for finer-grained path claims tied to this task.",
   claim_scope:
-    "Advertise a path claim against an existing task so other agents avoid the same files. Call after claim_task and before editing — check_change_scope is how other agents (and you) read these claims back.",
+    "Advertise a path claim against an existing task so other agents avoid the same files. Call after claim_task and before editing. check_change_scope is how other agents (and you) read these claims back.",
   publish_intent:
-    "Capture the current working-tree edits as a durable transaction tagged with a general intent. This is the default of the three capture variants (publish_intent / submit_change_summary / announce_interface_change) — use it when the change is neither a specific summary nor an interface change. Call after making edits.",
+    "Capture the current working-tree edits as a durable transaction tagged with a general intent. This is the default of the three capture variants (publish_intent / submit_change_summary / announce_interface_change); use it when the change is neither a specific summary nor an interface change. Call after making edits.",
   check_change_scope:
     "Check whether a set of paths overlaps existing claims or pending remote proposals before editing. Call this before writing to files to avoid colliding with another agent's claimed scope or an in-flight proposal.",
   submit_change_summary:
@@ -118,9 +118,9 @@ export const toolDescriptions: Record<ToolName, string> = {
   list_proposal_artifacts:
     "List conflict artifacts recorded for a proposed operation. Call when diff_proposal shows conflicting or unmergeable changes, to see what the daemon captured about the conflict before you accept_proposal or reject_proposal.",
   accept_proposal:
-    "Accept a proposed operation, applying it locally; pass reviewApprovals when a path required semantic-review sign-off. Call after inspecting it with inspect_proposal/diff_proposal — this is the terminal counterpart to reject_proposal.",
+    "Accept a proposed operation, applying it locally; pass reviewApprovals when a path required semantic-review sign-off. Call after inspecting it with inspect_proposal/diff_proposal. This is the terminal counterpart to reject_proposal.",
   reject_proposal:
-    "Reject a proposed operation, discarding it without applying it locally. Call after inspecting it with inspect_proposal/diff_proposal — this is the terminal counterpart to accept_proposal.",
+    "Reject a proposed operation, discarding it without applying it locally. Call after inspecting it with inspect_proposal/diff_proposal. This is the terminal counterpart to accept_proposal.",
   publish_branch:
     "Publish accepted changes to a branch by running the named validation profile and pushing/committing the result; requires confirm: true since this is not easily reversible. Call request_validation first if you want a dry look at validation independent of publishing, and pass dryRun: true here to preview without publishing.",
   get_workspace_autonomy:
