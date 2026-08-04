@@ -78,6 +78,14 @@ export type ServiceServerOptions = {
    * and trusting it would let a caller rotate their own rate-limit key at will.
    */
   trustProxy?: boolean;
+  /**
+   * Spend security-critical rate-limit budgets against the database instead of process
+   * memory. Required on any deployment where more than one instance serves requests --
+   * a function platform, or several replicas behind a load balancer -- because an
+   * in-memory counter there gives each instance its own full budget. Costs one round-trip
+   * on the affected routes, which is why it is opt-in rather than always on.
+   */
+  durableRateLimits?: boolean;
   /** Where unexpected (500-class) failures are reported. Defaults to stderr. */
   onError?: (error: unknown) => void;
 };
@@ -200,10 +208,19 @@ async function handleRequest(
   const route = rateLimitRoute(method, url.pathname);
   const remote = clientAddress(request, options.trustProxy);
   // Layer one, pre-auth: per-IP. Tight only where there is no identity to charge instead.
-  const ipRate = route === "POST /v1/pairing-codes/claim"
-    ? UNAUTHENTICATED_IP_RATE_PER_MINUTE
-    : IP_RATE_PER_MINUTE;
-  if (!limiter.take(`ip:${remote}:${route}`, ipRate)) {
+  //
+  // The claim route's budget is spent against the database when a durable store is
+  // configured, because that limit is the brute-force defence for a 40-bit code space and
+  // an in-memory counter is per-instance: on a function platform, N warm instances would
+  // quietly hand an attacker N times the budget. Every other route stays in memory, where
+  // being approximate costs nothing and a round-trip per request would cost real latency.
+  const isUnauthenticatedClaim = route === "POST /v1/pairing-codes/claim";
+  const ipRate = isUnauthenticatedClaim ? UNAUTHENTICATED_IP_RATE_PER_MINUTE : IP_RATE_PER_MINUTE;
+  const ipBucket = `ip:${remote}:${route}`;
+  const withinIpBudget = isUnauthenticatedClaim && options.durableRateLimits
+    ? await options.store.takeRateLimit(ipBucket, ipRate, 60)
+    : limiter.take(ipBucket, ipRate);
+  if (!withinIpBudget) {
     response.setHeader("retry-after", "60");
     sendError(response, 429, "Rate limit exceeded");
     return;

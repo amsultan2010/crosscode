@@ -173,6 +173,8 @@ export class PgStore {
       await client.query(projectsSql);
       const teamPlanSql = await readFile(new URL("../migrations/011_team_plan.sql", import.meta.url), "utf8");
       await client.query(teamPlanSql);
+      const rateLimitsSql = await readFile(new URL("../migrations/012_rate_limits.sql", import.meta.url), "utf8");
+      await client.query(rateLimitsSql);
     } finally {
       await client.query("SELECT pg_advisory_unlock(hashtext('crosscode_migrate'))");
       client.release();
@@ -1161,6 +1163,37 @@ export class PgStore {
        VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
       [randomUUID(), workspaceId, memberId, replicaId, action, JSON.stringify(details)]
     );
+  }
+
+  /**
+   * Shared-across-instances counterpart to the in-process rate limiter, for limits that are
+   * a security control rather than a courtesy (see migrations/012_rate_limits.sql).
+   *
+   * One statement, so concurrent requests on different instances cannot interleave a read
+   * and a write and both conclude they are under the limit. Returns false once the caller
+   * has spent its budget for the current window.
+   */
+  async takeRateLimit(bucket: string, maximum: number, windowSeconds: number): Promise<boolean> {
+    const result = await this.pool.query<{ count: number }>(
+      `INSERT INTO rate_limits (bucket, window_start, count) VALUES ($1, now(), 1)
+       ON CONFLICT (bucket) DO UPDATE SET
+         count = CASE WHEN now() - rate_limits.window_start >= make_interval(secs => $2)
+                      THEN 1 ELSE rate_limits.count + 1 END,
+         window_start = CASE WHEN now() - rate_limits.window_start >= make_interval(secs => $2)
+                             THEN now() ELSE rate_limits.window_start END
+       RETURNING count`,
+      [bucket, windowSeconds]
+    );
+    return (result.rows[0]?.count ?? 1) <= maximum;
+  }
+
+  /** Expired buckets carry no state worth keeping; without this the table grows per distinct IP. */
+  async pruneRateLimits(olderThanSeconds = 3_600): Promise<number> {
+    const result = await this.pool.query(
+      "DELETE FROM rate_limits WHERE window_start < now() - make_interval(secs => $1)",
+      [olderThanSeconds]
+    );
+    return result.rowCount ?? 0;
   }
 
   async pruneAuditEvents(olderThanDays: number): Promise<number> {

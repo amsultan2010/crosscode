@@ -63,6 +63,9 @@ export function createServerlessHandler(environment: NodeJS.ProcessEnv = process
     // infrastructure in front, so it is the trustworthy client address and the socket
     // address is the load balancer.
     trustProxy: true,
+    // Non-negotiable here: instances share no memory, so the pairing-code brute-force
+    // defence has to be counted in the database or it is not a defence at all.
+    durableRateLimits: true,
     allowedOrigins: parseAllowedOrigins(environment.CROSSCODE_ALLOWED_ORIGINS),
     gateway: silentGateway
   });
