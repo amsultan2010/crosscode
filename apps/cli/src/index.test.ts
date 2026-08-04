@@ -1,8 +1,10 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createServer, type IncomingMessage, type Server } from "node:http";
 import { createRequire } from "node:module";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,8 +13,10 @@ import { runCli } from "./index.js";
 
 const exec = promisify(execFile);
 const directories: string[] = [];
+const servers: Server[] = [];
 
 afterEach(async () => {
+  await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
   await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
@@ -157,6 +161,102 @@ describe("crosscode billing status", () => {
       if (previousDatabaseUrl !== undefined) process.env.DATABASE_URL = previousDatabaseUrl;
       if (previousMigrationDatabaseUrl !== undefined) process.env.MIGRATION_DATABASE_URL = previousMigrationDatabaseUrl;
     }
+  });
+});
+
+// Upgrading is a CLI command that opens the payment provider's hosted checkout, not a web
+// form: BUILD_INSTRUCTIONS.md keeps the website to landing, auth, and docs.
+describe("crosscode billing upgrade / cancel / portal", () => {
+  async function configuredRepo(serviceUrl: string): Promise<string> {
+    const root = await repo();
+    const path = await daemonConfigPath(root);
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    // Written directly rather than through writeDaemonConfig, which would put the refresh
+    // token in the real OS keychain.
+    await writeFile(path, JSON.stringify({
+      workspaceId: "workspace-1",
+      actorId: "owner@example.com",
+      service: { url: serviceUrl, session: { accessToken: "token", refreshToken: "refresh", expiresAt: "2099-01-01T00:00:00.000Z" } }
+    }), { mode: 0o600 });
+    return root;
+  }
+
+  async function stubService(handler: (request: IncomingMessage, body: string) => unknown): Promise<{ url: string; requests: Array<{ path: string; body: string }> }> {
+    const requests: Array<{ path: string; body: string }> = [];
+    const server = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        requests.push({ path: request.url ?? "/", body });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: true, data: handler(request, body) }));
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, requests };
+  }
+
+  it("asks for annual billing unless --monthly is passed", async () => {
+    const service = await stubService(() => ({
+      mode: "checkout", plan: "pro", interval: "year", seats: 1,
+      url: "https://checkout.example/cs_1", priceCents: 5_000, monthlyEquivalentCents: 500
+    }));
+    const root = await configuredRepo(service.url);
+
+    await runCli(["billing", "upgrade", "--plan", "pro", "--no-browser"], root);
+    // The default with no interval flag at all. Annual is load-bearing at these prices:
+    // the processor's fixed fee is ~15% of a $2.50 charge and ~4% of a $25 one.
+    expect(JSON.parse(service.requests.at(-1)!.body)).toEqual({ plan: "pro", interval: "year" });
+
+    await runCli(["billing", "upgrade", "--plan", "pro", "--monthly", "--no-browser"], root);
+    expect(JSON.parse(service.requests.at(-1)!.body)).toEqual({ plan: "pro", interval: "month" });
+
+    await runCli(["billing", "upgrade", "--plan", "team", "--seats", "8", "--no-browser"], root);
+    expect(JSON.parse(service.requests.at(-1)!.body)).toEqual({ plan: "team", interval: "year", seats: 8 });
+  });
+
+  it("returns the checkout URL as the command's value so an agent can act on it", async () => {
+    const service = await stubService(() => ({
+      mode: "checkout", plan: "pro", interval: "year", seats: 1,
+      url: "https://checkout.example/cs_1", priceCents: 5_000, monthlyEquivalentCents: 500
+    }));
+    const root = await configuredRepo(service.url);
+
+    const result = await runCli(["billing", "upgrade", "--plan", "pro", "--no-browser"], root);
+
+    expect(result.value).toMatchObject({ mode: "checkout", url: "https://checkout.example/cs_1" });
+  });
+
+  it("rejects an unknown plan and a nonsense seat count before making a request", async () => {
+    const service = await stubService(() => ({}));
+    const root = await configuredRepo(service.url);
+
+    await expect(runCli(["billing", "upgrade", "--plan", "enterprise"], root)).rejects.toThrow(/Unknown plan/);
+    await expect(runCli(["billing", "upgrade", "--plan", "team", "--seats", "0"], root)).rejects.toThrow(/positive integer/);
+    // Student is Pro's limits at Essential's price and needs verification, so it is not
+    // offered here; the service refuses it too.
+    await expect(runCli(["billing", "upgrade", "--plan", "student"], root)).rejects.toThrow(/Unknown plan/);
+    await expect(runCli(["billing", "upgrade"], root)).rejects.toThrow(/--plan/);
+    expect(service.requests).toEqual([]);
+  });
+
+  it("will not cancel a subscription without confirmation in a noninteractive shell", async () => {
+    const service = await stubService(() => ({ plan: "pro", cancelAtPeriodEnd: true, currentPeriodEnd: null }));
+    const root = await configuredRepo(service.url);
+
+    await expect(runCli(["billing", "cancel"], root)).rejects.toThrow(/requires confirmation/);
+    expect(service.requests).toEqual([]);
+
+    const cancelled = await runCli(["billing", "cancel", "--yes"], root);
+    expect(cancelled.value).toMatchObject({ cancelAtPeriodEnd: true });
+    expect(service.requests.at(-1)!.path).toBe("/v1/workspace/billing/cancel");
+  });
+
+  it("exposes the whole subscription lifecycle in the machine-readable catalog", async () => {
+    const names = ((await runCli(["commands"])).value as Array<{ command: string }>).map((entry) => entry.command);
+    expect(names).toEqual(expect.arrayContaining(["billing status", "billing upgrade", "billing cancel", "billing portal"]));
   });
 });
 

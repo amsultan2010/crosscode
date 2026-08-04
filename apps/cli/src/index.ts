@@ -6,12 +6,51 @@ import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
 import { DaemonClient, DaemonUnavailableError } from "../../daemon/src/client.js";
-import { BrowserLoginError, resolveWebUrl } from "../../daemon/src/browser-login.js";
+import { BrowserLoginError, openInBrowser, resolveWebUrl } from "../../daemon/src/browser-login.js";
 import { SupabaseConfigError } from "../../daemon/src/supabase-client.js";
 import { browserLogin, login, logout, readDaemonConfig, redeemInvite, redeemPairingCode, serviceRequest, signup, writeDaemonConfig } from "../../daemon/src/runtime.js";
 import { VERSION } from "../../daemon/src/version.js";
 
 type CliResult = { value?: unknown; exitCode?: number };
+
+// Student is deliberately absent: it is Pro's limits at Essential's price and needs
+// verification, so it is granted out of band rather than sold self-serve. The service
+// refuses it too -- this list only saves a round-trip on an obvious typo.
+const PURCHASABLE_PLANS = ["essential", "pro", "unlimited", "team"];
+
+type CheckoutResult = {
+  mode: "checkout" | "updated";
+  plan: string;
+  interval: "month" | "year";
+  seats: number;
+  url: string | null;
+  priceCents: number;
+  monthlyEquivalentCents: number;
+};
+
+function formatCents(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+/**
+ * The one place the annual-by-default choice is explained to a human. Monthly is never
+ * hidden, but the copy always says what annual costs and what it saves, because on a
+ * $2.50/month plan the processor's fee is the difference between the price working and not.
+ */
+function describeCheckout(checkout: CheckoutResult): string {
+  const seats = checkout.seats > 1 ? ` for ${checkout.seats} seats` : "";
+  const moved = checkout.mode === "updated"
+    ? `Moved to the ${checkout.plan} plan${seats}, billed ${checkout.interval}ly at ${formatCents(checkout.priceCents)}. The change is prorated against the rest of this period.`
+    : `Checking out: ${checkout.plan}${seats}, billed ${checkout.interval}ly at ${formatCents(checkout.priceCents)}.`;
+  if (checkout.interval === "year") {
+    const monthlyYear = checkout.monthlyEquivalentCents * 12;
+    const saving = monthlyYear - checkout.priceCents;
+    return saving > 0
+      ? `${moved} Annual is two months free — ${formatCents(saving)} less than ${formatCents(checkout.monthlyEquivalentCents)}/month. Pass --monthly to bill monthly instead.`
+      : moved;
+  }
+  return `${moved} Annual billing is ${formatCents(checkout.monthlyEquivalentCents * 10)}/year — two months free; drop --monthly to switch.`;
+}
 
 class CliError extends Error {
   constructor(public readonly code: string, message: string, public readonly hint?: string) {
@@ -373,10 +412,10 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
       result = { value: await (await client()).publish(input) };
     });
 
-  const billing = program.command("billing").description("billing plan and usage (read-only)");
+  const billing = program.command("billing").description("plan, usage, and subscription management");
   billing
     .command("status")
-    .description("show a workspace's plan and current usage counters")
+    .description("show a workspace's plan, subscription state, and current usage counters")
     .option("--workspace <id>", "workspace id (defaults to this checkout's workspace)")
     .action(async (options: { workspace?: string }) => {
       // Goes through the service's own GET /v1/workspace/billing rather than opening a
@@ -384,6 +423,84 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
       // meant it could only ever run on a machine holding the production database
       // credentials -- which is nobody who would want to read their own plan.
       result = { value: await serviceRequest(directory, "/v1/workspace/billing", { workspaceId: options.workspace, describe: "Billing status" }) };
+    });
+  billing
+    // Upgrading happens here and not in a browser form, because Crosscode is CLI-first and
+    // the website is landing, auth, and docs (BUILD_INSTRUCTIONS.md). What the browser is
+    // used for is the payment provider's own hosted checkout, which is where a card can
+    // safely be typed and where this command sends you.
+    .command("upgrade")
+    .description("move this workspace to a paid plan; opens a hosted checkout page")
+    .requiredOption("--plan <plan>", `plan to move to (${PURCHASABLE_PLANS.join(", ")})`)
+    // Annual is the default rather than a discount to hunt for: at $2.50/month the payment
+    // processor's fixed fee is about 15% of the charge against about 4% on the annual one,
+    // which is what keeps these prices viable at all.
+    .option("--monthly", "bill monthly instead of annually (annual is two months free)")
+    .option("--seats <count>", "seats to buy up front (team only; defaults to the current member count)")
+    .option("--no-browser", "print the checkout URL instead of opening a browser")
+    .option("--workspace <id>", "workspace id (defaults to this checkout's workspace)")
+    .action(async (options: { plan: string; monthly?: boolean; seats?: string; browser?: boolean; workspace?: string }) => {
+      if (!PURCHASABLE_PLANS.includes(options.plan)) {
+        throw new CliError("USAGE_ERROR", `Unknown plan "${options.plan}"`, `Pick one of: ${PURCHASABLE_PLANS.join(", ")}. Run \`crosscode billing status\` to see the current plan.`);
+      }
+      if (options.seats !== undefined && !/^[1-9]\d*$/.test(options.seats)) {
+        throw new CliError("USAGE_ERROR", "--seats must be a positive integer", "Seats only apply to the per-seat team plan; omit the flag to bill for the workspace's current members.");
+      }
+      const checkout = await serviceRequest<CheckoutResult>(directory, "/v1/workspace/billing/checkout", {
+        method: "POST",
+        body: { plan: options.plan, interval: options.monthly ? "month" : "year", ...(options.seats ? { seats: Number(options.seats) } : {}) },
+        workspaceId: options.workspace,
+        describe: "Checkout"
+      });
+      // Copy goes to stderr so `--json` output stays a single parseable line, the same rule
+      // `crosscode login` follows.
+      process.stderr.write(`${describeCheckout(checkout)}\n`);
+      if (checkout.mode === "checkout" && checkout.url) {
+        if (options.browser === false) process.stderr.write(`Open this URL to enter payment details:\n${checkout.url}\n`);
+        else {
+          process.stderr.write(`Opening ${checkout.url}\n`);
+          openInBrowser(checkout.url);
+        }
+      }
+      result = { value: checkout };
+    });
+  billing
+    .command("cancel")
+    .description("cancel this workspace's subscription at the end of the paid period")
+    .option("--workspace <id>", "workspace id (defaults to this checkout's workspace)")
+    .option("--yes", "skip the confirmation prompt")
+    .action(async (options: { workspace?: string; yes?: boolean }) => {
+      if (!options.yes) {
+        if (!process.stdout.isTTY) throw new CliError("CONFIRMATION_REQUIRED", "Cancelling a subscription requires confirmation; pass --yes in noninteractive environments", "Pass --yes to cancel without an interactive prompt.");
+        // Worth saying plainly at the prompt, because it is the thing people are afraid of:
+        // cancelling drops the plan's limits at the end of the period and destroys nothing.
+        if (!await confirm("Cancel at the end of the paid period? Members, history and settings are all kept. [y/N] ")) {
+          throw new CliError("CANCELLED", "Cancellation cancelled", "Re-run with --yes to cancel without the confirmation prompt.");
+        }
+      }
+      const cancelled = await serviceRequest<{ plan: string; currentPeriodEnd: string | null }>(
+        directory, "/v1/workspace/billing/cancel", { method: "POST", body: {}, workspaceId: options.workspace, describe: "Cancellation" }
+      );
+      process.stderr.write(
+        `Subscription will not renew. The ${cancelled.plan} plan's limits apply until ${cancelled.currentPeriodEnd ?? "the end of the paid period"}, then free's. Nothing is deleted: members, history and settings are kept, and auto-always autonomy falls back to auto-if-clean.\n`
+      );
+      result = { value: cancelled };
+    });
+  billing
+    .command("portal")
+    .description("open the payment provider's hosted page to update a card or download invoices")
+    .option("--no-browser", "print the URL instead of opening a browser")
+    .option("--workspace <id>", "workspace id (defaults to this checkout's workspace)")
+    .action(async (options: { browser?: boolean; workspace?: string }) => {
+      const portal = await serviceRequest<{ url: string }>(directory, "/v1/workspace/billing/portal", {
+        method: "POST", body: {}, workspaceId: options.workspace, describe: "Billing portal"
+      });
+      if (options.browser === false) process.stderr.write(`Open this URL to manage payment details:\n${portal.url}\n`);
+      else {
+        process.stderr.write(`Opening ${portal.url}\n`);
+        openInBrowser(portal.url);
+      }
+      result = { value: portal };
     });
 
   const devices = program.command("devices").description("paired devices holding a workspace token (owner only)");

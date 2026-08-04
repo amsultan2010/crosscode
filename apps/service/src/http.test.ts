@@ -1,10 +1,11 @@
+import { createHmac } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type { HandoffRequestedEvent, IntentPublishedEvent, TransactionCreatedEvent } from "@crosscode/protocol";
 import { contentHash } from "@crosscode/core";
 import { afterEach, describe, expect, it } from "vitest";
-import { createServiceServer } from "./http.js";
-import { BillingLimitError, MAX_SELF_SERVE_WORKSPACES_PER_USER } from "./billing.js";
-import type { Membership, PgStore, StoredOperation } from "./store.js";
+import { createServiceServer, type BillingOptions } from "./http.js";
+import { BillingLimitError, MAX_SELF_SERVE_WORKSPACES_PER_USER, type BillingProvider } from "./billing.js";
+import type { Membership, PgStore, StoredOperation, WorkspaceBillingRecord } from "./store.js";
 import { signTestSupabaseToken, testSupabaseJwks } from "./test-jwks.js";
 
 const supabaseUrl = "https://rzsslbmahvoesjxmgefr.supabase.co";
@@ -559,13 +560,9 @@ describe("service HTTP boundary", () => {
   it("reports workspace billing status, converting an unlimited (Infinity) cap to null over JSON", async () => {
     const store = {
       resolveMembership: async () => membership,
-      pool: {
-        query: async (sql: string) => {
-          if (sql.includes("FROM workspaces")) return { rows: [{ plan: "unlimited" }] };
-          if (sql.includes("FROM members")) return { rows: [{ count: "2" }] };
-          return { rows: [] };
-        }
-      }
+      getWorkspaceBilling: async () => billingRecord({ plan: "unlimited", billingPlan: "unlimited", billingInterval: "year" }),
+      countActiveMembers: async () => 2,
+      pool: { query: async () => ({ rows: [] }) }
     } as unknown as PgStore;
     const base = await listen(store);
     const accessToken = await signToken(membership.userId);
@@ -581,7 +578,17 @@ describe("service HTTP boundary", () => {
         semanticReviewCallsPerMonth: null,
         semanticReviewCallsUsedThisMonth: 0,
         autonomyTiers: ["always-ask", "auto-if-clean", "auto-always"],
-        historyRetentionDays: 365
+        historyRetentionDays: 365,
+        billingPlan: "unlimited",
+        billingInterval: "year",
+        billingStatus: "active",
+        billingSeats: 1,
+        gracePeriodEndsAt: null,
+        cancelAtPeriodEnd: false,
+        currentPeriodEnd: null,
+        billingOwnerActorId: "actor-1",
+        // $7.50/month billed annually is $75.00 — ten months for twelve.
+        priceCents: 7_500
       }
     });
   });
@@ -658,9 +665,58 @@ async function signToken(userId: string): Promise<string> {
   return signTestSupabaseToken(supabaseUrl, { sub: userId });
 }
 
+/** A healthy, active subscription record; overridden field by field per test. */
+function billingRecord(overrides: Partial<WorkspaceBillingRecord>): WorkspaceBillingRecord {
+  return {
+    workspaceId: membership.workspaceId,
+    plan: "free",
+    billingPlan: null,
+    billingInterval: null,
+    billingStatus: "active",
+    billingSeats: 1,
+    gracePeriodEndsAt: null,
+    cancelAtPeriodEnd: false,
+    currentPeriodEnd: null,
+    stripeCustomerId: null,
+    stripeSubscriptionId: null,
+    billingOwnerMemberId: null,
+    billingOwnerActorId: "actor-1",
+    ...overrides
+  };
+}
+
+function fakeProvider(overrides: Partial<BillingProvider> = {}): BillingProvider {
+  return {
+    createCustomer: async (workspaceId: string) => ({ customerId: "cus_fake", workspaceId }),
+    createCheckoutSession: async (workspaceId: string, plan: string) => ({ url: `https://checkout.example/${workspaceId}/${plan}` }),
+    changeSubscription: async () => {},
+    setSeatQuantity: async () => {},
+    cancelSubscription: async () => {},
+    getSubscriptionState: async (subscriptionId: string) => ({
+      subscriptionId, customerId: "cus_fake", status: "active" as const, plan: "pro" as const,
+      interval: "year" as const, seats: 1, cancelAtPeriodEnd: false, currentPeriodEnd: null
+    }),
+    createPortalSession: async (customerId: string) => ({ url: `https://portal.example/${customerId}` }),
+    ...overrides
+  } as BillingProvider;
+}
+
+/** The header Stripe would send for this body: `t=<unix>,v1=<hex hmac of "t.body">`. */
+function stripeSignature(body: string, secret: string, timestamp = Math.floor(Date.now() / 1_000)): string {
+  return `t=${timestamp},v1=${createHmac("sha256", secret).update(`${timestamp}.${body}`, "utf8").digest("hex")}`;
+}
+
+function postSigned(base: string, body: string, secret: string) {
+  return fetch(`${base}/v1/webhooks/stripe`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "stripe-signature": stripeSignature(body, secret) },
+    body
+  });
+}
+
 async function listen(
   store: PgStore, bodyLimitBytes?: number, allowedOrigins?: readonly string[],
-  extra: { trustProxy?: boolean; onError?: (error: unknown) => void } = {}
+  extra: { trustProxy?: boolean; onError?: (error: unknown) => void; billing?: BillingOptions } = {}
 ): Promise<string> {
   const server = createServiceServer({ store, jwks: await testSupabaseJwks(), supabaseUrl, bodyLimitBytes, allowedOrigins, ...extra });
   servers.push(server);
@@ -979,5 +1035,235 @@ describe("plan limits", () => {
     const response = await post(base, "/v1/workspaces", { name: "farm-11" }, accessToken);
     expect(response.status).toBe(402);
     expect((await response.json() as any).error).toContain("per-account limit");
+  });
+});
+
+describe("billing checkout, change, and cancel", () => {
+  const owner: Membership = { ...membership, role: "owner", actorId: "owner@example.com" };
+
+  it("creates a customer, links it, and hands back a hosted checkout URL", async () => {
+    const linked: Array<[string, string, string]> = [];
+    const store = {
+      resolveMembership: async () => owner,
+      getWorkspaceBilling: async () => billingRecord({}),
+      countActiveMembers: async () => 3,
+      linkStripeCustomer: async (workspaceId: string, customerId: string, memberId: string) => {
+        linked.push([workspaceId, customerId, memberId]);
+      }
+    } as unknown as PgStore;
+    const provider = fakeProvider();
+    const base = await listen(store, undefined, undefined, { billing: { provider, webhookSecret: "whsec_test" } });
+
+    const response = await post(base, "/v1/workspace/billing/checkout", { plan: "pro" }, await signToken(owner.userId), owner.workspaceId);
+
+    expect(response.status).toBe(200);
+    const body = (await response.json() as any).data;
+    // Annual is what you get when you do not ask, and $5.00/month annually is $50.00.
+    expect(body).toMatchObject({ mode: "checkout", plan: "pro", interval: "year", seats: 1, priceCents: 5_000, monthlyEquivalentCents: 500 });
+    expect(body.url).toContain("pro");
+    // The customer is attached before the redirect, so an abandoned checkout still leaves
+    // the workspace with one customer rather than a fresh one on every attempt.
+    expect(linked).toEqual([[owner.workspaceId, "cus_fake", owner.memberId]]);
+  });
+
+  it("bills team per active member and honors a larger up-front seat count", async () => {
+    const store = {
+      resolveMembership: async () => owner,
+      getWorkspaceBilling: async () => billingRecord({}),
+      countActiveMembers: async () => 4,
+      linkStripeCustomer: async () => {}
+    } as unknown as PgStore;
+    const base = await listen(store, undefined, undefined, { billing: { provider: fakeProvider(), webhookSecret: "whsec_test" } });
+    const accessToken = await signToken(owner.userId);
+
+    const derived = await post(base, "/v1/workspace/billing/checkout", { plan: "team" }, accessToken, owner.workspaceId);
+    expect((await derived.json() as any).data).toMatchObject({ seats: 4, priceCents: 4 * 5_000 });
+
+    const bought = await post(base, "/v1/workspace/billing/checkout", { plan: "team", seats: 10 }, accessToken, owner.workspaceId);
+    expect((await bought.json() as any).data).toMatchObject({ seats: 10, priceCents: 10 * 5_000 });
+
+    // The quantity is a Stripe line-item quantity, so on a flat-priced plan it has to stay
+    // 1 no matter what the client asks for -- otherwise `--seats 10` on Pro would quietly
+    // buy ten Pro subscriptions.
+    const flat = await post(base, "/v1/workspace/billing/checkout", { plan: "pro", seats: 10 }, accessToken, owner.workspaceId);
+    expect((await flat.json() as any).data).toMatchObject({ seats: 1, priceCents: 5_000 });
+  });
+
+  it("moves an existing subscription in place, prorated, instead of selling a second one", async () => {
+    const changes: unknown[] = [];
+    const applied: unknown[] = [];
+    const provider = fakeProvider({ changeSubscription: async (input: unknown) => { changes.push(input); } });
+    const store = {
+      resolveMembership: async () => owner,
+      getWorkspaceBilling: async () => billingRecord({ plan: "pro", billingPlan: "pro", stripeSubscriptionId: "sub_1" }),
+      countActiveMembers: async () => 1,
+      applySubscriptionState: async (input: unknown) => {
+        applied.push(input);
+        return billingRecord({ plan: "essential", billingPlan: "essential" });
+      }
+    } as unknown as PgStore;
+    const base = await listen(store, undefined, undefined, { billing: { provider, webhookSecret: "whsec_test" } });
+
+    // A downgrade takes the same path as an upgrade: there is one subscription, and it moves.
+    const response = await post(base, "/v1/workspace/billing/checkout", { plan: "essential", interval: "month" }, await signToken(owner.userId), owner.workspaceId);
+
+    expect((await response.json() as any).data).toMatchObject({ mode: "updated", url: null, plan: "essential", interval: "month", priceCents: 250 });
+    expect(changes).toEqual([{ subscriptionId: "sub_1", plan: "essential", interval: "month", seats: 1 }]);
+    // Written straight away from the same authoritative re-read the webhook will do, so the
+    // caller is not told "done" before the plan has actually moved.
+    expect(applied).toHaveLength(1);
+  });
+
+  it("cancels at period end and says so, without touching workspace data", async () => {
+    const cancelled: string[] = [];
+    const provider = fakeProvider({ cancelSubscription: async (id: string) => { cancelled.push(id); } });
+    const store = {
+      resolveMembership: async () => owner,
+      getWorkspaceBilling: async () => billingRecord({ plan: "pro", billingPlan: "pro", stripeSubscriptionId: "sub_1" }),
+      applySubscriptionState: async () => billingRecord({
+        plan: "pro", billingPlan: "pro", cancelAtPeriodEnd: true, currentPeriodEnd: "2026-09-01T00:00:00.000Z"
+      })
+    } as unknown as PgStore;
+    const base = await listen(store, undefined, undefined, { billing: { provider, webhookSecret: "whsec_test" } });
+
+    const response = await post(base, "/v1/workspace/billing/cancel", {}, await signToken(owner.userId), owner.workspaceId);
+
+    expect(cancelled).toEqual(["sub_1"]);
+    // Still on pro: cancelling never takes the plan away mid-period.
+    expect((await response.json() as any).data).toEqual({
+      plan: "pro", cancelAtPeriodEnd: true, currentPeriodEnd: "2026-09-01T00:00:00.000Z"
+    });
+  });
+
+  it("refuses student self-serve, non-owners, workspace tokens, and unconfigured deployments", async () => {
+    const store = {
+      resolveMembership: async (userId: string) => (userId === "user-1" ? owner : membership),
+      resolveWorkspaceToken: async () => ({ ...owner, replicaId: "replica-1" }),
+      getWorkspaceBilling: async () => billingRecord({}),
+      countActiveMembers: async () => 1,
+      linkStripeCustomer: async () => {}
+    } as unknown as PgStore;
+    const base = await listen(store, undefined, undefined, { billing: { provider: fakeProvider(), webhookSecret: "whsec_test" } });
+    const ownerToken = await signToken(owner.userId);
+
+    // Student is Pro's limits at Essential's price; selling it self-serve is just a discount.
+    const student = await post(base, "/v1/workspace/billing/checkout", { plan: "student" }, ownerToken, owner.workspaceId);
+    expect(student.status).toBe(403);
+    expect((await student.json() as any).error).toContain("verification");
+
+    const member = await post(base, "/v1/workspace/billing/checkout", { plan: "pro" }, await signToken("user-2"), membership.workspaceId);
+    expect(member.status).toBe(403);
+
+    // A terminal-side credential must never be able to spend money.
+    const token = await fetch(`${base}/v1/workspace/billing/checkout`, {
+      method: "POST", headers: { authorization: "Bearer ccw_leaked-token", "content-type": "application/json" }, body: JSON.stringify({ plan: "pro" })
+    });
+    expect(token.status).toBe(403);
+
+    // No provider configured: 503, not a fabricated URL.
+    const unconfigured = await listen(store);
+    expect((await post(unconfigured, "/v1/workspace/billing/checkout", { plan: "pro" }, ownerToken, owner.workspaceId)).status).toBe(503);
+  });
+});
+
+describe("stripe webhook", () => {
+  const secret = "whsec_test_secret";
+
+  it("verifies the signature, reconciles from authoritative state, and ignores redeliveries", async () => {
+    const claimed: string[] = [];
+    const completed: Array<[string, string | null]> = [];
+    const applied: any[] = [];
+    let alreadyProcessed = false;
+    const store = {
+      claimBillingEvent: async (id: string) => {
+        claimed.push(id);
+        return !alreadyProcessed;
+      },
+      completeBillingEvent: async (id: string, workspaceId: string | null) => {
+        completed.push([id, workspaceId]);
+        alreadyProcessed = true;
+      },
+      findWorkspaceForBilling: async () => "11111111-1111-4111-8111-111111111111",
+      applySubscriptionState: async (input: unknown) => {
+        applied.push(input);
+        return billingRecord({ plan: "pro", billingPlan: "pro" });
+      }
+    } as unknown as PgStore;
+    const base = await listen(store, undefined, undefined, { billing: { provider: fakeProvider(), webhookSecret: secret } });
+    const body = JSON.stringify({
+      id: "evt_1", type: "customer.subscription.updated",
+      data: { object: { id: "sub_1", object: "subscription", customer: "cus_1" } }
+    });
+
+    const first = await postSigned(base, body, secret);
+    expect(first.status).toBe(200);
+    expect((await first.json() as any).data).toEqual({ received: true, duplicate: false, applied: true });
+    expect(applied).toHaveLength(1);
+    expect(completed).toEqual([["evt_1", "11111111-1111-4111-8111-111111111111"]]);
+
+    // Stripe redelivers freely; the second delivery must change nothing.
+    const second = await postSigned(base, body, secret);
+    expect((await second.json() as any).data).toEqual({ received: true, duplicate: true });
+    expect(applied).toHaveLength(1);
+    expect(claimed).toEqual(["evt_1", "evt_1"]);
+  });
+
+  it("refuses a forged signature, a tampered body, and a stale timestamp before any write", async () => {
+    let claims = 0;
+    const store = { claimBillingEvent: async () => { claims += 1; return true; } } as unknown as PgStore;
+    const base = await listen(store, undefined, undefined, { billing: { provider: fakeProvider(), webhookSecret: secret } });
+    const body = JSON.stringify({ id: "evt_2", type: "customer.subscription.updated", data: { object: { id: "sub_1" } } });
+
+    expect((await postSigned(base, body, "whsec_wrong")).status).toBe(400);
+    // Signed correctly, then edited in flight.
+    const tampered = await fetch(`${base}/v1/webhooks/stripe`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "stripe-signature": stripeSignature(body, secret) },
+      body: body.replace("sub_1", "sub_2")
+    });
+    expect(tampered.status).toBe(400);
+    // A genuine capture, replayed after the tolerance window.
+    const stale = await fetch(`${base}/v1/webhooks/stripe`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "stripe-signature": stripeSignature(body, secret, Math.floor(Date.now() / 1_000) - 3_600) },
+      body
+    });
+    expect(stale.status).toBe(400);
+    const unsigned = await fetch(`${base}/v1/webhooks/stripe`, {
+      method: "POST", headers: { "content-type": "application/json" }, body
+    });
+    expect(unsigned.status).toBe(400);
+
+    // Nothing reached the database on any of the four.
+    expect(claims).toBe(0);
+  });
+
+  it("does not exist at all when no signing secret is configured", async () => {
+    const store = { claimBillingEvent: async () => true } as unknown as PgStore;
+    const withoutSecret = await listen(store, undefined, undefined, { billing: { provider: fakeProvider() } });
+    const withoutBilling = await listen(store);
+    const body = JSON.stringify({ id: "evt_3", type: "customer.subscription.updated", data: { object: { id: "sub_1" } } });
+
+    // An unauthenticated route the service cannot verify anything about should not be
+    // reachable, so its absence is a 404 rather than a weaker check.
+    expect((await postSigned(withoutSecret, body, secret)).status).toBe(404);
+    expect((await postSigned(withoutBilling, body, secret)).status).toBe(404);
+  });
+
+  it("acknowledges events it has no opinion about, so Stripe stops retrying them", async () => {
+    const applied: unknown[] = [];
+    const store = {
+      claimBillingEvent: async () => true,
+      completeBillingEvent: async () => {},
+      findWorkspaceForBilling: async () => null,
+      applySubscriptionState: async (input: unknown) => { applied.push(input); return billingRecord({}); }
+    } as unknown as PgStore;
+    const base = await listen(store, undefined, undefined, { billing: { provider: fakeProvider(), webhookSecret: secret } });
+    const body = JSON.stringify({ id: "evt_4", type: "radar.early_fraud_warning.created", data: { object: { id: "issfr_1" } } });
+
+    const response = await postSigned(base, body, secret);
+    expect(response.status).toBe(200);
+    expect((await response.json() as any).data).toEqual({ received: true, duplicate: false, applied: false });
+    expect(applied).toEqual([]);
   });
 });
