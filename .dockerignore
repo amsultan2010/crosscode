@@ -1,0 +1,28 @@
+# Keeps the build context small and, more importantly, keeps secrets and host-built binaries
+# out of the image. apps/service/Dockerfile copies the whole repo into a throwaway stage to
+# collect workspace manifests, so anything not excluded here would be sent to the daemon.
+#
+# Do not exclude package.json, pnpm-lock.yaml, or pnpm-workspace.yaml: the manifest stage
+# needs every one of them to resolve the workspace graph.
+.git
+.github
+node_modules
+**/node_modules
+
+# Host-built output. The image installs and runs from source; a macOS-built dist would be
+# both useless and, for native dependencies, wrong.
+dist
+**/dist
+coverage
+**/coverage
+*.tgz
+
+# Never bake credentials into a layer. .env is gitignored, which does not stop Docker.
+.env
+**/.env
+.env.*
+!**/.env.example
+
+# Editor/agent scratch that has no business in a build context.
+.context
+.DS_Store

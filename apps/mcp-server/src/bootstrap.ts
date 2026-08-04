@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { openInBrowser } from "../../daemon/src/browser-login.js";
+import { configuredWebUrl, openInBrowser } from "../../daemon/src/browser-login.js";
 import { readDaemonConfig, writeDaemonConfig } from "../../daemon/src/runtime.js";
 import { DaemonClient } from "../../daemon/src/client.js";
 
@@ -16,7 +16,7 @@ const LOGIN_HINT = "No Crosscode session found for this directory; run `crosscod
 // Only fires when a website URL is explicitly configured -- there is no fixed hosted domain
 // yet, and guessing one would point users at a page that may not exist.
 function openSignInPage(): void {
-  const webUrl = process.env.CROSSCODE_WEB_URL ?? process.env.CROSSCODE_DASHBOARD_URL;
+  const webUrl = configuredWebUrl();
   if (webUrl) openInBrowser(webUrl);
 }
 

@@ -9,6 +9,7 @@ import {
 import { z } from "zod";
 import { pathOverlaps } from "@crosscode/core";
 import { DaemonClient } from "../../daemon/src/client.js";
+import { VERSION } from "../../daemon/src/version.js";
 import { ensureDaemonRunning } from "./bootstrap.js";
 import { mcpResources } from "./resources.js";
 import { mcpToolCatalog, submitSemanticReviewInputSchema, toolInputSchemas, type ToolName } from "./tool-catalog.js";
@@ -67,7 +68,7 @@ function errorContent(message: string, hint: string) {
 
 export function buildMcpServer(client: DaemonClient): Server {
   const tools = mcpTools(client);
-  const server = new Server({ name: "crosscode-mcp", version: "0.1.0" }, { capabilities: { tools: {}, resources: {} } });
+  const server = new Server({ name: "crosscode-mcp", version: VERSION }, { capabilities: { tools: {}, resources: {} } });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: mcpToolCatalog() }));
 

@@ -9,6 +9,7 @@ import { DaemonClient, DaemonUnavailableError } from "../../daemon/src/client.js
 import { BrowserLoginError, resolveWebUrl } from "../../daemon/src/browser-login.js";
 import { SupabaseConfigError } from "../../daemon/src/supabase-client.js";
 import { browserLogin, login, logout, readDaemonConfig, redeemInvite, redeemPairingCode, serviceRequest, signup, writeDaemonConfig } from "../../daemon/src/runtime.js";
+import { VERSION } from "../../daemon/src/version.js";
 
 type CliResult = { value?: unknown; exitCode?: number };
 
@@ -75,6 +76,7 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
   program
     .name("crosscode")
     .description("Local-first coordination layer for multi-agent git checkouts")
+    .version(VERSION)
     .option("--json", "output compact JSON instead of pretty-printed JSON")
     .exitOverride()
     .configureOutput({ writeOut: (str) => process.stdout.write(str), writeErr: () => {} });
@@ -438,6 +440,19 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
     .action(() => {
       result = { value: buildCatalog(program) };
     });
+
+  // Answered here rather than by commander's own `--version` handler, which writes the bare
+  // string straight to stdout and would break the guarantee that `--json` prints exactly one
+  // line of JSON. Returning it as a value routes it through the same envelope as every other
+  // command: `0.1.0` plain, `{"value":"0.1.0"}` with --json. `.version()` above still
+  // registers the flag so `--help` documents it.
+  //
+  // Only the leading flags are considered, because `--version` is a flag on the root program:
+  // anything at or after the first bare word belongs to a subcommand, and claiming a `-V` from
+  // there would answer for an option some subcommand owns.
+  const firstSubcommand = parseArgs.findIndex((value) => !value.startsWith("-"));
+  const globalFlags = firstSubcommand < 0 ? parseArgs : parseArgs.slice(0, firstSubcommand);
+  if (globalFlags.some((value) => value === "--version" || value === "-V")) return { value: VERSION };
 
   try {
     await program.parseAsync(parseArgs, { from: "user" });

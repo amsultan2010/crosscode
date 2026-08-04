@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { CoordinationService } from "../../service/src/index.js";
 import { contentHash } from "@crosscode/core";
-import { unifiedDiff } from "@crosscode/git";
+import { discoverRepository, unifiedDiff } from "@crosscode/git";
 import { LocalDaemon } from "./index.js";
 
 const exec = promisify(execFile); const directories: string[] = [];
@@ -586,6 +586,38 @@ describe("local daemon coordination", () => {
     await exec("git", ["-C", root, "reset", "--hard", "HEAD"]);
 
     await expect(daemon.observeGitTransition()).resolves.toMatchObject({ kind: "reset", paused: true });
+  });
+
+  it("keeps the internal reflog sentinel out of the public status payload", async () => {
+    const root = await repo();
+    const daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
+    const status = await daemon.status();
+
+    // Built rather than written literally: a raw NUL in a source file is the kind of character
+    // an editor or a future formatter silently eats, which would turn these into assertions
+    // that quietly test nothing.
+    const nul = String.fromCharCode(0);
+    // JSON.stringify escapes a NUL into six literal characters instead of emitting the byte,
+    // so this is the needle to look for in serialized output. Searching the JSON text for the
+    // byte itself would pass vacuously even with the sentinel still in the payload.
+    const escapedNul = JSON.stringify(nul).slice(1, -1);
+
+    // headReflog joins a commit hash to its reflog subject with a raw NUL. It exists only to
+    // detect a same-HEAD reset (the test above) and has no consumer outside this process, but
+    // status() is what `crosscode status --json` and the MCP get_workspace_state tool return
+    // verbatim -- so leaking it put a NUL byte into the first thing every agent reads.
+    expect(status).not.toHaveProperty("headReflog");
+    // Asserted against the serialized form, because that is what actually reaches an agent.
+    expect(JSON.stringify(status)).not.toContain(escapedNul);
+    // The sentinel is still computed and still drives reset detection; it is only unpublished.
+    expect((await discoverRepository(root)).headReflog).toContain(nul);
+    // Fields the documented status contract does promise. `root` is asserted loosely because
+    // discoverRepository resolves it through realpath, and on macOS the tmpdir this test runs
+    // in is a symlink (/var -> /private/var).
+    expect(status).toMatchObject({ branch: "main", dirty: false, workspaceId: "w", replicaId: "replica" });
+    expect(status.root).toEqual(expect.any(String));
+    expect(status.head).toEqual(expect.any(String));
+    expect(status.remotes).toEqual([]);
   });
 
   it("captures binary working-tree content as base64 instead of throwing, alongside an unrelated text change", async () => {

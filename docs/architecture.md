@@ -77,7 +77,9 @@ cannot tell them apart afterwards.
 bound to `127.0.0.1` on an ephemeral port with a single `/callback` route, and
 generates a 32-character random `state`. It opens
 `${WEB_URL}/auth/cli.html?port=<port>&state=<state>` — `WEB_URL` from `--web`,
-else `CROSSCODE_WEB_URL`, else the production default. That page signs the
+else `CROSSCODE_WEB_URL`, else the deprecated `CROSSCODE_DASHBOARD_URL`. There
+is no production default: no site is deployed yet, so with none of the three
+set this fails with `WEB_URL_REQUIRED` rather than guessing a domain. That page signs the
 visitor in against Supabase (rendering the ordinary sign-in form if they aren't
 already), then POSTs the session back to `http://127.0.0.1:<port>/callback` as
 `{ state, access_token, refresh_token, expires_at, user: { id, email } }` and
