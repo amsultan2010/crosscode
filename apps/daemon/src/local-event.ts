@@ -82,6 +82,10 @@ export const localEventSchema = z.discriminatedUnion("type", [
   event("transaction.created", storedOperationSchema),
   event("transaction.published", z.union([storedOperationSchema, z.object({ eventId: z.string().min(1), operationId: z.string().min(1), serverSequence: z.number().int().positive() }).strict()])),
   event("remote.synchronized", cursorDownloadSchema),
+  // Operations this device could not open because it holds no workspace key for the
+  // epoch that sealed them. Recorded rather than logged and forgotten, so "why does my
+  // history start here" has an answer in the durable local log.
+  event("remote.unreadable", z.object({ sequences: z.array(z.number().int().positive()).min(1) }).strict()),
   event("transaction.proposed", z.object({ proposals: z.array(storedOperationSchema), remoteCursor: z.number().int().nonnegative() }).strict()),
   event("transaction.applying", storedOperationSchema),
   event("transaction.apply_rolled_back", z.object({ id: z.string(), checkpoint: z.string(), recovery: z.string() }).strict()),

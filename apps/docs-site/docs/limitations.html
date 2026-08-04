@@ -41,6 +41,7 @@
         <div class="docs-sidebar-links">
           <a href="/docs/architecture.html">Architecture</a>
           <a href="/docs/safety.html">Safety model</a>
+          <a href="/docs/privacy.html">Privacy</a>
           <a href="/docs/protocol.html">Network protocol</a>
         </div>
       </div>
@@ -76,7 +77,10 @@
       <h2>Operational hardening</h2>
       <ul>
         <li>Production PostgreSQL role grants still need environment-specific deployment hardening. Retention is opt-in and admin-only (<code>pnpm service:prune -- --older-than-days &lt;n&gt;</code>); tables that cursor reconnect depends on are deliberately never pruned.</li>
-        <li>Supabase refresh tokens go in the OS keychain when one is available (macOS Keychain, Linux Secret Service); otherwise, including on Windows, the mode-<code>0600</code> Git-directory config file is used instead.</li>
+        <li>Supabase refresh tokens go in the OS keychain when one is available (macOS Keychain, Linux Secret Service); otherwise, including on Windows, the mode-<code>0600</code> Git-directory config file is used instead. The workspace encryption keyring follows the same rule.</li>
+        <li><strong>End-to-end encryption covers file payloads, not everything.</strong> File contents, paths, diffs, content hashes, and change intents are sealed. Task titles, claim targets, published intents, handoff notes, and validation output are <em>not</em> encrypted yet, and can contain paths and descriptions of what you're working on. The <a href="/docs/privacy.html">privacy page</a> states this plainly rather than letting "end-to-end encrypted" imply more than it currently covers.</li>
+        <li>Adding a device to an encrypted workspace needs a human to compare a fingerprint on both machines. That is deliberate — auto-granting to whatever device the service listed would let the service ask for the key and get it — but it does mean pairing is not fully unattended.</li>
+        <li>Losing every copy of a workspace key is unrecoverable: we hold no copy, which is the same fact as being unable to read your code. It costs the coordination history, not source code, since the repository is an ordinary Git repository throughout. <code>crosscode key export</code> produces a recovery code worth keeping.</li>
       </ul>
 
       <h2>Analysis depth</h2>

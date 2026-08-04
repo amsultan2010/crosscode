@@ -411,11 +411,11 @@ describe("service HTTP boundary", () => {
       resolveMembership: async () => membership,
       createPairingCode: async () => ({ pairingId, code: "K4T9-2WQZ", expiresAt: "2026-08-01T12:15:00.000Z" }),
       getPairingCodeStatus: async (_identity: Membership, id: string) => id === pairingId
-        ? { status: "pending" as const, claimedAt: null, replicaId: null, actorId: null }
+        ? { status: "pending" as const, claimedAt: null, replicaId: null, actorId: null, devicePublicKey: null }
         : undefined,
       claimPairingCode: async (input: { code: string }) => {
         if (input.code !== "K4T9-2WQZ") throw new StoreGoneError("Pairing code is no longer available");
-        return { workspaceId: membership.workspaceId, replicaId: "replica-9", token: "ccw_opaque-token" };
+        return { workspaceId: membership.workspaceId, replicaId: "replica-9", token: "ccw_opaque-token", pairingId };
       },
       // Contract A's projectId is populated by attributing the freshly registered replica
       // to the repository it reported, so assert the handler forwards that report through
@@ -437,7 +437,7 @@ describe("service HTTP boundary", () => {
     const polled = await fetch(`${base}/v1/pairing-codes/${pairingId}`, {
       headers: { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId }
     });
-    expect(await polled.json()).toEqual({ ok: true, data: { status: "pending", claimedAt: null, replicaId: null, actorId: null } });
+    expect(await polled.json()).toEqual({ ok: true, data: { status: "pending", claimedAt: null, replicaId: null, actorId: null, devicePublicKey: null } });
 
     const missing = await fetch(`${base}/v1/pairing-codes/1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f`, {
       headers: { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId }
@@ -454,7 +454,7 @@ describe("service HTTP boundary", () => {
     });
     expect(await claimed.json()).toEqual({
       ok: true,
-      data: { workspaceId: membership.workspaceId, replicaId: "replica-9", token: "ccw_opaque-token", projectId: "project-7" }
+      data: { workspaceId: membership.workspaceId, replicaId: "replica-9", token: "ccw_opaque-token", projectId: "project-7", pairingId }
     });
 
     const gone = await post(base, "/v1/pairing-codes/claim", {
@@ -693,6 +693,117 @@ function storedOperation(event: TransactionCreatedEvent, projectId: string | nul
   };
 }
 
+describe("end-to-end encrypted ingest", () => {
+  const sealedEvent = () => ({
+    id: "operation-1",
+    schemaVersion: 1 as const,
+    workspaceId: membership.workspaceId,
+    replicaId: "replica-1",
+    actorId: membership.actorId,
+    type: "transaction.sealed" as const,
+    clientSequence: 1,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    payload: {
+      id: "operation-1",
+      sealed: { version: 1 as const, algorithm: "AES-256-GCM" as const, epoch: 0, keyId: "0123456789abcdef", nonce: "AAAAAAAAAAAAAAAA", ciphertext: "Zm9vYmFyYmF6" },
+      changes: [{ pathToken: "a".repeat(64), kind: "modify" as const }, { pathToken: "b".repeat(64), kind: "add" as const }]
+    }
+  });
+
+  it("accepts a sealed operation without inspecting anything, and still enforces the structural rules", async () => {
+    let appended: unknown;
+    const store = {
+      resolveMembership: async () => membership,
+      assertReplicaOwnership: async () => {},
+      appendOperation: async (_identity: Membership, event: unknown) => {
+        appended = event;
+        return { ...storedOperation(makeEvent()), transaction: sealedEvent().payload, event: sealedEvent() };
+      }
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken(membership.userId);
+
+    const accepted = await post(base, "/v1/events", { event: sealedEvent() }, accessToken, membership.workspaceId);
+    expect(accepted.status).toBe(200);
+    expect(appended).toMatchObject({ type: "transaction.sealed" });
+
+    // The content checks the plaintext path runs (`afterHash === contentHash(...)`,
+    // `redactPath`) have nothing to run against here and must not be faked into passing
+    // -- but the checks that do not need plaintext still apply.
+    const duplicated = sealedEvent();
+    duplicated.payload.changes = [{ pathToken: "a".repeat(64), kind: "modify" }, { pathToken: "a".repeat(64), kind: "add" }];
+    expect((await post(base, "/v1/events", { event: duplicated }, accessToken, membership.workspaceId)).status).toBe(400);
+
+    const impersonating = sealedEvent();
+    impersonating.actorId = "someone-else";
+    expect((await post(base, "/v1/events", { event: impersonating }, accessToken, membership.workspaceId)).status).toBe(403);
+
+    const malformed = sealedEvent();
+    (malformed.payload.sealed as { keyId: string }).keyId = "not-a-key-id";
+    expect((await post(base, "/v1/events", { event: malformed }, accessToken, membership.workspaceId)).status).toBe(400);
+  });
+
+  it("refuses plaintext once the workspace has latched, and says why", async () => {
+    const { StoreConflictError } = await import("./store.js");
+    const store = {
+      resolveMembership: async () => membership,
+      assertReplicaOwnership: async () => {},
+      appendOperation: async (_identity: Membership, event: { type: string }) => {
+        if (event.type !== "transaction.sealed") throw new StoreConflictError("This workspace is end-to-end encrypted; plaintext operations are refused");
+        return { ...storedOperation(makeEvent()), transaction: sealedEvent().payload, event: sealedEvent() };
+      }
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken(membership.userId);
+
+    const downgraded = await post(base, "/v1/events", { event: makeEvent() }, accessToken, membership.workspaceId);
+    expect(downgraded.status).toBe(409);
+    expect((await downgraded.json() as any).error).toContain("end-to-end encrypted");
+    expect((await post(base, "/v1/events", { event: sealedEvent() }, accessToken, membership.workspaceId)).status).toBe(200);
+  });
+
+  it("scopes the key routes to an owned replica and closes them to viewers", async () => {
+    const replicaId = "3f1d5f1e-1e2b-4a7c-9f3d-2b6c7d8e9f01";
+    const grants: unknown[] = [];
+    const store = {
+      resolveMembership: async () => membership,
+      assertReplicaOwnership: async (_workspaceId: string, _memberId: string, requested: string) => {
+        if (requested !== replicaId) throw new (await import("./store.js")).StoreUnauthorizedError("Replica is not registered to this member");
+        return null;
+      },
+      getWorkspaceKeyState: async () => ({ encrypted: true, keyHolders: 2, grants: [] }),
+      listWorkspaceKeyRecipients: async () => ([{ replicaId, replicaName: "laptop", actorId: "actor-1", publicKey: "A".repeat(43), epochs: [0] }]),
+      insertWorkspaceKeyGrants: async (_identity: Membership, _sender: string, incoming: unknown[]) => {
+        grants.push(...incoming);
+        return { stored: incoming.length };
+      }
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken(membership.userId);
+    const headers = { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId };
+
+    const state = await fetch(`${base}/v1/workspace-keys/state?replicaId=${replicaId}`, { headers });
+    expect(await state.json()).toEqual({ ok: true, data: { encrypted: true, keyHolders: 2, grants: [] } });
+
+    // A device may only read grants addressed to a replica it owns, and only a UUID at all.
+    expect((await fetch(`${base}/v1/workspace-keys/state?replicaId=1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f`, { headers })).status).toBe(401);
+    expect((await fetch(`${base}/v1/workspace-keys/state?replicaId=nope`, { headers })).status).toBe(400);
+
+    const issued = await post(base, `/v1/workspace-keys/grants?replicaId=${replicaId}`, {
+      grants: [{
+        epoch: 0, keyId: "0123456789abcdef", recipientReplicaId: replicaId, recipientPublicKey: "A".repeat(43),
+        wrapped: { version: 1, algorithm: "X25519-HKDF-SHA256-AES-256-GCM", senderPublicKey: "B".repeat(43), nonce: "AAAAAAAAAAAAAAAA", ciphertext: "Zm9vYmFy" }
+      }]
+    }, accessToken, membership.workspaceId);
+    expect(await issued.json()).toEqual({ ok: true, data: { stored: 1 } });
+    expect(grants).toHaveLength(1);
+
+    const viewerStore = { ...store, resolveMembership: async () => ({ ...membership, role: "viewer" as const }) } as unknown as PgStore;
+    const viewerBase = await listen(viewerStore);
+    expect((await fetch(`${viewerBase}/v1/workspace-keys/recipients`, { headers })).status).toBe(403);
+  });
+});
+
 describe("rate limiting behind a proxy", () => {
   // Every request from a load balancer shares one socket address, so without
   // trustProxy the whole deployment shares one bucket and runs into the 10/min
@@ -701,7 +812,7 @@ describe("rate limiting behind a proxy", () => {
 
   it("keys on the last x-forwarded-for hop when a proxy is trusted", async () => {
     const store = {
-      claimPairingCode: async () => ({ workspaceId: "workspace-1", replicaId: "replica-1", token: "ccw_token" }),
+      claimPairingCode: async () => ({ workspaceId: "workspace-1", replicaId: "replica-1", token: "ccw_token", pairingId: "3f1d5f1e-1e2b-4a7c-9f3d-2b6c7d8e9f01" }),
       attachReplicaToProject: async () => null
     } as unknown as PgStore;
     const base = await listen(store, undefined, undefined, { trustProxy: true });
@@ -725,7 +836,7 @@ describe("rate limiting behind a proxy", () => {
 
   it("cannot be evaded by a client prepending its own x-forwarded-for entries", async () => {
     const store = {
-      claimPairingCode: async () => ({ workspaceId: "workspace-1", replicaId: "replica-1", token: "ccw_token" }),
+      claimPairingCode: async () => ({ workspaceId: "workspace-1", replicaId: "replica-1", token: "ccw_token", pairingId: "3f1d5f1e-1e2b-4a7c-9f3d-2b6c7d8e9f01" }),
       attachReplicaToProject: async () => null
     } as unknown as PgStore;
     const base = await listen(store, undefined, undefined, { trustProxy: true });
@@ -743,7 +854,7 @@ describe("rate limiting behind a proxy", () => {
 
   it("ignores x-forwarded-for when no proxy is trusted, so a client cannot rotate its own key", async () => {
     const store = {
-      claimPairingCode: async () => ({ workspaceId: "workspace-1", replicaId: "replica-1", token: "ccw_token" }),
+      claimPairingCode: async () => ({ workspaceId: "workspace-1", replicaId: "replica-1", token: "ccw_token", pairingId: "3f1d5f1e-1e2b-4a7c-9f3d-2b6c7d8e9f01" }),
       attachReplicaToProject: async () => null
     } as unknown as PgStore;
     const base = await listen(store);

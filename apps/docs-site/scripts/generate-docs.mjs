@@ -75,6 +75,7 @@ const NAV_GROUPS = [
     links: [
       { href: "/docs/architecture.html", label: "Architecture", key: "architecture" },
       { href: "/docs/safety.html", label: "Safety model", key: "safety" },
+      { href: "/docs/privacy.html", label: "Privacy", key: "privacy" },
       { href: "/docs/protocol.html", label: "Network protocol", key: "protocol" }
     ]
   },
@@ -111,6 +112,14 @@ const GENERATED_PAGES = [
     mdFile: "security.md",
     htmlOut: "safety.html",
     mdOutName: "safety.md",
+    nextHref: "/docs/privacy.html",
+    nextLabel: "Privacy"
+  },
+  {
+    key: "privacy",
+    title: "Privacy",
+    mdFile: "privacy.md",
+    htmlOut: "privacy.html",
     nextHref: "/docs/protocol.html",
     nextLabel: "Network protocol"
   },
@@ -273,7 +282,8 @@ function syncInstallPrompt() {
 function generateLlmsTxt() {
   const entries = [
     { href: "/docs/architecture.md", label: "Architecture", desc: "The daemon, coordination service, and how transactions and proposals move between them." },
-    { href: "/docs/safety.md", label: "Safety model", desc: "The rules and threat model governing when Crosscode may touch your working tree." },
+    { href: "/docs/safety.md", label: "Safety model", desc: "The rules and threat model governing when Crosscode may touch your working tree, and how file payloads are end-to-end encrypted." },
+    { href: "/docs/privacy.md", label: "Privacy", desc: "Exactly what the hosted coordination service can and cannot read. Short answer: not your code." },
     { href: "/docs/protocol.md", label: "Network protocol", desc: "The wire schema (Zod) shared by the daemon, CLI, MCP server, and coordination service." },
     { href: "/docs/mcp-clients.md", label: "MCP client setup", desc: "Configuring Claude Code, Codex CLI, OpenCode, Gemini CLI, and Cursor, plus the MCP tool catalog." },
     { href: "/docs/install-prompt.md", label: "Install prompt", desc: "The exact text to paste into any MCP-capable coding agent to set up Crosscode in a project." }
@@ -311,6 +321,7 @@ function generateLlmsFullTxt() {
   const sections = [
     { title: "Architecture", file: "architecture.md" },
     { title: "Safety model", file: "security.md" },
+    { title: "Privacy", file: "privacy.md" },
     { title: "Network protocol", file: "protocol.md" },
     { title: "MCP client setup", file: "mcp-clients.md" },
     { title: "Install prompt", file: "install-prompt.md" }

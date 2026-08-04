@@ -176,6 +176,34 @@ describe("crosscode devices / members", () => {
   });
 });
 
+describe("crosscode key / pair", () => {
+  it("exposes the whole workspace-key surface, so nothing about encryption needs a web UI", async () => {
+    const commands = (await runCli(["commands"])).value as Array<{ command: string }>;
+    const names = commands.map((entry) => entry.command);
+    for (const name of ["pair", "key status", "key init", "key export", "key import", "key devices", "key approve", "key rotate", "key forget"]) {
+      expect(names).toContain(name);
+    }
+  });
+
+  it("refuses to grant, rotate, or forget a key noninteractively without an explicit flag", async () => {
+    const root = await repo();
+    // vitest runs with no TTY, which is exactly the agent/CI case being asserted: each of
+    // these either hands out the workspace key or destroys access to it, so the caller has
+    // to say so in the command rather than be prompted -- and it must never silently
+    // proceed just because there was nobody to ask.
+    expect(process.stdout.isTTY).toBeFalsy();
+    await expect(runCli(["key", "rotate"], root)).rejects.toThrow(/requires confirmation/);
+    await expect(runCli(["key", "forget"], root)).rejects.toThrow(/requires confirmation/);
+  });
+
+  it("reports a missing keyring as an actionable state rather than a crash", async () => {
+    const root = await repo();
+    // A checkout that has never synced holds no keyring. The message has to say what to
+    // run next, because this is also what a restored-from-backup machine hits.
+    await expect(runCli(["key", "status"], root)).rejects.toThrow(/no workspace keyring/i);
+  });
+});
+
 // The envelope lives in main(), which only runs in a spawned process, so the documented
 // contract has to be asserted by running the CLI for real rather than by calling runCli().
 const cliEntry = fileURLToPath(new URL("./index.ts", import.meta.url));

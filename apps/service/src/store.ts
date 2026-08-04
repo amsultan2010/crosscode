@@ -1,11 +1,13 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type {
-  ChangeTransaction, Claim, ClaimCreatedEvent, ClaimReleasedEvent, EventEnvelope, Handoff, HandoffRequestedEvent,
-  HandoffRespondedEvent, Intent, IntentPublishedEvent, PairingStatus, Project, RemoteClaim, RemoteHandoff, RemoteIntent,
-  RemoteOperation, RemoteTask, RemoteValidation, Task, TaskCreatedEvent, TaskUpdatedEvent, TransactionCreatedEvent, Validation, ValidationCompletedEvent
+  Claim, ClaimCreatedEvent, ClaimReleasedEvent, CreateWorkspaceKeyGrantsRequest, DevicePublicKey, EventEnvelope, Handoff,
+  HandoffRequestedEvent, HandoffRespondedEvent, Intent, IntentPublishedEvent, PairingStatus, Project, RemoteClaim,
+  RemoteHandoff, RemoteIntent, RemoteOperation, RemoteTask, RemoteValidation, SealedTransactionCreatedEvent,
+  SyncedTransaction, Task, TaskCreatedEvent, TaskUpdatedEvent, TransactionCreatedEvent, Validation,
+  ValidationCompletedEvent, WorkspaceKeyGrant, WorkspaceKeyRecipient, WrappedKey
 } from "@crosscode/protocol";
-import { PAIRING_CODE_ALPHABET, PAIRING_CODE_TTL_MS, WORKSPACE_TOKEN_PREFIX } from "@crosscode/protocol";
+import { isSealedTransaction, PAIRING_CODE_ALPHABET, PAIRING_CODE_TTL_MS, WORKSPACE_TOKEN_PREFIX } from "@crosscode/protocol";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
 import { assertPlanAllowsAutonomyTier, assertSeatCapAvailable, type AutonomyTier, type Plan } from "./billing.js";
 import { hashCanonicalPayload } from "./crypto.js";
@@ -92,6 +94,8 @@ export type PairingCodeStatus = {
   claimedAt: string | null;
   replicaId: string | null;
   actorId: string | null;
+  /** The claiming device's X25519 public key, relayed so the minter can wrap the keyring to it. */
+  devicePublicKey: DevicePublicKey | null;
 };
 
 export type PairingClaimResult = {
@@ -99,6 +103,7 @@ export type PairingClaimResult = {
   replicaId: string;
   /** Plaintext `ccw_` workspace token; likewise only ever persisted as a hash. */
   token: string;
+  pairingId: string;
 };
 
 /**
@@ -173,6 +178,8 @@ export class PgStore {
       await client.query(projectsSql);
       const teamPlanSql = await readFile(new URL("../migrations/011_team_plan.sql", import.meta.url), "utf8");
       await client.query(teamPlanSql);
+      const encryptionSql = await readFile(new URL("../migrations/012_encryption.sql", import.meta.url), "utf8");
+      await client.query(encryptionSql);
     } finally {
       await client.query("SELECT pg_advisory_unlock(hashtext('crosscode_migrate'))");
       client.release();
@@ -424,9 +431,11 @@ export class PgStore {
   }
 
   async getPairingCodeStatus(identity: Membership, pairingId: string): Promise<PairingCodeStatus | undefined> {
-    const result = await this.pool.query<{ expires_at: Date; claimed_at: Date | null; claimed_replica_id: string | null; claimed_actor_id: string | null }>(
-      `SELECT expires_at, claimed_at, claimed_replica_id, claimed_actor_id
-         FROM pairing_codes WHERE id = $1 AND workspace_id = $2`,
+    const result = await this.pool.query<{ expires_at: Date; claimed_at: Date | null; claimed_replica_id: string | null; claimed_actor_id: string | null; device_public_key: string | null }>(
+      `SELECT p.expires_at, p.claimed_at, p.claimed_replica_id, p.claimed_actor_id, r.device_public_key
+         FROM pairing_codes p
+         LEFT JOIN replicas r ON r.id = p.claimed_replica_id
+        WHERE p.id = $1 AND p.workspace_id = $2`,
       [pairingId, identity.workspaceId]
     );
     const row = result.rows[0];
@@ -435,7 +444,8 @@ export class PgStore {
       status: row.claimed_at ? "claimed" : row.expires_at.getTime() <= Date.now() ? "expired" : "pending",
       claimedAt: row.claimed_at ? new Date(row.claimed_at).toISOString() : null,
       replicaId: row.claimed_replica_id,
-      actorId: row.claimed_actor_id
+      actorId: row.claimed_actor_id,
+      devicePublicKey: row.device_public_key as DevicePublicKey | null
     };
   }
 
@@ -446,7 +456,7 @@ export class PgStore {
    * Everything after it runs in the same transaction, so a failure anywhere (a replica
    * name that cannot be made unique, say) releases the code rather than burning it.
    */
-  async claimPairingCode(input: { code: string; actorId: string; replicaName: string }): Promise<PairingClaimResult> {
+  async claimPairingCode(input: { code: string; actorId: string; replicaName: string; devicePublicKey?: DevicePublicKey }): Promise<PairingClaimResult> {
     return this.transaction(async (client) => {
       const claimed = await client.query<{ id: string; workspace_id: string; created_by: string }>(
         `UPDATE pairing_codes SET claimed_at = now(), claimed_actor_id = $2
@@ -466,8 +476,8 @@ export class PgStore {
         // inside a savepoint the unique violation can be rolled back to.
         await client.query("SAVEPOINT crosscode_replica_insert");
         try {
-          await client.query("INSERT INTO replicas (id, workspace_id, member_id, name) VALUES ($1, $2, $3, $4)", [
-            replicaId, pairing.workspace_id, pairing.created_by, name
+          await client.query("INSERT INTO replicas (id, workspace_id, member_id, name, device_public_key) VALUES ($1, $2, $3, $4, $5)", [
+            replicaId, pairing.workspace_id, pairing.created_by, name, input.devicePublicKey ?? null
           ]);
           await client.query("RELEASE SAVEPOINT crosscode_replica_insert");
           registered = true;
@@ -488,7 +498,7 @@ export class PgStore {
         [randomUUID(), pairing.workspace_id, pairing.created_by, replicaId, sha256(token), pairing.id]
       );
       await this.audit(client, pairing.workspace_id, pairing.created_by, replicaId, "pairing.code_claimed", { pairingId: pairing.id });
-      return { workspaceId: pairing.workspace_id, replicaId, token };
+      return { workspaceId: pairing.workspace_id, replicaId, token, pairingId: pairing.id };
     });
   }
 
@@ -772,15 +782,15 @@ export class PgStore {
 
   async registerReplica(
     userId: string, workspaceId: string, name: string,
-    repo: { repoRoot?: string | null; repoRemote?: string | null } = {}
+    repo: { repoRoot?: string | null; repoRemote?: string | null; devicePublicKey?: DevicePublicKey } = {}
   ): Promise<{ replicaId: string; createdAt: string; projectId: string | null }> {
     const membership = await this.resolveMembership(userId, workspaceId);
     const project = await this.upsertProject(workspaceId, repo);
     const replicaId = randomUUID();
     try {
       const result = await this.pool.query<{ created_at: Date }>(
-        `INSERT INTO replicas (id, workspace_id, member_id, name, project_id) VALUES ($1, $2, $3, $4, $5) RETURNING created_at`,
-        [replicaId, workspaceId, membership.memberId, name, project?.id ?? null]
+        `INSERT INTO replicas (id, workspace_id, member_id, name, project_id, device_public_key) VALUES ($1, $2, $3, $4, $5, $6) RETURNING created_at`,
+        [replicaId, workspaceId, membership.memberId, name, project?.id ?? null, repo.devicePublicKey ?? null]
       );
       return { replicaId, createdAt: new Date(result.rows[0]!.created_at).toISOString(), projectId: project?.id ?? null };
     } catch (error) {
@@ -805,18 +815,35 @@ export class PgStore {
     return result.rows[0].project_id;
   }
 
-  async appendOperation(identity: Membership, event: TransactionCreatedEvent): Promise<StoredOperation> {
+  async appendOperation(identity: Membership, event: TransactionCreatedEvent | SealedTransactionCreatedEvent): Promise<StoredOperation> {
     const transaction = event.payload;
-    if (new Set(transaction.changes.map((change) => change.path)).size !== transaction.changes.length) {
+    // A sealed operation exposes one opaque token per changed file instead of a path (see
+    // sealedFileSchema). Everything below treats that token exactly as it treated a path:
+    // it is the per-file key in operation_files, and it is what "each path only once"
+    // ranges over. The service does not know, and no longer needs to know, which file it is.
+    const files = isSealedTransaction(transaction)
+      ? transaction.changes.map((change) => ({ key: change.pathToken, kind: change.kind, beforeHash: null, afterHash: null, payload: change }))
+      : transaction.changes.map((change) => ({ key: change.path, kind: change.kind, beforeHash: change.beforeHash ?? null, afterHash: change.afterHash ?? null, payload: change }));
+    const sealed = isSealedTransaction(transaction);
+    if (new Set(files.map((file) => file.key)).size !== files.length) {
       throw new StoreConflictError("An operation may change each path only once");
     }
     const payloadHash = hashCanonicalPayload(event);
     return this.transaction(async (client) => {
-      const workspace = await client.query<{ next_sequence: string }>(
-        "SELECT next_sequence FROM workspaces WHERE id = $1 FOR UPDATE",
+      const workspace = await client.query<{ next_sequence: string; encryption_latched_at: Date | null }>(
+        "SELECT next_sequence, encryption_latched_at FROM workspaces WHERE id = $1 FOR UPDATE",
         [identity.workspaceId]
       );
       if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
+      // The anti-downgrade latch. Whether a client encrypts is decided entirely by whether
+      // it holds a workspace key, so this does not cause encryption -- it prevents a
+      // workspace that has started sending ciphertext from silently going back, whether
+      // because a client was rolled back, misconfigured, or told to by a compromised
+      // service. There is deliberately no way to unlatch: doing so would be a supported
+      // path for making previously-unreadable data readable to us.
+      if (!sealed && workspace.rows[0].encryption_latched_at) {
+        throw new StoreConflictError("This workspace is end-to-end encrypted; plaintext operations are refused");
+      }
 
       const duplicate = await client.query<OperationRow>(
         `SELECT id, workspace_id, replica_id, project_id, event, transaction, server_sequence, created_at, payload_hash
@@ -845,28 +872,176 @@ export class PgStore {
         // replica registered before projects existed.
         `INSERT INTO operations
           (id, workspace_id, event_id, client_sequence, server_sequence, replica_id, member_id,
-           actor_id, payload_hash, event, transaction, project_id)
+           actor_id, payload_hash, event, transaction, project_id, sealed, key_epoch)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb,
-                 (SELECT project_id FROM replicas WHERE id = $6 AND workspace_id = $2))
+                 (SELECT project_id FROM replicas WHERE id = $6 AND workspace_id = $2), $12, $13)
          RETURNING id, workspace_id, replica_id, project_id, event, transaction, server_sequence, created_at, payload_hash`,
         [
           transaction.id, identity.workspaceId, event.id, event.clientSequence, sequence, event.replicaId,
-          identity.memberId, identity.actorId, payloadHash, JSON.stringify(storedEvent), JSON.stringify(transaction)
+          identity.memberId, identity.actorId, payloadHash, JSON.stringify(storedEvent), JSON.stringify(transaction),
+          sealed, isSealedTransaction(transaction) ? transaction.sealed.epoch : null
         ]
       );
-      for (const file of transaction.changes) {
+      for (const file of files) {
         await client.query(
           `INSERT INTO operation_files
             (workspace_id, operation_id, path, kind, before_hash, after_hash, payload)
            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
-          [identity.workspaceId, transaction.id, file.path, file.kind, file.beforeHash ?? null, file.afterHash ?? null, JSON.stringify(file)]
+          [identity.workspaceId, transaction.id, file.key, file.kind, file.beforeHash, file.afterHash, JSON.stringify(file.payload)]
         );
       }
-      await client.query("UPDATE workspaces SET next_sequence = $2 WHERE id = $1", [identity.workspaceId, sequence]);
+      await client.query(
+        `UPDATE workspaces SET next_sequence = $2,
+                encryption_latched_at = CASE WHEN $3 AND encryption_latched_at IS NULL THEN now() ELSE encryption_latched_at END
+          WHERE id = $1`,
+        [identity.workspaceId, sequence, sealed]
+      );
       await this.audit(client, identity.workspaceId, identity.memberId, event.replicaId, "operation.received", {
         operationId: transaction.id, eventId: event.id, serverSequence: sequence
       });
       return mapOperation(inserted.rows[0]!);
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Workspace key distribution (docs/security.md#end-to-end-encryption)
+  //
+  // Everything below relays ciphertext between devices. The service picks no keys,
+  // holds no private key, and can open none of what it stores here -- its only jobs
+  // are to say who is eligible to receive a grant, and to keep a grant addressed to
+  // the public key the recipient actually registered.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Records a device's X25519 public key. Write-once: a replica that already has one on
+   * file cannot swap it, because a swap would silently redirect every future grant --
+   * including the ones a rotation issues automatically -- to a key of the caller's
+   * choosing. Re-sending the same key is a no-op so a restarting daemon can be naive.
+   */
+  async registerDevicePublicKey(workspaceId: string, replicaId: string, publicKey: DevicePublicKey): Promise<void> {
+    const result = await this.pool.query(
+      `UPDATE replicas SET device_public_key = $3
+        WHERE id = $1 AND workspace_id = $2 AND (device_public_key IS NULL OR device_public_key = $3)
+        RETURNING id`,
+      [replicaId, workspaceId, publicKey]
+    );
+    if (result.rows[0]) return;
+    const existing = await this.pool.query<{ id: string }>("SELECT id FROM replicas WHERE id = $1 AND workspace_id = $2", [replicaId, workspaceId]);
+    if (!existing.rows[0]) throw new StoreUnauthorizedError("Replica is not registered in this workspace");
+    throw new StoreConflictError("This device already registered a different encryption key");
+  }
+
+  /**
+   * What a device needs to decide whether it may mint the workspace's first key, plus
+   * every epoch already wrapped to it. `keyHolders` counts *active* replicas holding at
+   * least one grant; a removed member's disabled replicas drop out of it, which is what
+   * makes a post-removal rotation stop granting them anything.
+   */
+  async getWorkspaceKeyState(workspaceId: string, replicaId: string): Promise<{ encrypted: boolean; keyHolders: number; grants: WorkspaceKeyGrant[] }> {
+    const [workspace, holders, grants] = await Promise.all([
+      this.pool.query<{ encryption_latched_at: Date | null }>("SELECT encryption_latched_at FROM workspaces WHERE id = $1", [workspaceId]),
+      this.pool.query<{ count: string }>(
+        `SELECT count(DISTINCT g.recipient_replica_id)
+           FROM workspace_key_grants g
+           JOIN replicas r ON r.id = g.recipient_replica_id
+          WHERE g.workspace_id = $1 AND r.disabled_at IS NULL`,
+        [workspaceId]
+      ),
+      this.pool.query<KeyGrantRow>(
+        `SELECT epoch, key_id, recipient_replica_id, wrapped, created_at
+           FROM workspace_key_grants
+          WHERE workspace_id = $1 AND recipient_replica_id = $2
+          ORDER BY epoch ASC`,
+        [workspaceId, replicaId]
+      )
+    ]);
+    if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
+    return {
+      encrypted: workspace.rows[0].encryption_latched_at !== null,
+      keyHolders: Number(holders.rows[0]!.count),
+      grants: grants.rows.map(mapKeyGrant)
+    };
+  }
+
+  /**
+   * Every active device with a registered key, and which epochs it already holds. A
+   * recipient with a non-empty `epochs` was approved by a human once (grants are only
+   * ever issued after the pairing fingerprint check), which is what lets a rotating
+   * device re-grant to it without asking again -- and why a recipient with no epochs is
+   * never auto-granted anything.
+   */
+  async listWorkspaceKeyRecipients(workspaceId: string): Promise<WorkspaceKeyRecipient[]> {
+    const result = await this.pool.query<{ id: string; name: string; actor_id: string; device_public_key: string; epochs: number[] | null }>(
+      `SELECT r.id, r.name, m.actor_id, r.device_public_key,
+              array_remove(array_agg(g.epoch ORDER BY g.epoch), NULL) AS epochs
+         FROM replicas r
+         JOIN members m ON m.id = r.member_id
+         LEFT JOIN workspace_key_grants g ON g.workspace_id = r.workspace_id AND g.recipient_replica_id = r.id
+        WHERE r.workspace_id = $1 AND r.disabled_at IS NULL AND m.disabled_at IS NULL AND r.device_public_key IS NOT NULL
+        GROUP BY r.id, r.name, m.actor_id, r.device_public_key
+        ORDER BY r.name`,
+      [workspaceId]
+    );
+    return result.rows.map((row) => ({
+      replicaId: row.id, replicaName: row.name, actorId: row.actor_id,
+      publicKey: row.device_public_key as DevicePublicKey, epochs: row.epochs ?? []
+    }));
+  }
+
+  /**
+   * Stores wrapped epoch keys. The recipient's public key is checked against the one on
+   * file rather than trusted from the request, so a grant can never be filed against a
+   * key the recipient did not register -- otherwise a caller could park a grant wrapped
+   * to itself and wait for the recipient's key to be "corrected" later.
+   *
+   * Re-issuing an epoch a device already holds is ignored rather than rejected: the
+   * daemon's sweep re-offers every epoch it holds on every sync, and making that a
+   * conflict would turn ordinary operation into a stream of errors.
+   */
+  async insertWorkspaceKeyGrants(
+    identity: Membership,
+    senderReplicaId: string | null,
+    grants: CreateWorkspaceKeyGrantsRequest["grants"],
+    options: { requireFirst?: boolean } = {}
+  ): Promise<{ stored: number }> {
+    if (identity.role === "viewer") throw new StoreUnauthorizedError("Viewer membership cannot grant workspace keys");
+    return this.transaction(async (client) => {
+      // `requireFirst` is how a device claims the right to mint the workspace's very
+      // first key. Two devices starting against a brand-new workspace at the same instant
+      // would otherwise each mint an epoch 0, and the two would be different keys under
+      // the same number -- a fork neither side could reconcile. Serializing on the
+      // workspace row turns that into one winner and one caller that learns to wait.
+      if (options.requireFirst) {
+        await client.query("SELECT id FROM workspaces WHERE id = $1 FOR UPDATE", [identity.workspaceId]);
+        const existing = await client.query("SELECT 1 FROM workspace_key_grants WHERE workspace_id = $1 LIMIT 1", [identity.workspaceId]);
+        if (existing.rows[0]) throw new StoreConflictError("This workspace already has a key holder");
+      }
+      let stored = 0;
+      for (const grant of grants) {
+        const recipient = await client.query<{ device_public_key: string | null }>(
+          `SELECT r.device_public_key FROM replicas r JOIN members m ON m.id = r.member_id
+            WHERE r.id = $1 AND r.workspace_id = $2 AND r.disabled_at IS NULL AND m.disabled_at IS NULL`,
+          [grant.recipientReplicaId, identity.workspaceId]
+        );
+        const registered = recipient.rows[0]?.device_public_key;
+        if (!registered) throw new StoreConflictError("Grant recipient is not an active device with a registered key");
+        if (registered !== grant.recipientPublicKey) throw new StoreConflictError("Grant recipient's registered key does not match");
+        const inserted = await client.query(
+          `INSERT INTO workspace_key_grants
+             (workspace_id, epoch, recipient_replica_id, key_id, recipient_public_key, sender_replica_id, wrapped)
+           VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+           ON CONFLICT (workspace_id, epoch, recipient_replica_id) DO NOTHING
+           RETURNING epoch`,
+          [identity.workspaceId, grant.epoch, grant.recipientReplicaId, grant.keyId, grant.recipientPublicKey, senderReplicaId, JSON.stringify(grant.wrapped)]
+        );
+        if (inserted.rows[0]) {
+          stored += 1;
+          await this.audit(client, identity.workspaceId, identity.memberId, senderReplicaId, "workspace_key.granted", {
+            epoch: grant.epoch, keyId: grant.keyId, recipientReplicaId: grant.recipientReplicaId
+          });
+        }
+      }
+      return { stored };
     });
   }
 
@@ -1199,7 +1374,7 @@ type OperationRow = {
   replica_id: string;
   project_id: string | null;
   event: EventEnvelope;
-  transaction: ChangeTransaction;
+  transaction: SyncedTransaction;
   server_sequence: string;
   created_at: Date;
   payload_hash?: string;
@@ -1215,6 +1390,24 @@ function mapOperation(row: OperationRow): StoredOperation {
     event: row.event,
     transaction: row.transaction,
     serverSequence: Number(row.server_sequence),
+    createdAt: new Date(row.created_at).toISOString()
+  };
+}
+
+type KeyGrantRow = {
+  epoch: number;
+  key_id: string;
+  recipient_replica_id: string;
+  wrapped: WrappedKey;
+  created_at: Date;
+};
+
+function mapKeyGrant(row: KeyGrantRow): WorkspaceKeyGrant {
+  return {
+    epoch: row.epoch,
+    keyId: row.key_id,
+    recipientReplicaId: row.recipient_replica_id,
+    wrapped: row.wrapped,
     createdAt: new Date(row.created_at).toISOString()
   };
 }

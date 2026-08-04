@@ -42,6 +42,7 @@ unknown/newer major versions are rejected rather than partially parsed.
 | `type` | Event schema | Payload |
 | --- | --- | --- |
 | `transaction.created` | `transactionCreatedEventSchema` | `ChangeTransaction` |
+| `transaction.sealed` | `sealedTransactionCreatedEventSchema` | `SealedTransaction` |
 | `task.created` | `taskCreatedEventSchema` | `Task` |
 | `task.updated` | `taskUpdatedEventSchema` | `Task` |
 | `claim.created` | `claimCreatedEventSchema` | `Claim` |
@@ -53,6 +54,44 @@ unknown/newer major versions are rejected rather than partially parsed.
 
 Each of these has a corresponding `*IngestRequest` schema the service accepts on
 its HTTP ingest endpoints, and a `*IngestReceipt` schema returned back.
+
+## Sealed transactions
+
+`transaction.sealed` is what a client sends when the workspace is end-to-end encrypted,
+which is the default against a hosted service. `serviceIngestRequestSchema` accepts either
+form, and `remoteOperationSchema.transaction` is `syncedTransactionSchema` — a union of
+`ChangeTransaction` and `SealedTransaction`. Use `isSealedTransaction()` to discriminate.
+
+```ts
+{
+  id: string;                          // unchanged: the service still dedupes on it
+  sealed: {
+    version: 1;
+    algorithm: "AES-256-GCM";
+    epoch: number;                     // which workspace key epoch sealed this
+    keyId: string;                     // 16 hex chars; names the key without revealing it
+    nonce: string;                     // base64url, 12 bytes
+    ciphertext: string;                // base64url, GCM tag appended
+  };
+  changes: Array<{
+    pathToken: string;                 // HMAC-SHA256(pathKey, `${id}\0${path}`), 64 hex
+    kind: "add" | "modify" | "delete" | "rename";
+  }>;
+}
+```
+
+Everything else a `ChangeTransaction` carries — `base`, `intent`, `provenance`, `safety`,
+and every field of `changes` including paths, content, patches, and hashes — is inside the
+ciphertext. The workspace id, sending replica id, and transaction id are bound in as AEAD
+additional authenticated data, so a sealed payload cannot be moved between workspaces,
+re-attributed, or spliced onto another operation.
+
+Sealing and opening happen only in `apps/daemon/src/sealing.ts`, at the transport seam.
+Nothing else in the codebase sees the sealed form, and `packages/core` — which the service
+links — deliberately contains none of this code. Key distribution rides three routes
+(`/v1/workspace-keys/state`, `/v1/workspace-keys/recipients`, `/v1/workspace-keys/grants`,
+plus `PUT /v1/workspace-keys/device`) whose bodies are ciphertext the service cannot open.
+See [security.md](./security.md#end-to-end-encryption).
 
 ## WebSocket fan-out
 

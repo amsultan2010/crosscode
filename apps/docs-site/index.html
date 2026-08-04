@@ -4,14 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Crosscode: coordinate a Git repo across people and agents</title>
-  <meta name="description" content="Crosscode lets several people and coding agents work on the same repository at once without overwriting each other. Everyone's changes arrive as proposals you review before they touch your files." />
+  <meta name="description" content="Crosscode lets several people and coding agents work on the same repository at once without overwriting each other. Changes arrive as proposals you review before they touch your files, and file payloads are end-to-end encrypted — we can't read your code." />
   <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml" />
   <link rel="alternate icon" href="/brand/favicon-32.png" sizes="32x32" />
   <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="Crosscode" />
   <meta property="og:title" content="Crosscode: coordinate a Git repo across people and agents" />
-  <meta property="og:description" content="A background program that watches each checkout and shares every settled edit with your teammates and agents. Their changes arrive as proposals you review — never as automatic writes." />
+  <meta property="og:description" content="A background program that watches each checkout and shares every settled edit with your teammates and agents. Their changes arrive as proposals you review — never as automatic writes — and they're end-to-end encrypted, so we can't read your code." />
   <meta property="og:image" content="/brand/logo-social.png" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:image" content="/brand/logo-social.png" />
@@ -54,6 +54,7 @@
             <a class="cta" href="#install">Set it up with one prompt</a>
             <a class="cta secondary" href="#pricing">See pricing</a>
           </div>
+          <p class="hero-microcopy"><strong>We can't read your code.</strong> File contents, paths, and diffs are encrypted on your machine with a key we never receive &mdash; on by default. Not a promise; we don't have the key. <a href="/docs/privacy.html">What we can and can't see</a>.</p>
           <p class="hero-microcopy"><strong>You don't need a team.</strong> One person running two agents is already two editors on one repo &mdash; that's the case Crosscode was built for. Free forever for that, and free forever if you self-host.</p>
         </div>
 
@@ -541,7 +542,7 @@ other checkouts of this same repository. Do the following:
       <div class="inner">
         <div class="section-heading reveal">
           <h2>The safety model</h2>
-          <p>Four rules govern everything Crosscode is allowed to do to your working tree.</p>
+          <p>Five rules govern everything Crosscode is allowed to do to your working tree &mdash; and to anything that leaves it.</p>
         </div>
 
         <ol class="safety-rules stagger">
@@ -549,11 +550,13 @@ other checkouts of this same repository. Do the following:
           <li class="reveal"><p>Remote operations arrive as proposals and are never automatically applied.</p></li>
           <li class="reveal"><p>Every materialization re-checks the local base and creates a checkpoint first.</p></li>
           <li class="reveal"><p>Excluded paths, secrets, symlink traversal, malformed payloads, and unsupported binaries are rejected.</p></li>
+          <li class="reveal"><p>File payloads are end-to-end encrypted, so the coordination service stores code it cannot read.</p></li>
         </ol>
 
         <p class="install-steps" style="text-align: center; margin-top: 1.75rem;">
           If Crosscode stops running or gets removed, the repository is still an
-          ordinary Git repository. See the <a href="/docs/safety.html">safety model page</a> for the full list.
+          ordinary Git repository. See the <a href="/docs/safety.html">safety model page</a> for the full list,
+          and <a href="/docs/privacy.html">privacy</a> for exactly what we can and cannot see.
         </p>
       </div>
     </section>
@@ -629,6 +632,14 @@ other checkouts of this same repository. Do the following:
             <p>No, and this is the most common misread. One person running two agents in two worktrees is already two editors on one repo, which is exactly the problem Crosscode solves. Everything works with a single account and no one to invite. Teammates are something you add later, not a prerequisite.</p>
           </details>
           <details class="faq-item reveal">
+            <summary>Can you read my code?</summary>
+            <p>No. File contents, paths, diffs, and content hashes are encrypted on your machine before they're sent, with a key generated on your machine that we never receive &mdash; on by default, nothing to switch on. A database dump or a subpoena gets ciphertext. What we <em>can</em> see is your account email, your repository's git remote URL, timestamps and sizes, and &mdash; for now &mdash; task titles and claim targets, which aren't encrypted yet. The <a href="/docs/privacy.html">privacy page</a> lists all of it plainly.</p>
+          </details>
+          <details class="faq-item reveal">
+            <summary>What happens if I lose the encryption key?</summary>
+            <p>You lose the coordination history &mdash; past proposals and their diffs &mdash; and no source code, because your repository is an ordinary Git repository on your disk the whole time. We can't recover it for you; that's the same fact as "we can't read your code." Print a recovery code with <code>crosscode key export</code> and keep it in your password manager, and any other paired machine can also hand the key to a new one.</p>
+          </details>
+          <details class="faq-item reveal">
             <summary>Does my source code get sent to an AI provider?</summary>
             <p>No. The AI reviewer for ambiguous conflicts runs on the coding agent already connected to your own machine, so it never leaves your machine and there is no third-party model provider in the loop. That's also why AI review is unlimited on every plan, including free &mdash; it costs us nothing.</p>
           </details>
@@ -655,6 +666,7 @@ other checkouts of this same repository. Do the following:
       <a href="/docs/mcp-clients.html">MCP clients</a> &middot;
       <a href="/docs/cli.html">CLI reference</a> &middot;
       <a href="/docs/safety.html">Safety model</a> &middot;
+      <a href="/docs/privacy.html">Privacy</a> &middot;
       <a href="/docs/limitations.html">Limitations</a> &middot;
       <a href="/auth/signin.html">Sign in</a> &middot;
       <a href="/llms.txt">llms.txt</a> &middot;

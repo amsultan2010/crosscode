@@ -41,6 +41,7 @@
         <div class="docs-sidebar-links">
           <a href="/docs/architecture.html">Architecture</a>
           <a href="/docs/safety.html">Safety model</a>
+          <a href="/docs/privacy.html">Privacy</a>
           <a href="/docs/protocol.html">Network protocol</a>
         </div>
       </div>
@@ -147,6 +148,29 @@
           <tr><td><code>crosscode workspace autonomy set &lt;0|1|2&gt;</code></td><td>Set it: <code>0</code> always ask, <code>1</code> auto-apply only when clean, <code>2</code> auto-apply always. Owner/admin only.</td></tr>
           <tr><td><code>crosscode billing status --workspace &lt;id&gt;</code></td><td>Read the workspace's plan and usage counters. Reads the service database directly, so it needs <code>DATABASE_URL</code> set. Nothing is charged today &mdash; see <a href="/docs/limitations.html">limitations</a>.</td></tr>
           <tr><td><code>crosscode commands</code></td><td>Print the full command tree as machine-readable JSON.</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Encryption keys</h2>
+      <p>
+        File payloads are end-to-end encrypted by default, under a workspace key that never
+        reaches the coordination service. These commands manage it. See
+        <a href="/docs/privacy.html">privacy</a> for what stays visible either way.
+      </p>
+      <table>
+        <thead>
+          <tr><th>Command</th><th>Purpose</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>crosscode pair</code></td><td>Mint a pairing code for another machine, then hand it the workspace key once you have confirmed the fingerprint it prints. Run <code>crosscode join --pair &lt;code&gt;</code> on the other machine.</td></tr>
+          <tr><td><code>crosscode key status</code></td><td>Show which key epochs this checkout holds, and this device's fingerprint for someone else to compare.</td></tr>
+          <tr><td><code>crosscode key devices</code></td><td>List every device that has registered an encryption key with this workspace, with fingerprints. A device you don't recognise here is what to look for.</td></tr>
+          <tr><td><code>crosscode key approve &lt;replica-id&gt; --fingerprint &lt;shown&gt;</code></td><td>Grant the workspace key to a device that joined by invite rather than pairing. The fingerprint is checked before anything is sent.</td></tr>
+          <tr><td><code>crosscode key rotate</code></td><td>Start a new key epoch and grant it to every already-approved device. Run it after removing a member: everything from then on is unreadable to them.</td></tr>
+          <tr><td><code>crosscode key export</code></td><td>Print a recovery code &mdash; the only copy of the key that can exist off your devices. Keep it in a password manager; we cannot reissue it.</td></tr>
+          <tr><td><code>crosscode key import &lt;recovery-code&gt;</code></td><td>Restore the workspace key on a machine from a recovery code.</td></tr>
+          <tr><td><code>crosscode key init</code></td><td>Create the workspace's first key. Only possible while no device holds one; normally the daemon does this for you.</td></tr>
+          <tr><td><code>crosscode key forget</code></td><td>Delete this checkout's copy of the key. Local only, and irreversible without a recovery code or another paired device.</td></tr>
         </tbody>
       </table>
 

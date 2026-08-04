@@ -7,7 +7,7 @@ import { createTempRepo, cleanupTempRepos, waitFor } from "@crosscode/test-fixtu
 import { createServiceServer, PgStore } from "../../service/src/index.js";
 import { writeDaemonConfig } from "./runtime.js";
 import { provisionTestPrincipal, testSupabaseJwks, TEST_SUPABASE_URL } from "./test-supabase-session.js";
-import { spawnDaemon, stopDaemon, stopAllDaemons, type ManagedDaemon } from "./test-helpers.js";
+import { shareTestKeyring, spawnDaemon, stopDaemon, stopAllDaemons, type ManagedDaemon } from "./test-helpers.js";
 import type { StoredOperation } from "./types.js";
 
 const databaseUrl = process.env.CROSSCODE_TEST_DATABASE_URL;
@@ -46,6 +46,9 @@ describe.skipIf(!databaseUrl)("PostgreSQL live WebSocket coordination", () => {
       await writeDaemonConfig(rootA, { workspaceId: enrollA.principal.workspaceId, replicaId: enrollA.principal.replicaId, actorId: enrollA.principal.actorId, service: { url, session: { accessToken: enrollA.accessToken, refreshToken: "test-unused", expiresAt: enrollA.expiresAt } } });
       await writeDaemonConfig(rootB, { workspaceId: enrollB.principal.workspaceId, replicaId: enrollB.principal.replicaId, actorId: enrollB.principal.actorId, service: { url, session: { accessToken: enrollB.accessToken, refreshToken: "test-unused", expiresAt: enrollB.expiresAt } } });
       await writeDaemonConfig(rootC, { workspaceId: enrollC.principal.workspaceId, replicaId: enrollC.principal.replicaId, actorId: enrollC.principal.actorId, service: { url, session: { accessToken: enrollC.accessToken, refreshToken: "test-unused", expiresAt: enrollC.expiresAt } } });
+      // All three run end-to-end encrypted, as a real workspace does. Seeding the shared
+      // key stands in for the pairing/approval handoff, which has its own coverage.
+      await shareTestKeyring(enrollA.principal.workspaceId, [rootA, rootB, rootC]);
 
       const presenceLogA: PresenceUpdate[] = [];
       const presenceLogB: PresenceUpdate[] = [];
@@ -73,8 +76,15 @@ describe.skipIf(!databaseUrl)("PostgreSQL live WebSocket coordination", () => {
       await waitFor(() => seenOnline(presenceLogA, enrollC.principal.replicaId), Boolean, 2_000);
 
       // (b) live fan-out: A's filesystem edit is captured by its own watcher, uploaded quickly, and pushed live to B and C.
+      //
+      // The budget here covers the watcher's own 500ms debounce plus a 500ms
+      // awaitWriteFinish threshold, and then an unbounded wait for the daemon's exclusive
+      // lock -- which syncRemote holds across a whole round of service calls, so with a
+      // 100ms sync poll a capture routinely waits another 1-2s for it. That is what this
+      // step is waiting on, not liveness; the assertions that actually prove live fan-out
+      // are the two below, and their budgets stay tight.
       await writeFile(join(rootA, "shared.txt"), "from-a\n");
-      const captured = await waitFor(() => operationForPath(daemonA, "shared.txt"), (operation) => operation !== undefined, 3_000);
+      const captured = await waitFor(() => operationForPath(daemonA, "shared.txt"), (operation) => operation !== undefined, 8_000);
       const sharedId = captured!.id;
 
       const proposedOnB = await waitFor(() => operationForPath(daemonB, "shared.txt"), (operation) => operation?.status === "proposed", SLOW_POLL_MS - 1_000);

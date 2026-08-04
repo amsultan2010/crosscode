@@ -8,7 +8,11 @@ import { Command, CommanderError } from "commander";
 import { DaemonClient, DaemonUnavailableError } from "../../daemon/src/client.js";
 import { BrowserLoginError, resolveWebUrl } from "../../daemon/src/browser-login.js";
 import { SupabaseConfigError } from "../../daemon/src/supabase-client.js";
-import { browserLogin, login, logout, readDaemonConfig, redeemInvite, redeemPairingCode, serviceRequest, signup, writeDaemonConfig } from "../../daemon/src/runtime.js";
+import {
+  approveKeyDevice, browserLogin, exportWorkspaceKey, forgetWorkspaceKey, importWorkspaceKey, initWorkspaceKey,
+  listKeyDevices, login, logout, readDaemonConfig, redeemInvite, redeemPairingCode, rotateWorkspaceKey,
+  serviceRequest, signup, startPairing, workspaceKeyStatus, writeDaemonConfig
+} from "../../daemon/src/runtime.js";
 import { VERSION } from "../../daemon/src/version.js";
 
 type CliResult = { value?: unknown; exitCode?: number };
@@ -104,7 +108,17 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
         const paired = await redeemPairingCode(directory, options.pair, { serviceUrl: options.service, replicaName: options.replicaName });
         // Never echo the workspace token: it is a bearer credential, and it is already
         // persisted to the 0600 config file the daemon reads.
-        result = { value: { workspaceId: paired.workspaceId, replicaId: paired.replicaId, actorId: paired.actorId, paired: true } };
+        //
+        // deviceFingerprint is not a secret and is meant to be read out loud: whoever ran
+        // `crosscode pair` sees the same string, and comparing them is what proves the
+        // coordination service relayed this device's real encryption key rather than one
+        // of its own. The workspace key arrives once they confirm.
+        result = {
+          value: {
+            workspaceId: paired.workspaceId, replicaId: paired.replicaId, actorId: paired.actorId, paired: true,
+            ...(paired.deviceFingerprint ? { deviceFingerprint: paired.deviceFingerprint } : {})
+          }
+        };
         return;
       }
       if (options.invite) {
@@ -408,6 +422,131 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
         }
       }
       result = { value: await serviceRequest(directory, `/v1/workspace-tokens/${encodeURIComponent(tokenId)}`, { method: "DELETE", workspaceId: options.workspace, describe: "Device revocation" }) };
+    });
+
+  program
+    .command("pair")
+    .description("mint a pairing code for another machine and hand it the workspace encryption key")
+    .option("--timeout <seconds>", "how long to wait for the code to be claimed", "900")
+    .option("--yes", "grant the key without confirming the other device's fingerprint")
+    .action(async (options: { timeout: string; yes?: boolean }) => {
+      const timeoutSeconds = Number(options.timeout);
+      if (!Number.isInteger(timeoutSeconds) || timeoutSeconds <= 0) throw new CliError("USAGE_ERROR", "--timeout must be a positive number of seconds");
+      const session = await startPairing(directory, { timeoutMs: timeoutSeconds * 1_000 });
+      // stderr, so `--json` still prints exactly one object on stdout.
+      process.stderr.write(`Pairing code: ${session.code}\nRun this on the other machine:\n  crosscode join --pair ${session.code}\nWaiting for it to be claimed...\n`);
+      const claim = await session.claimed;
+      if (!claim.fingerprint) {
+        // No public key means that device is not encrypting -- there is nothing to grant,
+        // and pretending otherwise would report a key handoff that did not happen.
+        result = { value: { pairingId: session.pairingId, replicaId: claim.replicaId, actorId: claim.actorId, granted: 0, encrypted: false } };
+        return;
+      }
+      process.stderr.write(`\nClaimed by ${claim.actorId}.\nThe other machine printed a device fingerprint. It must read:\n\n  ${claim.fingerprint}\n\n`);
+      if (!options.yes) {
+        if (!process.stdout.isTTY) {
+          throw new CliError(
+            "CONFIRMATION_REQUIRED",
+            "Granting the workspace key requires confirming the device fingerprint; pass --yes in noninteractive environments",
+            `Check that the other machine printed ${claim.fingerprint}, then re-run with --yes.`
+          );
+        }
+        if (!await confirm("Does the other machine show exactly that fingerprint? [y/N] ")) {
+          throw new CliError(
+            "FINGERPRINT_MISMATCH",
+            "Pairing aborted without granting the workspace key",
+            "A fingerprint that does not match means the key you would send could be readable by whoever relayed it. The device stays paired but cannot read workspace content."
+          );
+        }
+      }
+      const granted = await session.approve(claim.replicaId);
+      result = { value: { pairingId: session.pairingId, replicaId: claim.replicaId, actorId: claim.actorId, granted: granted.granted, encrypted: true } };
+    });
+
+  const key = program.command("key").description("this workspace's end-to-end encryption key");
+  key
+    .command("status")
+    .description("show which key epochs this checkout holds and this device's fingerprint")
+    .action(async () => {
+      result = { value: await workspaceKeyStatus(directory) };
+    });
+  key
+    .command("init")
+    .description("create this workspace's first encryption key (only when no device holds one)")
+    .action(async () => {
+      result = { value: await initWorkspaceKey(directory) };
+    });
+  key
+    .command("export")
+    .description("print the recovery code for this workspace key -- the only copy that can exist off your devices")
+    .option("--yes", "skip the confirmation prompt")
+    .action(async (options: { yes?: boolean }) => {
+      if (!options.yes && process.stdout.isTTY) {
+        process.stderr.write("This prints your workspace encryption key. Anyone who reads it can decrypt this workspace's history.\n");
+        if (!await confirm("Print it? [y/N] ")) throw new CliError("CANCELLED", "Export cancelled");
+      }
+      result = { value: await exportWorkspaceKey(directory) };
+    });
+  key
+    .command("import")
+    .description("restore a workspace key from a recovery code")
+    .argument("<recoveryCode>", "the ccrk1. code from `crosscode key export`")
+    .action(async (recoveryCode: string) => {
+      result = { value: await importWorkspaceKey(directory, recoveryCode) };
+    });
+  key
+    .command("devices")
+    .description("list every device that has registered an encryption key with this workspace")
+    .action(async () => {
+      result = { value: await listKeyDevices(directory) };
+    });
+  key
+    .command("approve")
+    .description("grant the workspace key to a device, after comparing its fingerprint")
+    .argument("<replicaId>", "replica id from `crosscode key devices`")
+    .option("--fingerprint <fingerprint>", "the fingerprint the other machine printed; checked before granting")
+    .option("--yes", "grant without confirming the fingerprint")
+    .action(async (replicaId: string, options: { fingerprint?: string; yes?: boolean }) => {
+      const devices = await listKeyDevices(directory);
+      const device = devices.find((candidate) => candidate.replicaId === replicaId);
+      if (!device) throw new CliError("UNKNOWN_DEVICE", `No device ${replicaId} has registered an encryption key with this workspace`, "Run `crosscode key devices` to see the registered devices.");
+      // Comparing the fingerprint is the whole security of this step: the coordination
+      // service relays public keys, so a key it substituted would look exactly like a
+      // real one here and only the string differs.
+      if (options.fingerprint && options.fingerprint.trim().toUpperCase() !== device.fingerprint) {
+        throw new CliError("FINGERPRINT_MISMATCH", `Device ${replicaId} shows fingerprint ${device.fingerprint}, not the one you passed`, "Do not grant the key. Ask the other machine to re-read `crosscode key status`.");
+      }
+      if (!options.fingerprint && !options.yes) {
+        if (!process.stdout.isTTY) throw new CliError("CONFIRMATION_REQUIRED", "Granting the workspace key requires confirming the device fingerprint", `Pass --fingerprint ${device.fingerprint} once you have checked it on the other machine, or --yes to skip the check.`);
+        process.stderr.write(`Device ${device.replicaName} (${device.actorId}) reports fingerprint:\n\n  ${device.fingerprint}\n\nIt should print the same string for \`crosscode key status\`.\n`);
+        if (!await confirm("Grant it the workspace key? [y/N] ")) throw new CliError("CANCELLED", "No key was granted");
+      }
+      result = { value: await approveKeyDevice(directory, replicaId) };
+    });
+  key
+    .command("rotate")
+    .description("start a new key epoch and grant it to every already-approved device")
+    .option("--yes", "skip the confirmation prompt")
+    .action(async (options: { yes?: boolean }) => {
+      if (!options.yes) {
+        if (!process.stdout.isTTY) throw new CliError("CONFIRMATION_REQUIRED", "Rotating the workspace key requires confirmation; pass --yes in noninteractive environments");
+        process.stderr.write("Rotation protects work from here on. It cannot make already-shared history unreadable to anyone who already downloaded it.\n");
+        if (!await confirm("Rotate the workspace key? [y/N] ")) throw new CliError("CANCELLED", "Rotation cancelled");
+      }
+      result = { value: await rotateWorkspaceKey(directory) };
+    });
+  key
+    .command("forget")
+    .description("delete this checkout's copy of the workspace key (local only)")
+    .option("--yes", "skip the confirmation prompt")
+    .action(async (options: { yes?: boolean }) => {
+      if (!options.yes) {
+        if (!process.stdout.isTTY) throw new CliError("CONFIRMATION_REQUIRED", "Forgetting the workspace key requires confirmation; pass --yes in noninteractive environments");
+        if (!await confirm("Delete this checkout's copy of the workspace key? Without a recovery code or another paired device it cannot be recovered. [y/N] ")) {
+          throw new CliError("CANCELLED", "Cancelled");
+        }
+      }
+      result = { value: await forgetWorkspaceKey(directory) };
     });
 
   const members = program.command("members").description("workspace membership");

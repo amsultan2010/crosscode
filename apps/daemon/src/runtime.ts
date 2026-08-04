@@ -9,6 +9,7 @@ import { AgentDelegatedReviewer } from "@crosscode/core";
 import { discoverRepository, remoteUrl, resolveGitPath } from "@crosscode/git";
 import {
   claimPairingCodeRequestSchema, claimPairingCodeResponseSchema, daemonConfigSchema, daemonConnectionSchema,
+  PAIRING_CODE_TTL_MS,
   type DaemonConfig, type DaemonConnection, type PresenceUpdate
 } from "@crosscode/protocol";
 import { cliSignInUrl, openInBrowser, startLoginCallbackServer } from "./browser-login.js";
@@ -18,6 +19,10 @@ import { CoordinationServiceClient, type CoordinationServiceIdentity } from "./s
 import { LiveSyncClient } from "./ws-client.js";
 import { keychainAvailable, readSecret, storeSecret, deleteSecret } from "./keychain.js";
 import { getSupabaseClient, toStoredSession } from "./supabase-client.js";
+import {
+  KeyringSource, createKeyring, deviceFingerprint, exportRecoveryCode, forgetKeyring, generateDeviceKeyPair,
+  importRecoveryCode, loadKeyring, rotateKeyring, saveKeyring, type Keyring
+} from "./workspace-key.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -220,18 +225,24 @@ export async function redeemPairingCode(
   directory: string,
   code: string,
   options: { serviceUrl?: string; replicaName?: string; actorId?: string } = {}
-): Promise<DaemonConfig> {
+): Promise<DaemonConfig & { deviceFingerprint?: string }> {
   const existing = await readDaemonConfig(directory).catch(() => undefined);
   const serviceUrl = options.serviceUrl ?? existing?.service?.url;
   if (!serviceUrl) throw new Error("A service URL is required to pair; pass --service <url>");
   const repository = await discoverRepository(directory);
   const actorId = options.actorId ?? existing?.actorId ?? `${process.env.USER ?? "local-user"}@${hostname()}`;
+  // A fresh device identity per pairing. Registering it in the claim is what lets the
+  // minting side see a fingerprint to compare and, once a human has compared it, wrap the
+  // workspace keyring to this machine -- the coordination service relays both halves and
+  // can open neither.
+  const device = encryptionEnabled() ? generateDeviceKeyPair() : undefined;
   const request = claimPairingCodeRequestSchema.parse({
     code: code.trim().toUpperCase(),
     actorId,
     replicaName: options.replicaName ?? hostname(),
     repoRoot: repository.root,
-    repoRemote: await repoRemoteUrl(repository.root, repository.remotes)
+    repoRemote: await repoRemoteUrl(repository.root, repository.remotes),
+    devicePublicKey: device?.publicKey
   });
   const response = await fetch(new URL("/v1/pairing-codes/claim", serviceUrl), {
     method: "POST",
@@ -258,7 +269,179 @@ export async function redeemPairingCode(
     service: { ...existing?.service, url: serviceUrl, workspaceToken: claimed.token }
   };
   await writeDaemonConfig(directory, updated);
-  return updated;
+  if (!device) return updated;
+  // Device identity only -- no epoch keys. This checkout cannot read or write workspace
+  // content until the approving device grants it one, which is the correct state: the
+  // alternative is falling back to plaintext, and that is never the safer default.
+  await saveKeyring(directory, { version: 1, workspaceId: claimed.workspaceId, currentEpoch: null, epochs: {}, device });
+  return { ...updated, deviceFingerprint: deviceFingerprint(device.publicKey) };
+}
+
+// ---------------------------------------------------------------------------
+// Workspace encryption keys (docs/security.md#end-to-end-encryption)
+// ---------------------------------------------------------------------------
+
+/**
+ * A service client for the CLI's one-shot key commands. Unlike the daemon's, this one is
+ * built and thrown away per command, so it re-reads the config every time and never holds
+ * a keyring in memory between calls.
+ */
+async function keyClient(directory: string): Promise<{ client: CoordinationServiceClient; config: DaemonConfig }> {
+  const config = await readDaemonConfig(directory).catch(() => undefined);
+  if (!config) throw new Error("Run `crosscode init` before managing workspace keys");
+  if (!config.service) throw new Error("No coordination service is configured; run `crosscode login --service <url>` or `crosscode join --pair <code>`");
+  if (!config.replicaId) throw new Error("This checkout has no replica identity yet; start the daemon once so it can register");
+  if (!encryptionEnabled()) throw new Error("CROSSCODE_ENCRYPTION=off disables end-to-end encryption for this checkout");
+  return { client: createServiceClient(directory, config, config.service), config };
+}
+
+export type WorkspaceKeyStatus = {
+  workspaceId: string;
+  /** Null when this device has registered an identity but holds no key yet. */
+  currentEpoch: number | null;
+  epochs: number[];
+  deviceFingerprint: string;
+  encryptionEnabled: boolean;
+};
+
+export async function workspaceKeyStatus(directory: string): Promise<WorkspaceKeyStatus> {
+  const keyring = await loadKeyring(directory);
+  if (!keyring) throw new Error("This checkout has no workspace keyring yet; start the daemon once, or run `crosscode join --pair <code>`");
+  return {
+    workspaceId: keyring.workspaceId,
+    currentEpoch: keyring.currentEpoch,
+    epochs: Object.keys(keyring.epochs).map(Number).sort((left, right) => left - right),
+    deviceFingerprint: deviceFingerprint(keyring.device.publicKey),
+    encryptionEnabled: encryptionEnabled()
+  };
+}
+
+/**
+ * Prints the workspace key as a recovery code. This is the only copy that can exist
+ * outside a paired device, and we cannot reissue it -- there is nothing on our side to
+ * reissue it from. Callers must not put it in `--json` output or scrollback casually;
+ * `crosscode key export` writes it to stdout alone and says so.
+ */
+export async function exportWorkspaceKey(directory: string): Promise<string> {
+  const keyring = await loadKeyring(directory);
+  if (!keyring) throw new Error("This checkout has no workspace keyring to export");
+  return exportRecoveryCode(keyring);
+}
+
+export async function importWorkspaceKey(directory: string, recoveryCode: string): Promise<WorkspaceKeyStatus> {
+  const config = await readDaemonConfig(directory).catch(() => undefined);
+  if (!config) throw new Error("Run `crosscode init` before importing a workspace key");
+  const existing = await loadKeyring(directory).catch(() => undefined);
+  const imported = importRecoveryCode(recoveryCode, config.workspaceId);
+  // Keep this machine's device identity if it already has one: it may already be a
+  // registered grant recipient, and swapping the public key would orphan those grants
+  // (the service refuses to re-register a device under a different key, by design).
+  const keyring: Keyring = existing ? { ...imported, device: existing.device } : imported;
+  await saveKeyring(directory, keyring);
+  return workspaceKeyStatus(directory);
+}
+
+/** Creates the workspace's first key. Refused by the service path if anyone already holds one. */
+export async function initWorkspaceKey(directory: string): Promise<WorkspaceKeyStatus> {
+  const { client, config } = await keyClient(directory);
+  const existing = await loadKeyring(directory).catch(() => undefined);
+  if (existing?.currentEpoch !== null && existing !== undefined) throw new Error("This checkout already holds a workspace key");
+  const created = createKeyring(config.workspaceId);
+  await saveKeyring(directory, existing ? { ...created, device: existing.device } : created);
+  await client.syncWorkspaceKeys();
+  return workspaceKeyStatus(directory);
+}
+
+export async function rotateWorkspaceKey(directory: string): Promise<{ epoch: number; keyId: string; granted: number }> {
+  const { client } = await keyClient(directory);
+  return client.rotateWorkspaceKey();
+}
+
+/** Local only: drops this checkout's copy of the key. Nothing server-side changes. */
+export async function forgetWorkspaceKey(directory: string): Promise<{ forgotten: boolean }> {
+  return { forgotten: await forgetKeyring(directory) };
+}
+
+/**
+ * Every device that has registered an encryption key with this workspace, with the
+ * fingerprint to compare and whether it already holds the key. This is the list to read
+ * when something looks wrong: a device here that nobody recognises is what a coordination
+ * service inserting itself would look like, and `crosscode key rotate` is the answer.
+ */
+export async function listKeyDevices(directory: string): Promise<Array<{
+  replicaId: string; replicaName: string; actorId: string; fingerprint: string; epochs: number[]; holdsKey: boolean;
+}>> {
+  const recipients = await serviceRequest<{ recipients: Array<{ replicaId: string; replicaName: string; actorId: string; publicKey: string; epochs: number[] }> }>(
+    directory, "/v1/workspace-keys/recipients", { describe: "Key device list" }
+  );
+  return recipients.recipients.map((recipient) => ({
+    replicaId: recipient.replicaId,
+    replicaName: recipient.replicaName,
+    actorId: recipient.actorId,
+    fingerprint: deviceFingerprint(recipient.publicKey as Keyring["device"]["publicKey"]),
+    epochs: recipient.epochs,
+    holdsKey: recipient.epochs.length > 0
+  }));
+}
+
+/** Grants one named device every key epoch this one holds. See `crosscode key approve`. */
+export async function approveKeyDevice(directory: string, replicaId: string): Promise<{ granted: number; fingerprint: string }> {
+  const { client } = await keyClient(directory);
+  return client.approveKeyRecipient(replicaId);
+}
+
+export type PairingSession = {
+  code: string;
+  expiresAt: string;
+  pairingId: string;
+  /** Resolves once the code is claimed, with the claiming device's fingerprint to compare. */
+  claimed: Promise<{ replicaId: string; actorId: string; fingerprint: string | null }>;
+  approve: (replicaId: string) => Promise<{ granted: number; fingerprint: string }>;
+  cancel: () => void;
+};
+
+/**
+ * The minting half of Contract A, plus the key handoff. Returns as soon as the code
+ * exists so the caller can display it, and exposes the claim as a promise: the CLI prints
+ * the code, waits, shows the claiming device's fingerprint, and only grants the workspace
+ * keyring once a human has confirmed it matches what the other machine printed.
+ */
+export async function startPairing(
+  directory: string,
+  options: { pollMs?: number; timeoutMs?: number } = {}
+): Promise<PairingSession> {
+  const { client } = await keyClient(directory);
+  const minted = await serviceRequest<{ code: string; expiresAt: string; pairingId: string }>(
+    directory, "/v1/pairing-codes", { method: "POST", body: {}, describe: "Pairing code" }
+  );
+  let cancelled = false;
+  const pollMs = options.pollMs ?? 2_000;
+  const deadline = Date.now() + (options.timeoutMs ?? PAIRING_CODE_TTL_MS);
+  const claimed = (async () => {
+    for (;;) {
+      if (cancelled) throw new Error("Pairing cancelled");
+      const status = await serviceRequest<{ status: string; replicaId: string | null; actorId: string | null; devicePublicKey: string | null }>(
+        directory, `/v1/pairing-codes/${encodeURIComponent(minted.pairingId)}`, { describe: "Pairing status" }
+      );
+      if (status.status === "claimed" && status.replicaId) {
+        return {
+          replicaId: status.replicaId,
+          actorId: status.actorId ?? "unknown",
+          fingerprint: status.devicePublicKey ? deviceFingerprint(status.devicePublicKey as Keyring["device"]["publicKey"]) : null
+        };
+      }
+      if (status.status === "expired" || Date.now() >= deadline) throw new Error("Pairing code expired before it was claimed");
+      await new Promise((resolveWait) => setTimeout(resolveWait, pollMs));
+    }
+  })();
+  return {
+    code: minted.code,
+    expiresAt: minted.expiresAt,
+    pairingId: minted.pairingId,
+    claimed,
+    approve: (replicaId: string) => client.approveKeyRecipient(replicaId),
+    cancel: () => { cancelled = true; }
+  };
 }
 
 async function repoRemoteUrl(root: string, remotes: string[]): Promise<string | null> {
@@ -345,6 +528,18 @@ export type ManagedDaemon = {
   stop: () => Promise<void>;
 };
 
+/**
+ * Set CROSSCODE_ENCRYPTION=off to send file payloads to the coordination service in
+ * plaintext. There is exactly one reason to: a self-hosted deployment, where the
+ * "service" and the "customer" are the same party and readable payloads are worth more
+ * than a property that party already has by owning the database. It cannot silently take
+ * effect on a workspace that has already sent ciphertext -- the service latches, and
+ * refuses the plaintext with a 409 rather than accepting the downgrade.
+ */
+function encryptionEnabled(): boolean {
+  return (process.env.CROSSCODE_ENCRYPTION ?? "on").toLowerCase() !== "off";
+}
+
 function createServiceClient(directory: string, config: Pick<DaemonConfig, "workspaceId" | "actorId" | "replicaId">, service: NonNullable<DaemonConfig["service"]>): CoordinationServiceClient {
   const identity: CoordinationServiceIdentity = { workspaceId: config.workspaceId, actorId: config.actorId, replicaId: config.replicaId };
   return new CoordinationServiceClient(identity, service, {
@@ -358,7 +553,7 @@ function createServiceClient(directory: string, config: Pick<DaemonConfig, "work
       if (!latest) return;
       await writeDaemonConfig(directory, { ...latest, replicaId });
     }
-  });
+  }, encryptionEnabled() ? new KeyringSource(directory) : undefined);
 }
 
 /**
@@ -415,7 +610,14 @@ export async function runDaemonProcess(
         if (stopped) return;
         if (syncing) { rerunRequested = true; return; }
         syncing = true;
-        try { await running.daemon.runExclusive(() => running.daemon.syncRemote(client)); }
+        try {
+          // Before anything is uploaded or downloaded: install any workspace key epoch
+          // this device has been granted, and re-grant the ones it holds to devices that
+          // are missing them. Sealing and opening both depend on it, so a failure here
+          // has to fail the sync rather than silently fall through to a plaintext upload.
+          await client.syncWorkspaceKeys();
+          await running.daemon.runExclusive(() => running.daemon.syncRemote(client));
+        }
         catch { running.daemon.recordRemoteSyncFailure(); }
         finally {
           syncing = false;

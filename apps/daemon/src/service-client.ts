@@ -3,14 +3,19 @@ import { hostname } from "node:os";
 import {
   claimIngestReceiptSchema,
   claimCursorResponseSchema,
+  createWorkspaceKeyGrantsRequestSchema,
   cursorResponseSchema,
+  isSealedTransaction,
+  listWorkspaceKeyRecipientsResponseSchema,
+  registerDeviceKeyRequestSchema,
+  sealedTransactionCreatedEventSchema,
+  workspaceKeyStateResponseSchema,
   handoffCursorResponseSchema,
   handoffIngestReceiptSchema,
   intentCursorResponseSchema,
   intentIngestReceiptSchema,
   registerReplicaRequestSchema,
   registerReplicaResponseSchema,
-  remoteOperationSchema,
   serviceIngestReceiptSchema,
   setWorkspaceAutonomyRequestSchema,
   taskIngestReceiptSchema,
@@ -24,12 +29,18 @@ import {
   type RemoteHandoff,
   type RemoteIntent,
   type RemoteTask,
-  type RemoteValidation
+  type RemoteValidation,
+  type SealedTransaction
 } from "@crosscode/protocol";
 import type { LocalOperation } from "./types.js";
 import type { ClaimOutboundRecord, HandoffOutboundRecord, IntentOutboundRecord, OutboundRecord, TaskOutboundRecord, ValidationOutboundRecord } from "./state.js";
 import type { RemoteSyncTransport } from "./index.js";
 import { getSupabaseClient, toStoredSession, type StoredSession } from "./supabase-client.js";
+import { MissingEpochKeyError, openTransaction, sealTransaction } from "./sealing.js";
+import {
+  createDeviceKeyring, createKeyring, currentEpochKey, deviceFingerprint, hasEpochKeys, keyIdFor, rotateKeyring,
+  unwrapEpochKey, withEpochKey, wrapEpochKey, type Keyring, type KeyringSource
+} from "./workspace-key.js";
 
 type Envelope<T> = { ok: true; data: T } | { ok: false; error: string };
 
@@ -51,10 +62,36 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
   private session: StoredSession | undefined;
   private readonly workspaceToken: string | undefined;
 
+  /**
+   * How often a device that already holds a key re-checks for grants to install and
+   * recipients to grant to. Rotation and pairing both propagate through those two calls,
+   * and neither is urgent enough to justify running them on the 1s sync loop. A device
+   * that holds *no* key ignores this and checks every sync, because it is blocked.
+   */
+  private static readonly KEY_POLL_INTERVAL_MS = 60_000;
+  private lastKeyPollAt = 0;
+  private deviceKeyRegistered = false;
+  /**
+   * The operation the download cursor is currently parked in front of because this device
+   * holds no key for it, plus the epochs it held at that moment and whether a key sync has
+   * run since. See list(): the pair is what separates "a grant is in flight" from
+   * "this really is unreadable".
+   */
+  private blocked: { sequence: number; signature: string; polled: boolean } | undefined;
+  /** Last known value of the service's encryption latch; see sealingKeyring(). */
+  private workspaceEncrypted = false;
+
   constructor(
     private readonly identity: CoordinationServiceIdentity,
     private readonly service: NonNullable<DaemonConfig["service"]>,
-    private readonly hooks: CoordinationServiceHooks = {}
+    private readonly hooks: CoordinationServiceHooks = {},
+    /**
+     * This checkout's workspace keyring. Undefined disables end-to-end encryption for
+     * this install entirely (self-hosted deployments, and the in-process test transports
+     * that never touch a real service) -- in which case payloads go out in plaintext and
+     * an already-encrypted workspace refuses them, which is the intended failure.
+     */
+    private readonly keys?: KeyringSource
   ) {
     if (!service.session && !service.workspaceToken) {
       throw new Error("Run 'crosscode login' or 'crosscode join --pair <code>' before starting the daemon");
@@ -77,7 +114,10 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
     const data = await this.authorizedRequest("/v1/replicas", "POST", registerReplicaRequestSchema.parse({
       name: name ?? defaultReplicaName(),
       repoRoot: repo?.repoRoot ?? undefined,
-      repoRemote: repo?.repoRemote ?? undefined
+      repoRemote: repo?.repoRemote ?? undefined,
+      // Registered with the replica so there is never a window in which a brand-new
+      // device is eligible for grants but has no key on file to receive them.
+      devicePublicKey: (await this.deviceKeyring())?.device.publicKey
     }));
     const response = registerReplicaResponseSchema.parse(data);
     this.identity.replicaId = response.replicaId;
@@ -111,8 +151,22 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
     return this.session.accessToken;
   }
 
+  /**
+   * Uploads one transaction, sealed if this checkout holds a workspace key. The seal
+   * happens here and nowhere else: everything upstream -- capture, classification,
+   * review, materialization -- works on plaintext, and this is the last point before the
+   * payload becomes something the coordination service will store.
+   */
   async upload(record: OutboundRecord): Promise<LocalOperation> {
-    const event = transactionCreatedEventSchema.parse(record.event);
+    const plain = transactionCreatedEventSchema.parse(record.event);
+    const keyring = await this.sealingKeyring();
+    const event = keyring
+      ? sealedTransactionCreatedEventSchema.parse({
+          ...plain,
+          type: "transaction.sealed",
+          payload: sealTransaction(plain.payload, keyring, { workspaceId: plain.workspaceId, replicaId: plain.replicaId })
+        })
+      : plain;
     const data = await this.authorizedRequest("/v1/events", "POST", { event });
     const receipt = serviceIngestReceiptSchema.parse(data);
     return {
@@ -125,15 +179,76 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
     };
   }
 
-  async list(after: number): Promise<{ operations: LocalOperation[]; nextCursor: number }> {
+  /**
+   * `unreadable` names the server sequences this device could not open because it holds
+   * no key for the epoch that sealed them -- the only legitimate reason for a gap in an
+   * otherwise dense cursor. Reporting them keeps the daemon's anti-omission check intact:
+   * a gap the transport did not declare is still treated as the service hiding an
+   * operation, rather than being quietly tolerated because encryption exists.
+   */
+  async list(after: number): Promise<{ operations: LocalOperation[]; nextCursor: number; unreadable: number[] }> {
     const data = cursorResponseSchema.parse(await this.authorizedRequest(`/v1/operations?afterSequence=${after}`, "GET"));
-    return {
-      nextCursor: data.nextCursor,
-      operations: data.operations.map((operation) => {
-        const parsed = remoteOperationSchema.parse(operation);
-        return { id: parsed.id, workspaceId: parsed.workspaceId, senderReplicaId: parsed.senderReplicaId, transaction: parsed.transaction, sequence: parsed.serverSequence, createdAt: parsed.createdAt };
-      })
-    };
+    const keyring = await this.keys?.get();
+    const operations: LocalOperation[] = [];
+    const unreadable: number[] = [];
+    let cursor = after;
+    for (const parsed of data.operations) {
+      // Already validated: cursorResponseSchema parsed every entry through
+      // remoteOperationSchema. Re-parsing each one here cost a second pass through the
+      // sealed/plaintext union, inside the daemon's exclusive lock, on every sync.
+      const binding = { workspaceId: parsed.workspaceId, replicaId: parsed.senderReplicaId };
+      let transaction = parsed.transaction;
+      if (isSealedTransaction(transaction)) {
+        const missing = keyring
+          ? this.openOrReportMissing(transaction, keyring, binding)
+          : { missing: true as const };
+        if ("missing" in missing) {
+          // Two very different situations reach here. Usually a grant is already on its
+          // way -- another device just rotated -- and the right move is to hold the cursor
+          // where it is and try again in a second, because advancing past the operation
+          // would drop it for good. Only once a key sync has run and left this device with
+          // the same keys it already had is the operation actually unreadable, and only
+          // then is the gap declared and stepped over.
+          const signature = Object.keys(keyring?.epochs ?? {}).sort().join(",");
+          if (this.blocked?.sequence === parsed.serverSequence && this.blocked.signature === signature && this.blocked.polled) {
+            this.blocked = undefined;
+            unreadable.push(parsed.serverSequence);
+            cursor = parsed.serverSequence;
+            continue;
+          }
+          this.blocked = { sequence: parsed.serverSequence, signature, polled: false };
+          // Seeing an epoch we do not hold is the signal that a grant is probably waiting
+          // for us. Force the next key sync rather than waiting out the ordinary poll
+          // interval, so a rotation costs the rest of the workspace seconds, not a minute.
+          this.lastKeyPollAt = 0;
+          break;
+        }
+        transaction = missing.transaction;
+      }
+      operations.push({ id: parsed.id, workspaceId: parsed.workspaceId, senderReplicaId: parsed.senderReplicaId, transaction, sequence: parsed.serverSequence, createdAt: parsed.createdAt });
+      cursor = parsed.serverSequence;
+    }
+    if (operations.length + unreadable.length === data.operations.length) cursor = data.nextCursor;
+    return { nextCursor: cursor, operations, unreadable };
+  }
+
+  /**
+   * Opens a sealed transaction, distinguishing "no key for this epoch" from tampering. A
+   * failed authentication tag, a path-token mismatch, or a payload that does not parse
+   * means the payload was altered in transit or at rest, and must stop the sync rather
+   * than be downgraded into "we skipped one".
+   */
+  private openOrReportMissing(
+    sealed: SealedTransaction,
+    keyring: Keyring,
+    binding: { workspaceId: string; replicaId: string }
+  ): { transaction: LocalOperation["transaction"] } | { missing: true } {
+    try {
+      return { transaction: openTransaction(sealed, keyring, binding) };
+    } catch (error) {
+      if (error instanceof MissingEpochKeyError) return { missing: true };
+      throw error;
+    }
   }
 
   async uploadTask(record: TaskOutboundRecord): Promise<RemoteTask> {
@@ -230,6 +345,212 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
   async setAutonomyTier(tier: 0 | 1 | 2): Promise<0 | 1 | 2> {
     const data = workspaceAutonomyResponseSchema.parse(await this.authorizedRequest("/v1/workspace/autonomy", "PUT", setWorkspaceAutonomyRequestSchema.parse({ tier })));
     return data.tier;
+  }
+
+  // -------------------------------------------------------------------------
+  // Workspace key distribution (docs/security.md#end-to-end-encryption)
+  // -------------------------------------------------------------------------
+
+  /** This device's keyring, creating the device identity (but no epoch key) on first use. */
+  private async deviceKeyring(): Promise<Keyring | undefined> {
+    if (!this.keys) return undefined;
+    const existing = await this.keys.get();
+    if (existing?.workspaceId === this.identity.workspaceId) return existing;
+    // A keyring belonging to a different workspace means this checkout was re-joined
+    // elsewhere; its epoch keys are useless here, and overwriting them is safe only
+    // because they are also still in the OS keychain of whoever holds that workspace.
+    const created = createDeviceKeyring(this.identity.workspaceId);
+    await this.keys.save(created);
+    return created;
+  }
+
+  /** The keyring to seal with, or undefined when this install does not encrypt at all. */
+  private async sealingKeyring(): Promise<Keyring | undefined> {
+    if (!this.keys) return undefined;
+    const keyring = await this.deviceKeyring();
+    if (keyring && hasEpochKeys(keyring)) return keyring;
+    throw new Error(
+      "This workspace is end-to-end encrypted and this device has not been granted the key yet. " +
+      "Run `crosscode pair` on a device that already has it, or `crosscode key import <recovery code>`."
+    );
+  }
+
+  /**
+   * Brings this device's keyring in line with the workspace: installs any epoch keys
+   * granted to it, mints the workspace's very first key when nobody holds one yet, and
+   * re-grants the epochs it holds to devices a human has already approved.
+   *
+   * The one thing it will not do is approve a new device. The recipient list comes from
+   * the service, so auto-granting to an unapproved entry would let the service invent a
+   * replica with a key of its own and be handed the workspace keyring -- which is exactly
+   * the property this whole design exists to deny. Approving is `crosscode pair`, where a
+   * human compares a fingerprint.
+   */
+  async syncWorkspaceKeys(): Promise<{ epochs: number; created: boolean; installed: number; granted: number }> {
+    if (!this.keys || !this.identity.replicaId) return { epochs: 0, created: false, installed: 0, granted: 0 };
+    let keyring = await this.deviceKeyring();
+    if (!keyring) return { epochs: 0, created: false, installed: 0, granted: 0 };
+    const due = Date.now() - this.lastKeyPollAt >= CoordinationServiceClient.KEY_POLL_INTERVAL_MS;
+    if (hasEpochKeys(keyring) && !due) return { epochs: Object.keys(keyring.epochs).length, created: false, installed: 0, granted: 0 };
+    this.lastKeyPollAt = Date.now();
+
+    const replicaId = this.identity.replicaId;
+    // Publish this device's public key before asking anything else. ensureReplicaRegistered
+    // does it for a checkout registering for the first time, but a replica that already
+    // existed -- every one that predates encryption, and every restart into a config that
+    // already has an id -- never runs that path, and without a key on file it can neither
+    // be granted an epoch nor establish the first one.
+    if (!this.deviceKeyRegistered) {
+      await this.authorizedRequest(
+        `/v1/workspace-keys/device?replicaId=${encodeURIComponent(replicaId)}`, "PUT",
+        registerDeviceKeyRequestSchema.parse({ publicKey: keyring.device.publicKey })
+      );
+      this.deviceKeyRegistered = true;
+    }
+    const state = workspaceKeyStateResponseSchema.parse(
+      await this.authorizedRequest(`/v1/workspace-keys/state?replicaId=${encodeURIComponent(replicaId)}`, "GET")
+    );
+    this.workspaceEncrypted = state.encrypted;
+
+    let installed = 0;
+    for (const grant of state.grants) {
+      if (keyring.epochs[String(grant.epoch)] !== undefined) continue;
+      const key = unwrapEpochKey({ epoch: grant.epoch, wrapped: grant.wrapped, recipient: keyring.device });
+      if (keyIdFor(key) !== grant.keyId) throw new Error(`Workspace key grant for epoch ${grant.epoch} does not match its key id`);
+      keyring = withEpochKey(keyring, grant.epoch, key);
+      installed += 1;
+    }
+
+    if (installed) await this.keys.save(keyring);
+
+    // Minting the first key is safe exactly when nobody holds one: there is no key to
+    // wait for, so creating one cannot fork the workspace into two unreadable halves.
+    // The service arbitrates that "nobody" -- see establishFirstKey().
+    let created = false;
+    if (!hasEpochKeys(keyring) && state.keyHolders === 0 && !state.encrypted) {
+      const minted = await this.establishFirstKey(keyring, replicaId);
+      created = minted !== undefined;
+      if (minted) keyring = minted;
+    }
+
+    const granted = hasEpochKeys(keyring) && !created ? await this.grantHeldEpochs(keyring, replicaId, { onlyApproved: true }) : 0;
+    // A key sync has now run. If the cursor is parked in front of an operation and this
+    // did not produce the key for it, list() may stop waiting and declare the gap.
+    if (this.blocked) this.blocked = { ...this.blocked, polled: true };
+    return { epochs: Object.keys(keyring.epochs).length, created, installed, granted };
+  }
+
+  /**
+   * Mints epoch 0 and publishes it as a grant to this very device. The self-grant is not
+   * a backup -- the wrapped copy only opens with a private key that never leaves this
+   * machine -- it is how "this device holds a key" becomes a fact other devices can read
+   * without anyone publishing the key itself. Without it, `keyHolders` would stay zero
+   * for a one-device workspace and the second device would mint a competing epoch 0.
+   *
+   * Returns undefined when another device won the race, in which case this one keeps its
+   * device identity, holds no epoch key, and waits to be granted one.
+   */
+  private async establishFirstKey(deviceKeyring: Keyring, replicaId: string): Promise<Keyring | undefined> {
+    const minted: Keyring = { ...createKeyring(this.identity.workspaceId), device: deviceKeyring.device };
+    const current = currentEpochKey(minted);
+    const body = createWorkspaceKeyGrantsRequestSchema.parse({
+      grants: [{
+        epoch: current.epoch, keyId: current.keyId, recipientReplicaId: replicaId,
+        recipientPublicKey: minted.device.publicKey,
+        wrapped: wrapEpochKey({ epoch: current.epoch, key: current.key, recipientPublicKey: minted.device.publicKey, sender: minted.device })
+      }]
+    });
+    try {
+      await this.authorizedRequest(`/v1/workspace-keys/grants?replicaId=${encodeURIComponent(replicaId)}&first=1`, "POST", body);
+    } catch (error) {
+      if (!(error instanceof ServiceHttpError) || error.status !== 409) throw error;
+      // A 409 here should mean another device established the workspace key between our
+      // read and our write, in which case the key we minted was never shared and can just
+      // be discarded. Confirm that from the service rather than assuming it: the same
+      // status also covers "this device registered a different public key", and silently
+      // treating that as a lost race would leave the daemon looping without a key and
+      // without ever saying why.
+      const state = workspaceKeyStateResponseSchema.parse(
+        await this.authorizedRequest(`/v1/workspace-keys/state?replicaId=${encodeURIComponent(replicaId)}`, "GET")
+      );
+      if (state.keyHolders === 0) throw error;
+      return undefined;
+    }
+    await this.keys!.save(minted);
+    return minted;
+  }
+
+  /**
+   * Wraps every epoch this device holds to the recipients that are missing them.
+   * `onlyApproved` is what separates the automatic sweep (existing key holders, who were
+   * approved by a human once and must keep working across a rotation) from an explicit
+   * approval, which names one replica.
+   */
+  private async grantHeldEpochs(
+    keyring: Keyring, senderReplicaId: string,
+    filter: { onlyApproved: true } | { replicaId: string }
+  ): Promise<number> {
+    const { recipients } = listWorkspaceKeyRecipientsResponseSchema.parse(
+      await this.authorizedRequest("/v1/workspace-keys/recipients", "GET")
+    );
+    const targets = recipients.filter((recipient) => "replicaId" in filter
+      ? recipient.replicaId === filter.replicaId
+      : recipient.replicaId !== senderReplicaId && recipient.epochs.length > 0);
+    const grants = targets.flatMap((recipient) => Object.keys(keyring.epochs)
+      .map(Number)
+      .filter((epoch) => !recipient.epochs.includes(epoch))
+      .map((epoch) => {
+        const key = Buffer.from(keyring.epochs[String(epoch)]!, "base64url");
+        return {
+          epoch, keyId: keyIdFor(key), recipientReplicaId: recipient.replicaId, recipientPublicKey: recipient.publicKey,
+          wrapped: wrapEpochKey({ epoch, key, recipientPublicKey: recipient.publicKey, sender: keyring.device })
+        };
+      }));
+    if (!grants.length) return 0;
+    const body = createWorkspaceKeyGrantsRequestSchema.parse({ grants });
+    const data = await this.authorizedRequest(`/v1/workspace-keys/grants?replicaId=${encodeURIComponent(senderReplicaId)}`, "POST", body);
+    return (data as { stored?: number }).stored ?? 0;
+  }
+
+  /**
+   * The human-approved half of pairing: hand one named device every epoch this one holds.
+   * Callers must have shown `fingerprint` to the person at the other machine first -- the
+   * service relays public keys and could substitute one, and that comparison is the only
+   * thing that detects it.
+   */
+  async approveKeyRecipient(replicaId: string): Promise<{ granted: number; fingerprint: string }> {
+    if (!this.keys) throw new Error("Encryption is disabled for this checkout, so there is no workspace key to grant");
+    const keyring = await this.sealingKeyring();
+    if (!keyring) throw new Error("This device holds no workspace key to grant");
+    const { recipients } = listWorkspaceKeyRecipientsResponseSchema.parse(
+      await this.authorizedRequest("/v1/workspace-keys/recipients", "GET")
+    );
+    const recipient = recipients.find((candidate) => candidate.replicaId === replicaId);
+    if (!recipient) throw new Error(`Device ${replicaId} has not registered an encryption key with this workspace`);
+    const granted = await this.grantHeldEpochs(keyring, this.requireReplicaId(), { replicaId });
+    return { granted, fingerprint: deviceFingerprint(recipient.publicKey) };
+  }
+
+  /**
+   * Starts a new key epoch and hands it to every already-approved device. Everything
+   * sealed from here on is unreadable to anyone who held only the old epochs -- which is
+   * what to do after removing a member, and is also all rotation can ever achieve: what
+   * they already downloaded stays downloaded.
+   */
+  async rotateWorkspaceKey(): Promise<{ epoch: number; keyId: string; granted: number }> {
+    if (!this.keys) throw new Error("Encryption is disabled for this checkout, so there is no workspace key to rotate");
+    const keyring = await this.sealingKeyring();
+    if (!keyring) throw new Error("This device holds no workspace key to rotate");
+    const rotated = rotateKeyring(keyring);
+    await this.keys.save(rotated);
+    const current = currentEpochKey(rotated);
+    const granted = await this.grantHeldEpochs(rotated, this.requireReplicaId(), { onlyApproved: true });
+    return { epoch: current.epoch, keyId: current.keyId, granted };
+  }
+
+  /** Whether the service has latched this workspace to ciphertext, as of the last key sync. */
+  get encrypted(): boolean {
+    return this.workspaceEncrypted;
   }
 
   private requireReplicaId(): string {

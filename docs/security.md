@@ -98,6 +98,231 @@ Both server-side revocations are refused to a `ccw_` token
 leaked terminal-side credential cannot revoke its peers or remove the owner who would
 revoke it. Both are audited (`member.removed`, `workspace_token.revoked`).
 
+## End-to-end encryption
+
+Every file payload Crosscode syncs is encrypted on the sending device with a key the
+coordination service has never held. `api.getcrosscode.dev` stores ciphertext in
+`operations.transaction` and `operation_files.payload` and cannot read it — not with a
+database dump, not with a subpoena, not with an engineer at a console.
+
+This section is the reasoning, not just the mechanism. If any of it stops being true, the
+claim on the landing page has to come down with it.
+
+### Why full end-to-end, and not encryption at rest
+
+The obvious cheaper option is a per-workspace key that *we* hold, applied at rest. It is
+worth naming what that would and would not buy, because it is the default most products
+pick.
+
+Encryption at rest under a key we hold defends against exactly one thing: someone
+obtaining the storage without also obtaining the service. It does nothing about a
+compromised service process, a malicious or coerced insider, a subpoena, or a
+misconfigured internal tool — in all of those the key is right there next to the data. For
+a coordination service the honest summary would be "we can read your code, but we promise
+to be careful," and that is precisely the sentence a developer evaluating a tool for their
+employer's private repository is trying to avoid hearing.
+
+Full end-to-end was affordable here for one structural reason: **the service never
+inspected file content in the first place.** Conflict classification, diffing, dependency
+analysis, three-way merges, and AI review all run client-side in `apps/daemon` and
+`packages/core`. The service is a store-and-forward relay that assigns sequence numbers
+and fans messages out. The only place it ever touched content was the integrity check at
+`apps/service/src/http.ts` — discussed below — and that check was never load-bearing.
+
+So encryption costs the service no capability it was using. That will not stay true for
+free: any future server-side feature that needs to read content (search across a
+workspace, server-rendered diffs, a web review UI) would have to break this, and the
+answer is that it does not get built server-side. That is the trade, stated up front.
+
+### What the server can and cannot see
+
+Encrypted, under a key we do not have:
+
+- File contents (`afterContent`), unified patches, and the base snapshot.
+- **File paths.** Paths are as sensitive as content — `src/billing/stripe-webhook-v2.ts`
+  tells you a great deal — so they are inside the ciphertext, not beside it.
+- Content hashes (`beforeHash`, `afterHash`, `base.files[].contentHash`). A SHA-256 of a
+  file is a confirmation oracle: anyone holding a candidate file can check whether you
+  have it. Leaving hashes in the clear would have quietly undone much of the encryption.
+- The natural-language `intent` describing what the change was for.
+
+In the clear, and therefore visible to us:
+
+- Workspace, member, replica, and project ids, and `actor_id` — normally an email address.
+  Multi-tenant authorization is done on these; they cannot be encrypted.
+- **`repoRemote`** — the normalized git remote, e.g. `github.com/acme/secret-project`.
+  Projects are keyed on it (Contract B), so it is stored as-is. If a repository's *name*
+  is itself confidential, self-host.
+- Timestamps, sequence numbers, and the number of files an operation touches.
+- Ciphertext length, which bounds the plaintext size. A large commit looks like a large
+  commit.
+- The change kind per file (`add`/`modify`/`delete`/`rename`).
+- Tasks, claims, intents, handoffs, and validation output are **not yet sealed**. Task
+  titles and claim targets do contain paths and descriptions. This is a real gap, it is
+  not covered by the claim above, and it is called out on the privacy page rather than
+  quietly omitted. The envelope built here is reusable for them.
+
+Per-file rows still exist server-side, keyed by a `pathToken` instead of a path:
+`HMAC-SHA256(pathKey, transactionId || "\0" || path)`. The transaction id is mixed in so
+the *same* file in two operations produces two unrelated tokens — otherwise the service
+could build a per-file change history without decrypting anything. The service keeps only
+what it actually used the column for: "an operation may change each path at most once."
+
+### What replaces the server-side hash check
+
+`http.ts` used to verify `afterHash === contentHash(afterContent)` on every ingested
+change. With ciphertext there is no plaintext to hash, so the check is gone for sealed
+operations. It should be, and its removal loses nothing:
+
+**That check never protected a receiving client.** It ran on our server, on data our
+server could rewrite. A service willing to substitute `afterContent` would substitute
+`afterHash` to match, and the check would pass. It was only ever a garbage-in filter that
+caught a *client* miscomputing its own hash — useful, but not evidence of anything to
+anyone downstream.
+
+The check that always mattered is the receiver's. `assertChangeIntegrity`
+(`apps/daemon/src/index.ts`) re-verifies every downloaded change before anything is
+applied, and did so before this work existed — precisely because the server's word was
+never sufficient. Encryption *upgrades* that check rather than removing it:
+
+- The payload is sealed with **AES-256-GCM**. Opening it verifies an authentication tag
+  computed under a key the service has never held. A modified byte does not decrypt.
+- The workspace id, the sending replica id, and the operation id are bound in as
+  **additional authenticated data**, so a sealed payload cannot be moved to another
+  workspace, re-attributed to a different replica, or spliced onto another operation.
+- The clear-text `changes` array is outside the ciphertext, because the service needs a
+  row per file. So the receiver recomputes every `pathToken` from the decrypted paths and
+  compares — a dropped, duplicated, reordered, or relabelled row is caught.
+- The original plaintext hash check still runs afterwards, unchanged.
+
+Net: integrity moves from *a hash the server could forge* to *an AEAD tag the server
+cannot*. The structural checks that never needed plaintext — one change per path,
+principal binding, replica ownership, role gates — all still run server-side.
+
+The same reasoning applies to `redactPath`, which refused to relay `.env` and friends.
+That also only ever caught a well-meaning client; a malicious one renames the file. It now
+runs client-side before capture and again before sealing, which is the only place a real
+path is visible anyway.
+
+### Where the key lives, and how it reaches a second device
+
+A workspace key is 32 random bytes generated on a member's machine. From it, HKDF derives
+a content key (AES-256-GCM) and a path key (HMAC). Keys are **epoched**: a keyring holds
+every epoch it has been given, so history stays readable across rotations.
+
+Storage is the same shape the Supabase refresh token already uses: the OS keychain when
+one exists (macOS `security`, Linux `secret-tool`), otherwise a mode-`0600` file at
+`<git-dir>/crosscode/keyring.json`, never committed. Because macOS silently truncates a
+keychain secret written through stdin at 128 bytes — a limit the refresh-token path was
+also quietly exposed to, now guarded — the keychain holds a small wrapping key and the
+file holds the keyring encrypted under it.
+
+Reaching a second device uses the existing pairing flow (Contract A):
+
+1. The new device generates an X25519 keypair and sends the public key with its pairing
+   claim. It receives a workspace token but **no key**, so it can join, be seen, and send
+   nothing readable until step 4.
+2. Both machines display a 60-bit **fingerprint** of that public key, in the same
+   read-aloud alphabet as a pairing code.
+3. `crosscode pair` shows the claiming device's fingerprint and asks a human to confirm it
+   matches what the other machine printed.
+4. On confirmation, the approving device wraps each epoch key to the new device's public
+   key (X25519 → HKDF → AES-256-GCM) and posts the results. The service stores and
+   forwards them exactly as it does file payloads: it holds no private key.
+
+**The fingerprint comparison is the whole security of that step, and it is not optional
+theatre.** The service relays public keys, so it could offer one of its own and be handed
+the workspace keyring. Comparing 60 bits out of band is what detects that. Grants are
+therefore never issued automatically to a device nobody has approved — auto-granting to
+whatever the service listed would hand it the key on request and make every other claim on
+this page false. The automatic sweep only re-grants to devices that already hold an epoch,
+which is how a rotation reaches an offline machine without a second human decision.
+
+A member joining by invite rather than pairing is approved the same way, with
+`crosscode key devices` and `crosscode key approve <replicaId> --fingerprint <shown>`.
+
+There is also `crosscode key export`, which prints the keyring as a recovery code to move
+out of band (a password manager, Signal) for anyone who prefers not to trust the relay for
+introductions at all.
+
+### Rotation, and removing someone from a workspace
+
+`crosscode key rotate` starts a new epoch and grants it to every already-approved device.
+Everything sealed from that point is unreadable to anyone holding only the old epochs.
+
+**Rotation cannot un-share history, and nothing can.** Someone who was in the workspace
+downloaded and decrypted those operations on their own machine — and had a full checkout
+of the repository besides. No key operation reaches back into a copy someone already has.
+Any product claiming otherwise is describing access control, not cryptography.
+
+What removal and rotation actually do, in order:
+
+1. `crosscode members remove` sets `members.disabled_at`, and in the same transaction
+   retires their replicas and revokes their workspace tokens. Server-side access ends on
+   their next request. This is the step that matters most and it is immediate.
+2. Their devices drop out of the grant recipient list, because it filters on active
+   replicas and active members.
+3. `crosscode key rotate` then makes all *future* operations unreadable to them even if
+   they kept a copy of the old key and somehow regained transport access.
+
+Rotation is not automatic on removal, because it is not free: every device has to pick up
+the new epoch, and a device that is offline and never comes back is left behind. The CLI
+prompts for it after a removal instead of deciding.
+
+History under old epochs is deliberately **not** re-encrypted. The service cannot do it —
+it cannot read the data — and having clients re-upload the entire history would mean
+decrypting and re-uploading every proposal a workspace has ever had. Old epochs stay in
+the keyring; plan retention (`historyRetentionDays`) is what ages that data out.
+
+### Default on, and what it costs to lose the key
+
+Encryption is **on by default** for every workspace that talks to a hosted service. A
+security property that is opt-in is a property most users do not have, and "we cannot read
+your code" cannot carry an asterisk about a checkbox.
+
+That default is affordable here for a specific reason worth being explicit about: **the
+durable artifact is your Git repository, which you already have.** Losing a workspace key
+costs the coordination history — past proposals, their diffs and intents — not a line of
+source. That is a bounded, recoverable loss, which is what makes default-on defensible for
+Crosscode where it would not be for, say, a hosted database.
+
+We cannot reset a key for you. There is nothing on our side to reset it from; that is the
+same fact as "we cannot read your code." Recovery is therefore local:
+
+- Any other paired device still holding the key can grant it to a new one.
+- `crosscode key export` produces a recovery code to store in a password manager.
+  `crosscode key import` restores from it.
+- If every copy is gone, `crosscode key rotate` on a fresh keyring gets the workspace
+  working again immediately. History sealed under the lost epochs stays unreadable, and
+  the daemon reports which operations it skipped rather than pretending they never
+  existed.
+
+An **anti-downgrade latch** backs the default: once a workspace has ingested one sealed
+operation, the service refuses plaintext for it forever. There is deliberately no way to
+unlatch — an unlatch would be a supported path for making previously-unreadable data
+readable to us. Whether a client encrypts is decided entirely by whether it holds a local
+key, so nothing the service says can talk a client out of encrypting; the latch exists to
+stop a rolled-back or misconfigured client from putting plaintext back.
+
+`CROSSCODE_ENCRYPTION=off` exists for self-hosted deployments, where the operator and the
+customer are the same party and readable payloads are worth more than a property that
+party already has by owning the database. It cannot silently take effect on a workspace
+that has already latched.
+
+### Threat model, stated plainly
+
+Holds against: a database dump or backup theft; a subpoena served on us; an engineer with
+production access; a compromised or malicious service process reading stored data; a
+service that tampers with stored payloads (detected by the AEAD tag).
+
+Does **not** hold against: a compromised member device — it has the key and the checkout,
+and this is not defended against; a member who leaves with data they already downloaded;
+metadata analysis over what stays in the clear above; and an *actively malicious* service
+during one pairing, which can offer its own public key — detected by the fingerprint
+comparison, which is why that step is mandatory rather than advisory.
+
+Not yet covered: tasks, claims, intents, handoffs, and validation output.
+
 ## Provisioning and replica self-registration
 
 Workspace and member provisioning is still an administrator-side operation
