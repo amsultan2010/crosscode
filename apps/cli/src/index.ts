@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
+import { basename } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
 import { DaemonClient, DaemonUnavailableError } from "../../daemon/src/client.js";
-import { BrowserLoginError, resolveWebUrl } from "../../daemon/src/browser-login.js";
+import { BrowserLoginError, openInBrowser, resolveWebUrl } from "../../daemon/src/browser-login.js";
 import { SupabaseConfigError } from "../../daemon/src/supabase-client.js";
 import {
   approveKeyDevice, browserLogin, exportWorkspaceKey, forgetWorkspaceKey, importWorkspaceKey, initWorkspaceKey,
@@ -14,13 +15,49 @@ import {
   serviceRequest, signup, startPairing, workspaceKeyStatus, writeDaemonConfig
 } from "../../daemon/src/runtime.js";
 import { VERSION } from "../../daemon/src/version.js";
+import { CliError } from "./errors.js";
+import { MCP_CLIENTS, parseMcpClient } from "./mcp-config.js";
+import { start } from "./start.js";
 
 type CliResult = { value?: unknown; exitCode?: number };
 
-class CliError extends Error {
-  constructor(public readonly code: string, message: string, public readonly hint?: string) {
-    super(message);
+// Student is deliberately absent: it is Pro's limits at Essential's price and needs
+// verification, so it is granted out of band rather than sold self-serve. The service
+// refuses it too -- this list only saves a round-trip on an obvious typo.
+const PURCHASABLE_PLANS = ["essential", "pro", "unlimited", "team"];
+
+type CheckoutResult = {
+  mode: "checkout" | "updated";
+  plan: string;
+  interval: "month" | "year";
+  seats: number;
+  url: string | null;
+  priceCents: number;
+  monthlyEquivalentCents: number;
+};
+
+function formatCents(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+/**
+ * The one place the annual-by-default choice is explained to a human. Monthly is never
+ * hidden, but the copy always says what annual costs and what it saves, because on a
+ * $2.50/month plan the processor's fee is the difference between the price working and not.
+ */
+function describeCheckout(checkout: CheckoutResult): string {
+  const seats = checkout.seats > 1 ? ` for ${checkout.seats} seats` : "";
+  const moved = checkout.mode === "updated"
+    ? `Moved to the ${checkout.plan} plan${seats}, billed ${checkout.interval}ly at ${formatCents(checkout.priceCents)}. The change is prorated against the rest of this period.`
+    : `Checking out: ${checkout.plan}${seats}, billed ${checkout.interval}ly at ${formatCents(checkout.priceCents)}.`;
+  if (checkout.interval === "year") {
+    const monthlyYear = checkout.monthlyEquivalentCents * 12;
+    const saving = monthlyYear - checkout.priceCents;
+    return saving > 0
+      ? `${moved} Annual is two months free — ${formatCents(saving)} less than ${formatCents(checkout.monthlyEquivalentCents)}/month. Pass --monthly to bill monthly instead.`
+      : moved;
   }
+  return `${moved} Annual billing is ${formatCents(checkout.monthlyEquivalentCents * 10)}/year — two months free; drop --monthly to switch.`;
 }
 
 async function confirm(prompt: string): Promise<boolean> {
@@ -64,6 +101,13 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
     return { exitCode };
   }
 
+  // Serves MCP over this process's stdio and never returns, so it is handled before the
+  // parser rather than as an action that would fall through to printing a result.
+  if (command === "mcp") {
+    await serveMcpServer();
+    return {};
+  }
+
   if (command === "validate" && args.includes("--")) {
     throw new CliError("UNTRUSTED_VALIDATION_ARGS", "Validation commands must come from trusted .crosscode/config.yaml profiles", "Add the command to a profile in .crosscode/config.yaml and run `crosscode validate --profile <name>`.");
   }
@@ -84,6 +128,35 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
     .option("--json", "output compact JSON instead of pretty-printed JSON")
     .exitOverride()
     .configureOutput({ writeOut: (str) => process.stdout.write(str), writeErr: () => {} });
+
+  program
+    .command("start")
+    .description("set this checkout up end to end: configure it, sign in, attach a workspace, start the daemon, and register the MCP server")
+    .option("--email <email>", "account email; with --password, signs in headlessly instead of opening a browser (or set CROSSCODE_EMAIL)")
+    .option("--password <password>", "account password for the headless sign-in (or set CROSSCODE_PASSWORD)")
+    .option("--web <url>", "base URL of the crosscode website hosting the sign-in page (or set CROSSCODE_WEB_URL)")
+    .option("--service <url>", "coordination service URL to record for this checkout")
+    .option("--no-browser", "print the sign-in URL instead of opening a browser, for remote shells and CI")
+    .option("--mcp <client>", `MCP client to register with: ${MCP_CLIENTS.join(", ")}`, "claude")
+    .option("--no-mcp", "skip MCP client registration")
+    .action(async (options: { email?: string; password?: string; web?: string; service?: string; browser?: boolean; mcp?: string | boolean }) => {
+      result = {
+        value: await start(directory, {
+          email: options.email,
+          password: options.password,
+          web: options.web,
+          service: options.service,
+          browser: options.browser,
+          mcp: options.mcp === false ? false : parseMcpClient(typeof options.mcp === "string" ? options.mcp : "claude"),
+          // stderr, not stdout: --json output has to stay a single parseable object.
+          report: (line) => process.stderr.write(`${line}\n`)
+        })
+      };
+    });
+
+  program
+    .command("mcp")
+    .description("serve the crosscode MCP server over stdio (the portable spelling of the crosscode-mcp binary)");
 
   program
     .command("init")
@@ -387,10 +460,10 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
       result = { value: await (await client()).publish(input) };
     });
 
-  const billing = program.command("billing").description("billing plan and usage (read-only)");
+  const billing = program.command("billing").description("plan, usage, and subscription management");
   billing
     .command("status")
-    .description("show a workspace's plan and current usage counters")
+    .description("show a workspace's plan, subscription state, and current usage counters")
     .option("--workspace <id>", "workspace id (defaults to this checkout's workspace)")
     .action(async (options: { workspace?: string }) => {
       // Goes through the service's own GET /v1/workspace/billing rather than opening a
@@ -398,6 +471,84 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
       // meant it could only ever run on a machine holding the production database
       // credentials -- which is nobody who would want to read their own plan.
       result = { value: await serviceRequest(directory, "/v1/workspace/billing", { workspaceId: options.workspace, describe: "Billing status" }) };
+    });
+  billing
+    // Upgrading happens here and not in a browser form, because Crosscode is CLI-first and
+    // the website is landing, auth, and docs (BUILD_INSTRUCTIONS.md). What the browser is
+    // used for is the payment provider's own hosted checkout, which is where a card can
+    // safely be typed and where this command sends you.
+    .command("upgrade")
+    .description("move this workspace to a paid plan; opens a hosted checkout page")
+    .requiredOption("--plan <plan>", `plan to move to (${PURCHASABLE_PLANS.join(", ")})`)
+    // Annual is the default rather than a discount to hunt for: at $2.50/month the payment
+    // processor's fixed fee is about 15% of the charge against about 4% on the annual one,
+    // which is what keeps these prices viable at all.
+    .option("--monthly", "bill monthly instead of annually (annual is two months free)")
+    .option("--seats <count>", "seats to buy up front (team only; defaults to the current member count)")
+    .option("--no-browser", "print the checkout URL instead of opening a browser")
+    .option("--workspace <id>", "workspace id (defaults to this checkout's workspace)")
+    .action(async (options: { plan: string; monthly?: boolean; seats?: string; browser?: boolean; workspace?: string }) => {
+      if (!PURCHASABLE_PLANS.includes(options.plan)) {
+        throw new CliError("USAGE_ERROR", `Unknown plan "${options.plan}"`, `Pick one of: ${PURCHASABLE_PLANS.join(", ")}. Run \`crosscode billing status\` to see the current plan.`);
+      }
+      if (options.seats !== undefined && !/^[1-9]\d*$/.test(options.seats)) {
+        throw new CliError("USAGE_ERROR", "--seats must be a positive integer", "Seats only apply to the per-seat team plan; omit the flag to bill for the workspace's current members.");
+      }
+      const checkout = await serviceRequest<CheckoutResult>(directory, "/v1/workspace/billing/checkout", {
+        method: "POST",
+        body: { plan: options.plan, interval: options.monthly ? "month" : "year", ...(options.seats ? { seats: Number(options.seats) } : {}) },
+        workspaceId: options.workspace,
+        describe: "Checkout"
+      });
+      // Copy goes to stderr so `--json` output stays a single parseable line, the same rule
+      // `crosscode login` follows.
+      process.stderr.write(`${describeCheckout(checkout)}\n`);
+      if (checkout.mode === "checkout" && checkout.url) {
+        if (options.browser === false) process.stderr.write(`Open this URL to enter payment details:\n${checkout.url}\n`);
+        else {
+          process.stderr.write(`Opening ${checkout.url}\n`);
+          openInBrowser(checkout.url);
+        }
+      }
+      result = { value: checkout };
+    });
+  billing
+    .command("cancel")
+    .description("cancel this workspace's subscription at the end of the paid period")
+    .option("--workspace <id>", "workspace id (defaults to this checkout's workspace)")
+    .option("--yes", "skip the confirmation prompt")
+    .action(async (options: { workspace?: string; yes?: boolean }) => {
+      if (!options.yes) {
+        if (!process.stdout.isTTY) throw new CliError("CONFIRMATION_REQUIRED", "Cancelling a subscription requires confirmation; pass --yes in noninteractive environments", "Pass --yes to cancel without an interactive prompt.");
+        // Worth saying plainly at the prompt, because it is the thing people are afraid of:
+        // cancelling drops the plan's limits at the end of the period and destroys nothing.
+        if (!await confirm("Cancel at the end of the paid period? Members, history and settings are all kept. [y/N] ")) {
+          throw new CliError("CANCELLED", "Cancellation cancelled", "Re-run with --yes to cancel without the confirmation prompt.");
+        }
+      }
+      const cancelled = await serviceRequest<{ plan: string; currentPeriodEnd: string | null }>(
+        directory, "/v1/workspace/billing/cancel", { method: "POST", body: {}, workspaceId: options.workspace, describe: "Cancellation" }
+      );
+      process.stderr.write(
+        `Subscription will not renew. The ${cancelled.plan} plan's limits apply until ${cancelled.currentPeriodEnd ?? "the end of the paid period"}, then free's. Nothing is deleted: members, history and settings are kept, and auto-always autonomy falls back to auto-if-clean.\n`
+      );
+      result = { value: cancelled };
+    });
+  billing
+    .command("portal")
+    .description("open the payment provider's hosted page to update a card or download invoices")
+    .option("--no-browser", "print the URL instead of opening a browser")
+    .option("--workspace <id>", "workspace id (defaults to this checkout's workspace)")
+    .action(async (options: { browser?: boolean; workspace?: string }) => {
+      const portal = await serviceRequest<{ url: string }>(directory, "/v1/workspace/billing/portal", {
+        method: "POST", body: {}, workspaceId: options.workspace, describe: "Billing portal"
+      });
+      if (options.browser === false) process.stderr.write(`Open this URL to manage payment details:\n${portal.url}\n`);
+      else {
+        process.stderr.write(`Opening ${portal.url}\n`);
+        openInBrowser(portal.url);
+      }
+      result = { value: portal };
     });
 
   const devices = program.command("devices").description("paired devices holding a workspace token (owner only)");
@@ -626,6 +777,21 @@ function formatError(error: unknown): { error: { code: string; message: string; 
   return { error: { code: "COMMAND_FAILED", message } };
 }
 
+/**
+ * Loads and runs the MCP server, which starts serving on import.
+ *
+ * The specifier is built at runtime so esbuild leaves it alone: the MCP server is its own
+ * bundle (`dist/mcp.js`) and inlining it here would make every `crosscode` invocation pay
+ * to load the MCP SDK. The two candidates mirror `resolveDaemonLaunch`'s two layouts --
+ * bundled beside us when installed from npm, TypeScript source in a monorepo clone.
+ */
+async function serveMcpServer(): Promise<void> {
+  const bundled = new URL("./mcp.js", import.meta.url);
+  const source = new URL("../../mcp-server/src/main.ts", import.meta.url);
+  const entry = existsSync(fileURLToPath(bundled)) ? bundled : source;
+  await import(entry.href);
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const json = args.includes("--json");
@@ -656,4 +822,23 @@ function isMainModule(): boolean {
   }
 }
 
-if (isMainModule()) void main();
+/**
+ * Both published bins point at this file, and this is what tells them apart.
+ *
+ * npm only auto-picks a package's executable when every `bin` entry names the same file, or
+ * when one is named after the package -- and `@crosscode/cli`'s unscoped name is `cli`,
+ * which matches neither `crosscode` nor `crosscode-mcp`. Shipping two distinct bin targets
+ * therefore made `npx @crosscode/cli start` fail outright with "could not determine
+ * executable to run". Pointing both at this file satisfies the first rule, so npx resolves
+ * `crosscode`, and dispatching on the name we were invoked under keeps `crosscode-mcp`.
+ *
+ * npm's Windows `.cmd` shims pass the resolved script path as argv[1] rather than the bin
+ * name, so there is nothing to dispatch on there; `crosscode mcp` is the spelling that works
+ * everywhere, and it is what `crosscode start` writes into an MCP config on Windows.
+ */
+function invokedAsMcpBin(): boolean {
+  const invoked = process.argv[1];
+  return Boolean(invoked) && basename(invoked!).replace(/\.(cmd|exe|ps1)$/i, "") === "crosscode-mcp";
+}
+
+if (isMainModule()) void (invokedAsMcpBin() ? serveMcpServer() : main());

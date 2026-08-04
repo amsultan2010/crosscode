@@ -3,25 +3,56 @@
 [![CI](https://github.com/amsultan2010/crosscode/actions/workflows/ci.yml/badge.svg)](https://github.com/amsultan2010/crosscode/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-**Crosscode lets several people and coding agents work on the same repository at the same time without overwriting each other.**
+**Crosscode makes working on a codebase together feel closer to working on one document together.**
 
-Each person (or agent) works in their own normal Git checkout. A small background program — the daemon — watches that checkout and notices whenever an edit has settled. It sends a record of that edit to a shared coordination service, which passes it on to everyone else's checkout.
+Google Docs solved this for writing. Code did not get that: everyone works on their own copy, nobody sees anyone else's work until a pull request lands, and the team spends real time stitching it all back together at the end. That gap is what Crosscode closes.
 
-The important part: those incoming edits are **never written to your files automatically**. They show up as *proposals*. You look at the diff and decide to accept or reject it, exactly like reviewing a pull request, except it happens in seconds instead of after a push.
+Each person (or agent) works in their own normal Git checkout. A small background program — the daemon — watches that checkout and notices whenever an edit has settled, then sends a record of it to a shared coordination service, which passes it on to everyone else. Within seconds, your teammates can see what you just built.
+
+It stops one step short of a shared document, deliberately: incoming edits are **never written to your files automatically**. They show up as *proposals* — you look at the diff and pull it in with one command. Live typing into someone else's working tree is the one thing you do not want in code, so that decision stays yours.
 
 Everything stays ordinary Git. Crosscode doesn't replace your editor, your agent, your Git host, your branches, your staging area, or your commits — and if you turn it off, your repository is unchanged.
 
-**Who it's for.** Anyone running more than one coding agent against one codebase, or a small team whose agents keep colliding on the same files. Human-only teams can use it too, but the review-before-it-lands workflow pays off most once agents are in the mix.
+**Who it's for.** Teams building something together on one codebase, where the people are all running coding agents — a startup, a hackathon crew, any project moving faster than its pull requests. It keeps working when you are the only person online that day, because the project is still shared and your teammates' work will land on it again. What it is *not* for is a repository only one person will ever touch: there is nothing to coordinate with, and plain Git is the better tool. Human-only teams can use it too, though it pays off most once agents are in the mix.
 
 **There is no web app.** Everything you do day to day — signing in, claiming work, reviewing proposals, accepting, publishing — is a `crosscode` command or an MCP tool call your agent makes against your local daemon. The website is only a landing page, sign-up/sign-in, and these docs.
 
 ### What you need before you start
 
-Crosscode is not a hosted service yet. Someone on your team has to run the coordination service (a small Node process backed by a [Supabase](https://supabase.com) project) — see [Set up Supabase and run the coordination service](#set-up-supabase-and-run-the-coordination-service). Once that exists, everyone else just points their checkout at it.
+Node 24 and a Git checkout. Crosscode runs against the hosted coordination service by default, so there is nothing to deploy and no Supabase project to create. Teams who would rather run the service themselves still can — see [Set up Supabase and run the coordination service](#set-up-supabase-and-run-the-coordination-service) — and then point their checkouts at it with `--service`.
 
 ## Quickstart
 
-This assumes the coordination service is already running and you know its URL (`http://127.0.0.1:8788` if you started it locally).
+From inside the repository you want your team's agents to share:
+
+```bash
+npx @crosscode/cli start
+```
+
+That is the whole setup. It configures the checkout, opens your browser to sign in or create an account, attaches you to the personal workspace your account is given automatically, starts the background daemon, and registers the Crosscode MCP server with your coding agent. No flags, no service URL, no Supabase setup. Restart your agent afterwards so it picks up the new MCP server.
+
+Install it properly once you know you want it — the daemon then runs from a stable path instead of npm's cache:
+
+```bash
+npm install -g @crosscode/cli
+crosscode start
+```
+
+`start` is safe to re-run: every step it performs is skipped if it is already done, so in a configured checkout it just reports the state and makes sure the daemon is up. Useful flags:
+
+```bash
+crosscode start --mcp cursor        # register with Cursor, Gemini CLI (gemini), or OpenCode instead of Claude Code
+crosscode start --no-mcp            # skip MCP registration entirely
+crosscode start --no-browser        # print the sign-in URL instead of opening it, for remote shells
+crosscode start --email <e> --password <p>   # headless sign-in, for agents and CI
+crosscode start --service <url>     # a self-hosted coordination service
+```
+
+To bring a teammate in, generate an invite and have them run `crosscode start` and then `crosscode join --invite <code>` in their own checkout.
+
+### The same setup, one step at a time
+
+`crosscode start` is exactly the sequence below, and each command still exists if you want to drive it yourself.
 
 1. **Set up the checkout.** `init` writes Crosscode's local state for this worktree, and has to come first.
 
@@ -69,11 +100,11 @@ This assumes the coordination service is already running and you know its URL (`
    crosscode join --workspace <workspaceId> --json   # or --invite <code>, or --pair <code>
    ```
 
-5. **Do real work.** Start the daemon (`pnpm daemon`, or let the MCP server start it for you) and use the commands under [Normal workflow](#normal-workflow).
+5. **Do real work.** Start the daemon (`crosscode start`, or let the MCP server start it for you) and use the commands under [Normal workflow](#normal-workflow).
 
 ## Fastest way to try it with an agent
 
-Paste the prompt in [`docs/install-prompt.md`](./docs/install-prompt.md) into any MCP-capable coding agent (Claude Code, Codex CLI, OpenCode, Cursor, etc.). The agent clones this repository, installs dependencies, and registers the Crosscode MCP server for your project itself — no manual `init`/daemon step. The daemon starts itself, in the background, the first time the agent calls a Crosscode tool.
+Paste the prompt in [`docs/install-prompt.md`](./docs/install-prompt.md) into any MCP-capable coding agent (Claude Code, Codex CLI, OpenCode, Cursor, etc.). The agent installs the CLI from npm, runs `crosscode start`, and registers the Crosscode MCP server for your project itself — no manual `init`/daemon step. The daemon starts itself, in the background, the first time the agent calls a Crosscode tool.
 
 ## What works today
 
@@ -148,12 +179,12 @@ The daemon binds only to loopback and publishes a mode-`0600` connection descrip
 
 ## Prerequisites
 
-- Node.js 24 or newer
-- pnpm 11
-- Git
-- A Supabase project (or Docker Desktop/another Docker-compatible runtime, for local-only testing against a plain Postgres instance — see `infra/docker-compose.yml`)
+To *use* Crosscode: Node.js 24 or newer, and Git. That is all — `npm install -g @crosscode/cli` (or `npx @crosscode/cli start`) brings the CLI, the daemon, and the MCP server, and the hosted coordination service is the default.
 
-Install dependencies:
+To *work on* Crosscode, or to run the coordination service yourself, you also need:
+
+- pnpm 11
+- A Supabase project (or Docker Desktop/another Docker-compatible runtime, for local-only testing against a plain Postgres instance — see `infra/docker-compose.yml`)
 
 ```bash
 pnpm install
@@ -225,7 +256,7 @@ Set on the host: `DATABASE_URL`, `SUPABASE_URL`, and — when a proxy in front t
 product, which means no browser origin may call the API cross-origin; it exists for anyone
 building their own browser client against the service.
 
-Run `pnpm service:migrate` with a migration-owner connection before starting a new service version. `CROSSCODE_RUNTIME_DB_ROLE` applies the required least-privilege grants, and service startup refuses a role that can update/delete immutable operations or audit rows. The runtime never executes DDL. Non-loopback PostgreSQL URLs must specify exactly one `sslmode=verify-full` and cannot use host/SSL query overrides. For local-only testing against a plain (non-Supabase) Postgres instance, `infra/docker-compose.yml` still starts one on `127.0.0.1:5432`; it is not used in production, where `DATABASE_URL` points at Supabase.
+Run `pnpm service:migrate` with a migration-owner connection before starting a new service version. Set `CROSSCODE_RETENTION_DATABASE_URL` (optionally `CROSSCODE_RETENTION_SWEEP_MINUTES`, default 60) to that same privileged connection to enable the scheduled history-retention sweep; the least-privilege runtime role cannot delete operations, so without it retention only runs when an admin invokes `pnpm service:prune`. The interval needs a persistent process, so on the Vercel function deployment the sweep must be driven externally (a scheduled `pnpm service:prune`) until a platform cron is wired. `CROSSCODE_RUNTIME_DB_ROLE` applies the required least-privilege grants, and service startup refuses a role that can update/delete immutable operations or audit rows. The runtime never executes DDL. Non-loopback PostgreSQL URLs must specify exactly one `sslmode=verify-full` and cannot use host/SSL query overrides. For local-only testing against a plain (non-Supabase) Postgres instance, `infra/docker-compose.yml` still starts one on `127.0.0.1:5432`; it is not used in production, where `DATABASE_URL` points at Supabase.
 
 ## Workspaces, members, and invites (CLI and API only)
 
@@ -243,6 +274,9 @@ Crosscode's multi-tenant machinery is intact — workspaces, memberships, invite
 | List / remove a member | `crosscode members list` / `crosscode members remove <memberId>`, or `GET /v1/members`, `DELETE /v1/members/:id` (owner only) |
 | Set the autonomy tier | `crosscode workspace autonomy get` / `crosscode workspace autonomy set <tier>` |
 | Read plan and usage | `crosscode billing status [--workspace <id>]` |
+| Change plan (either direction) | `crosscode billing upgrade --plan <plan> [--monthly] [--seats <n>]`, or `POST /v1/workspace/billing/checkout` (owner only) — opens Stripe's hosted checkout for a first subscription, or moves an existing one in place with proration |
+| Cancel | `crosscode billing cancel`, or `POST /v1/workspace/billing/cancel` (owner only) — takes effect at the end of the paid period and deletes nothing |
+| Manage cards and invoices | `crosscode billing portal`, or `POST /v1/workspace/billing/portal` (owner only) — Stripe's own hosted page, not a Crosscode web UI |
 
 Revoking a device or removing a member takes effect on that credential's very next
 request: `ccw_` workspace tokens are opaque and resolved against the database on every
@@ -407,12 +441,22 @@ pnpm audit --audit-level high
 
 ### Packaging
 
-`pnpm build` bundles three entrypoints into `dist/` with esbuild — `cli.js` (the
-`crosscode` bin), `mcp.js` (the `crosscode-mcp` bin), and `daemon.js`, which is not a bin
-but is spawned by the MCP server's bootstrap from wherever it was installed. The
-`@crosscode/*` workspace packages are inlined; the ten real npm dependencies stay external
-and are declared on the root manifest. `scripts/build.mjs` fails the build if anything from
-`node_modules` gets inlined, which is what keeps that list honest.
+`pnpm build` bundles three entrypoints into `dist/` with esbuild — `cli.js`, `mcp.js`, and
+`daemon.js`. The `@crosscode/*` workspace packages are inlined; the ten real npm
+dependencies stay external and are declared on the root manifest. `scripts/build.mjs` fails
+the build if anything from `node_modules` gets inlined, which is what keeps that list
+honest.
+
+Both published bins — `crosscode` and `crosscode-mcp` — point at `dist/cli.js`, which
+dispatches on the name it was invoked under. That is not cosmetic: npm only auto-resolves
+`npx <package>` when every `bin` entry names the same file (or one is named after the
+package), and `@crosscode/cli`'s unscoped name is `cli`, so two distinct bin targets made
+`npx @crosscode/cli start` fail with "could not determine executable to run". `dist/mcp.js`
+is still its own bundle, imported by `dist/cli.js` only when serving MCP, so ordinary CLI
+invocations don't pay to load the MCP SDK. `dist/daemon.js` is not a bin at all; it is
+spawned from wherever it was installed. Windows `.cmd` shims lose the invoked bin name, so
+`crosscode mcp` is the portable spelling of `crosscode-mcp`, and it is what `crosscode
+start` writes into an MCP config there.
 
 The root package is the published one. To check the tarball before publishing:
 
@@ -422,7 +466,9 @@ npm i -g ./crosscode-cli-*.tgz             # or --prefix <dir> to keep it out of
 cd $(mktemp -d) && git init -q . && crosscode init --json && crosscode status --json
 ```
 
-`apps/service` is deliberately not part of this package: it deploys as a container.
+`apps/service` is deliberately not part of this package: it runs as functions inside the
+website's deployment (`apps/docs-site/api/[...path].ts`), and self-hosters run it as a
+container.
 
 `pnpm test` skips the PostgreSQL suites unless `CROSSCODE_TEST_DATABASE_URL` is set, and
 they should be run through `pnpm test:postgres` rather than by setting that variable for
@@ -436,7 +482,7 @@ For the implementation plan and current milestone ledger, see [BUILD_INSTRUCTION
 
 ## Current limitations
 
-- Production PostgreSQL role grants still need environment-specific deployment hardening. Retention is opt-in and admin-only: `pnpm service:prune -- --older-than-days <n>` deletes old audit events and ended sessions; cursor-reconnect-dependent tables are deliberately never pruned.
+- Production PostgreSQL role grants still need environment-specific deployment hardening. Operation history is pruned to the workspace plan's `historyRetentionDays` — on a service-side schedule when `CROSSCODE_RETENTION_DATABASE_URL` names a role that may delete, and on demand via `pnpm service:prune`, which also deletes audit events and ended sessions older than `--older-than-days <n>`. A replica whose cursor falls outside the retained window is told to resynchronize explicitly; the other cursor-reconnect tables (tasks, claims, handoffs, intents, validations) are still never pruned.
 - Supabase refresh tokens are stored in the OS keychain when available (macOS `security`, Linux `secret-tool`); otherwise, including on Windows, the mode-`0600` Git-directory configuration fallback is used.
 - Binary files are shared base64-encoded with byte-exact materialization; any conflict involving a binary file requires human approval, since deterministic hunk/merge analysis is text-only.
 - Renames are tracked as first-class rename changes (old path, new path, content); a rename conflicting with pending work on either path, moving into or out of a critical path, or whose source has diverged locally always requires approval.
@@ -444,10 +490,11 @@ For the implementation plan and current milestone ledger, see [BUILD_INSTRUCTION
 - There is no hosted/managed coordination service yet — you run a Supabase project and the service yourself.
 - There is no production website deployed yet, so `crosscode login` has no default site to open. Pass `--web <url>` or set `CROSSCODE_WEB_URL`, or use the headless `--email`/`--password` path, which needs neither. (`CROSSCODE_DASHBOARD_URL` is still read as a deprecated fallback for setups made before the web dashboard was removed; it warns once on stderr. Prefer `CROSSCODE_WEB_URL`.)
 - Workspace, membership, invite, and billing management is CLI- and API-only. There is no web UI for any of it, by decision — the website is landing, sign-up/sign-in, and docs.
-- Billing has no payment provider behind it yet (see BUILD_INSTRUCTIONS.md Phase 10). The limits themselves are enforced: seat caps are checked inside the transaction that adds a member, and the autonomy tier a plan unlocks is checked on the write path, both answering `402` rather than `403` so a client can tell "out of seats" from "not allowed". The semantic-review call counter is deliberately not metered — review is delegated to your own already-connected MCP agent and never leaves your machine, so there is no per-call cost to bill and `GET /v1/workspace/billing` correctly reports zero calls used.
+- Billing is implemented against Stripe but no live Stripe account exists yet, so no real card has moved a workspace between plans (see BUILD_INSTRUCTIONS.md Phase 10). Without `CROSSCODE_STRIPE_*` configured the service has no billing surface at all: checkout answers `503` and the webhook route does not exist. The limits themselves are enforced regardless of any of that: seat caps are checked inside the transaction that adds a member, the autonomy tier a plan unlocks is checked on both the read and write paths, and a lapsed payment grace period drops a workspace to Free's limits at read time rather than waiting on a sweep — all answering `402` rather than `403` so a client can tell "out of seats" from "not allowed". Nothing is ever deleted by a downgrade, a cancellation, or a failed payment. The semantic-review call counter is deliberately not metered — review is delegated to your own already-connected MCP agent and never leaves your machine, so there is no per-call cost to bill and `GET /v1/workspace/billing` correctly reports zero calls used.
+- Student pricing cannot be bought self-serve: it is Pro's limits at Essential's price, and the verification flow that would stop that being a discount for anyone who asks does not exist yet, so `crosscode billing upgrade --plan student` is refused.
 - `pnpm test` skips the PostgreSQL integration suites unless `CROSSCODE_TEST_DATABASE_URL` is set, so a local run leaves the service's store, pairing, and reconnect paths unexercised. CI sets it; to run them locally use `pnpm test:postgres`.
 - There is no linter or formatter configured. `pnpm build` (`tsc --noEmit`) under `strict` is the only static gate.
-- Not on npm yet. The `@crosscode/cli` package builds, packs, and installs — `npm pack` produces a tarball whose `crosscode` and `crosscode-mcp` binaries work outside this repo on nothing but Node 24 — but it has never been published, so the documented install path is still a cloned checkout run via `pnpm install` and `tsx` (see `docs/install-prompt.md`). The unscoped name `crosscode` is owned by an unrelated project, which is why the package is published under the `@crosscode` scope while both binaries keep their short names. Publishing is one `npm publish` away; `docs/install-prompt.md`, `docs/mcp-clients.md`, and the marketing site's install snippet all need updating to the npm path at the same time. There is no editor marketplace extension.
+- The CLI ships on npm as [`@crosscode/cli`](https://www.npmjs.com/package/@crosscode/cli) — scoped because the unscoped name `crosscode` belongs to an unrelated project — while both binaries keep their short names, `crosscode` and `crosscode-mcp`. There is no editor marketplace extension, and there will not be one: MCP is the single integration contract.
 
 ## Contributing
 

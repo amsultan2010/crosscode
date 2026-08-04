@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveDaemonLaunch } from "./bootstrap.js";
+import { resolveDaemonLaunch } from "./launch.js";
 
 const directories: string[] = [];
 
@@ -29,12 +29,11 @@ describe("resolveDaemonLaunch", () => {
   it("falls back to tsx and the daemon source in a monorepo clone", async () => {
     const repoRoot = await tempDir();
     await mkdir(join(repoRoot, "apps", "daemon", "src"), { recursive: true });
-    await mkdir(join(repoRoot, "apps", "mcp-server", "src"), { recursive: true });
     await mkdir(join(repoRoot, "node_modules", ".bin"), { recursive: true });
     await writeFile(join(repoRoot, "apps", "daemon", "src", "main.ts"), "");
     await writeFile(join(repoRoot, "node_modules", ".bin", "tsx"), "");
 
-    expect(resolveDaemonLaunch(join(repoRoot, "apps", "mcp-server", "src"))).toEqual({
+    expect(resolveDaemonLaunch(join(repoRoot, "apps", "daemon", "src"))).toEqual({
       command: join(repoRoot, "node_modules", ".bin", "tsx"),
       args: [join(repoRoot, "apps", "daemon", "src", "main.ts")]
     });

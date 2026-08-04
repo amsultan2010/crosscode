@@ -11,7 +11,7 @@
   "type": "module",
   "bin": {
     "crosscode": "dist/cli.js",
-    "crosscode-mcp": "dist/mcp.js"
+    "crosscode-mcp": "dist/cli.js"
   },
   "files": ["dist"],
   "packageManager": "pnpm@11.18.0+sha512.33d83c77da82f49fba836925c6f1b841181ec3132b670639bd012f7075f5c7cf634c5f870147c19aae7478fac01df09d8892e880454896edd23ee9b33757563c",
@@ -31,6 +31,7 @@
     "service": "tsx apps/service/src/main.ts",
     "service:migrate": "tsx apps/service/src/migrate.ts",
     "service:prune": "tsx apps/service/src/prune.ts",
+    "service:billing-sweep": "tsx apps/service/src/billing-sweep.ts",
     "service:provision": "tsx apps/service/src/provision-admin.ts",
     "docs:dev": "pnpm --filter @crosscode/docs-site dev",
     "docs:build": "pnpm --filter @crosscode/docs-site build",

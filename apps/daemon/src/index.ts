@@ -87,6 +87,19 @@ function changesOverlap(left: ChangeTransaction["changes"][number], right: Chang
   if (left.kind === "delete" || right.kind === "delete") return true;
   return hunksOverlap(left.unifiedPatch, right.unifiedPatch);
 }
+/** Git's canonical empty tree, which every repository can name without it being written. */
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+/**
+ * What to diff the working tree against. `HEAD` for any repository with a commit; the empty
+ * tree before the first one, where `git diff HEAD` is a fatal "ambiguous argument" that took
+ * the whole daemon down on startup. That is exactly the state `git init` leaves a new
+ * project in, so it was the first thing a user starting from nothing hit. Diffing against
+ * the empty tree reports staged-but-never-committed files as adds, which `ls-files --others`
+ * would miss.
+ */
+async function diffBase(root: string): Promise<string> {
+  return git(root, ["rev-parse", "-q", "--verify", "HEAD"]).then(() => "HEAD", () => EMPTY_TREE);
+}
 /**
  * How many of this replica's checkpoints to keep. Deep enough that `checkpoint restore`
  * still reaches back across a normal working session, bounded so a long-lived checkout
@@ -109,14 +122,23 @@ export type LocalCoordinationSink = {
   getAutonomyTier(workspaceId: string): AutonomyTier;
 };
 
+/**
+ * The service's answer when history retention has deleted everything after our cursor:
+ * there is no page that would be honest, so it names the oldest cursor it can still serve
+ * completely and we continue from there. See packages/protocol cursorTooOldResponseSchema.
+ */
+export type RemoteCursorTooOld = { status: "cursor-too-old"; resyncFrom: number; retentionDays: number };
+
 export type RemoteSyncTransport = {
   upload(record: OutboundRecord): Promise<LocalOperation>;
   /**
    * `unreadable` names server sequences the transport deliberately dropped because this
    * device holds no workspace key for the epoch that sealed them. It is the only
-   * accepted reason for a gap in an otherwise dense cursor; see syncRemote().
+   * accepted reason for a gap in an otherwise dense cursor; see syncRemote(). It is
+   * distinct from a `cursor-too-old` refusal, which is the service saying it no longer
+   * holds that history at all.
    */
-  list(after: number): Promise<{ operations: LocalOperation[]; nextCursor: number; unreadable?: number[] }>;
+  list(after: number): Promise<{ operations: LocalOperation[]; nextCursor: number; unreadable?: number[] } | RemoteCursorTooOld>;
   uploadTask(record: TaskOutboundRecord): Promise<RemoteTask>;
   listTasks(after: string): Promise<{ tasks: RemoteTask[]; nextCursor: string }>;
   uploadClaim(record: ClaimOutboundRecord): Promise<RemoteClaim>;
@@ -153,6 +175,9 @@ export class LocalDaemon {
   private gitState: GitState;
   private materializationPaused = false;
   private serviceStatus: { configured: boolean; online: boolean; lastSyncAt?: string; lastSyncError?: string } = { configured: false, online: false };
+  // Kept apart from serviceStatus, which every successful sync replaces wholesale: a
+  // retention resync is a gap in this replica's history and must stay visible afterwards.
+  private lastResync: { at: string; message: string } | undefined;
   private autonomyTier: AutonomyTier = 0;
   private mutationTail: Promise<void> = Promise.resolve();
   private readonly transactionListeners = new Set<(operation: StoredOperation) => void>();
@@ -178,7 +203,7 @@ export class LocalDaemon {
    * fields makes this an intentional contract, so the next field added to RepositoryState
    * is private until someone decides otherwise rather than published by accident.
    */
-  async status() { const repository = await discoverRepository(this.root); return { root: repository.root, head: repository.head, branch: repository.branch, worktree: repository.worktree, remotes: repository.remotes, dirty: repository.dirty, indexTree: repository.indexTree, operation: repository.operation, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, tasks: this.tasks.size, claims: this.claims.size, proposals: [...this.operations.values()].filter((operation) => operation.status === "proposed").length, materializationPaused: this.materializationPaused, eventSequence: this.eventSequence, remoteCursor: this.remoteCursor, pendingOutbound: [...this.outbound.values()].filter((record) => record.acknowledgedServerSequence === undefined).length, remoteValidations: [...this.remoteValidations.values()], service: { ...this.serviceStatus } }; }
+  async status() { const repository = await discoverRepository(this.root); return { root: repository.root, head: repository.head, branch: repository.branch, worktree: repository.worktree, remotes: repository.remotes, dirty: repository.dirty, indexTree: repository.indexTree, operation: repository.operation, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, tasks: this.tasks.size, claims: this.claims.size, proposals: [...this.operations.values()].filter((operation) => operation.status === "proposed").length, materializationPaused: this.materializationPaused, eventSequence: this.eventSequence, remoteCursor: this.remoteCursor, pendingOutbound: [...this.outbound.values()].filter((record) => record.acknowledgedServerSequence === undefined).length, remoteValidations: [...this.remoteValidations.values()], service: { ...this.serviceStatus, ...(this.lastResync ? { lastResyncAt: this.lastResync.at, lastResyncMessage: this.lastResync.message } : {}) } }; }
   configureRemoteSync(): void { this.serviceStatus = { ...this.serviceStatus, configured: true }; }
   currentAutonomyTier(): AutonomyTier { return this.autonomyTier; }
   /**
@@ -461,23 +486,33 @@ export class LocalDaemon {
       }
       uploaded += 1;
     }
-    const page = await transport.list(this.remoteCursor);
+    let page = await transport.list(this.remoteCursor);
+    if ("status" in page) {
+      // Our cursor points into history the service no longer keeps. Re-listing from the
+      // watermark is the whole recovery; a second refusal means the watermark moved again
+      // mid-resync (or the service is answering nonsense), and that is worth failing on
+      // rather than looping.
+      await this.resyncFromRetentionWatermark(page);
+      page = await transport.list(this.remoteCursor);
+      if ("status" in page) throw new Error("Coordination service refused the cursor it just told us to resynchronize from");
+    }
+    const listed = page;
     // The service assigns dense per-workspace sequences, so a gap means an operation went
     // missing between there and here -- which is why this check exists and why it stays
     // exact. The only tolerated gaps are the ones the transport declares in `unreadable`:
     // operations sealed under a workspace key epoch this device was never granted, which
     // it can name precisely because it is the party that failed to open them. A gap that
     // is not declared is still an omission and still fails.
-    const unreadable = new Set(page.unreadable ?? []);
-    const covered = [...page.operations.map((operation) => operation.sequence), ...unreadable].sort((left, right) => left - right);
+    const unreadable = new Set(listed.unreadable ?? []);
+    const covered = [...listed.operations.map((operation) => operation.sequence), ...unreadable].sort((left, right) => left - right);
     const ordered = covered.every((sequence, index) => sequence === (index === 0 ? this.remoteCursor + 1 : covered[index - 1]! + 1));
     const expectedCursor = covered.at(-1) ?? this.remoteCursor;
-    if (!ordered || page.nextCursor !== expectedCursor || page.operations.some((operation) => operation.workspaceId !== this.options.workspaceId || operation.sequence <= this.remoteCursor)) throw new Error("Service cursor response was invalid");
+    if (!ordered || listed.nextCursor !== expectedCursor || listed.operations.some((operation) => operation.workspaceId !== this.options.workspaceId || operation.sequence <= this.remoteCursor)) throw new Error("Service cursor response was invalid");
     if (unreadable.size) await this.persist("remote.unreadable", { sequences: [...unreadable].sort((left, right) => left - right) });
     const previousCursor = this.remoteCursor;
     const insertedIds: string[] = [];
     let downloaded = 0;
-    for (const remote of page.operations) {
+    for (const remote of listed.operations) {
       const transaction = changeTransactionSchema.parse(remote.transaction);
       transaction.changes.forEach(assertChangeIntegrity);
       if (remote.senderReplicaId === this.options.replicaId || this.operations.has(remote.id)) continue;
@@ -486,8 +521,8 @@ export class LocalDaemon {
       insertedIds.push(remote.id);
       downloaded += 1;
     }
-    if (page.nextCursor !== this.remoteCursor || downloaded) {
-      this.remoteCursor = page.nextCursor;
+    if (listed.nextCursor !== this.remoteCursor || downloaded) {
+      this.remoteCursor = listed.nextCursor;
       try { await this.persist("remote.synchronized", { cursor: this.remoteCursor, downloaded }); }
       catch (error) {
         this.remoteCursor = previousCursor;
@@ -499,6 +534,37 @@ export class LocalDaemon {
     await this.autoTriggerSemanticReviews(insertedIds);
     this.serviceStatus = { configured: true, online: true, lastSyncAt: now() };
     return { uploaded, downloaded, cursor: this.remoteCursor };
+  }
+
+  /**
+   * Adopts the oldest cursor the service can still serve, after it reported that ours has
+   * fallen out of the workspace's history retention window. Nothing can bring the deleted
+   * operations back, so the only alternative to jumping forward is polling an unservable
+   * cursor forever.
+   *
+   * What a resync costs is proposals this replica never downloaded and now never will:
+   * other replicas' unreviewed edits. It costs nothing that Git holds -- commits, the
+   * working tree, and our own outbound queue are untouched -- which is exactly why moving
+   * the cursor is the right answer rather than a data-loss bug. The event log and
+   * `status().service` both record it so the gap is visible after the fact.
+   */
+  private async resyncFromRetentionWatermark(status: RemoteCursorTooOld): Promise<void> {
+    const previousCursor = this.remoteCursor;
+    // A watermark at or below our cursor contradicts the refusal itself: the service can
+    // serve this cursor. Rewinding on it would re-propose operations we already resolved.
+    if (status.resyncFrom <= previousCursor) throw new Error("Service asked for a resync to a cursor it can already serve");
+    this.remoteCursor = status.resyncFrom;
+    this.lastResync = {
+      at: now(),
+      message: `Coordination service no longer retains operations at or below sequence ${status.resyncFrom} (plan history retention is ${status.retentionDays} days); resynchronized from sequence ${previousCursor} to ${status.resyncFrom}. Proposals inside that window were not downloaded and are gone; Git history and the working tree are unaffected.`
+    };
+    try { await this.persist("remote.resync_required", { cursor: this.remoteCursor, previousCursor, retentionDays: status.retentionDays }); }
+    catch (error) {
+      this.remoteCursor = previousCursor;
+      this.lastResync = undefined;
+      throw error;
+    }
+    process.stderr.write(`${this.lastResync.message}\n`);
   }
 
   private async syncTasks(transport: RemoteSyncTransport): Promise<void> {
@@ -727,7 +793,8 @@ export class LocalDaemon {
     return result;
   }
   private async changedPaths(): Promise<Array<{ path: string; kind: "add" | "modify" | "delete" | "rename"; previousPath?: string }>> {
-    const [tracked, untracked, exclusions] = await Promise.all([git(this.root, ["diff", "--name-status", "-z", "-M", "HEAD"]), git(this.root, ["ls-files", "-z", "--others", "--exclude-standard"]), configuredExcludedPaths(this.root)]);
+    const [base, untracked, exclusions] = await Promise.all([diffBase(this.root), git(this.root, ["ls-files", "-z", "--others", "--exclude-standard"]), configuredExcludedPaths(this.root)]);
+    const tracked = await git(this.root, ["diff", "--name-status", "-z", "-M", base]);
     const trackedParts = tracked.split("\0").filter(Boolean);
     const changed: Array<{ path: string; kind: "add" | "modify" | "delete" | "rename"; previousPath?: string }> = [];
     for (let index = 0; index < trackedParts.length;) {

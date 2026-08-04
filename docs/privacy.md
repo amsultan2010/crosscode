@@ -45,6 +45,15 @@ clear:
 We cannot see: your file contents, your file paths, your diffs, hashes of your files, or
 the descriptions attached to your changes.
 
+## How long we keep it
+
+Your plan's retention window (`crosscode billing status` shows it) is how long a proposal
+stays on our side before it is deleted. That is a deletion schedule, not a privacy control
+— the ciphertext was unreadable to us the whole time it was there. A checkout that has been
+offline longer than the window is told to resynchronize rather than handed a partial
+history, so it finds out that it missed something instead of silently believing it is
+up to date.
+
 ## What we never do
 
 - No third-party AI provider ever sees your code. Crosscode's AI reviewer runs on the

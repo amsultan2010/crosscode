@@ -47,17 +47,19 @@ describe.skipIf(!databaseUrl)("PostgreSQL end-to-end encrypted coordination", ()
       await writeFile(join(rootA, "secret-plan.md"), "# acquisition targets\n");
       const captured = await waitFor(() => operationForPath(daemonA, "secret-plan.md"), (operation) => operation !== undefined, 5_000);
       const stored = await waitFor(
-        () => store.pool.query<{ sealed: boolean; transaction: unknown; event: unknown }>(
-          "SELECT sealed, transaction, event FROM operations WHERE workspace_id = $1 AND id = $2", [workspaceId, captured!.id]
+        () => store.pool.query<{ sealed: boolean; event: unknown }>(
+          "SELECT sealed, event FROM operations WHERE workspace_id = $1 AND id = $2", [workspaceId, captured!.id]
         ).then((result) => result.rows[0]),
         (row) => row !== undefined,
         5_000
       );
 
-      // What the service actually holds. Not "no afterContent field" -- nothing anywhere
-      // in either column that resembles the path, the content, or a hash of the content.
+      // What the service actually holds. `operations.event` is the single home of content
+      // since migration 013, so this is the whole of it -- and the assertion is not "no
+      // afterContent field" but nothing anywhere in the row that resembles the path, the
+      // content, or a hash of the content.
       expect(stored!.sealed).toBe(true);
-      const persisted = JSON.stringify([stored!.transaction, stored!.event]);
+      const persisted = JSON.stringify(stored!.event);
       for (const secret of ["secret-plan.md", "acquisition targets", captured!.transaction.changes[0]!.afterHash!]) {
         expect(persisted).not.toContain(secret);
       }

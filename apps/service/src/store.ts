@@ -9,7 +9,12 @@ import type {
 } from "@crosscode/protocol";
 import { isSealedTransaction, PAIRING_CODE_ALPHABET, PAIRING_CODE_TTL_MS, WORKSPACE_TOKEN_PREFIX } from "@crosscode/protocol";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
-import { assertPlanAllowsAutonomyTier, assertSeatCapAvailable, type AutonomyTier, type Plan } from "./billing.js";
+import {
+  assertPlanAllowsAutonomyTier, assertSeatCapAvailable, assertSelfServeWorkspaceAvailable,
+  clampAutonomyTierToPlan, entitlementForSubscription, maxAutonomyTierFor,
+  AUTONOMY_TIER_NAMES, PAYMENT_GRACE_PERIOD_DAYS, PLAN_LIMITS,
+  type BillingInterval, type PaidPlan, type Plan, type SubscriptionState
+} from "./billing.js";
 import { hashCanonicalPayload } from "./crypto.js";
 import { normalizeRepoRemote, normalizeRepoRoot, projectNameFrom } from "./projects.js";
 
@@ -24,6 +29,26 @@ export class StoreGoneError extends Error {}
 
 export type StoredOperation = RemoteOperation & {
   event: EventEnvelope;
+};
+
+/**
+ * One page of the operation history, or a refusal to answer this cursor at all because
+ * retention has deleted the rows it asks for. `resyncFrom` is the oldest cursor that can
+ * still be served completely; `retentionDays` is the plan window that caused the deletion,
+ * so the message a client shows can name it.
+ */
+export type OperationPage =
+  | { status: "ok"; items: StoredOperation[]; nextCursor: number; hasMore: boolean }
+  | { status: "cursor-too-old"; resyncFrom: number; retentionDays: number };
+
+/** What one workspace's retention sweep did; `deleted: 0` means it was already inside its window. */
+export type RetentionSweepResult = {
+  workspaceId: string;
+  plan: Plan;
+  retentionDays: number;
+  deleted: number;
+  /** The watermark after the sweep: the highest server_sequence no longer present. */
+  prunedThrough: number;
 };
 
 export type PresenceSummary = {
@@ -115,12 +140,77 @@ export type WorkspaceTokenIdentity = Membership & { replicaId: string | null };
 
 const DEFAULT_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 
-/** workspaces.autonomy_tier is stored as 0/1/2; PLAN_LIMITS names the same three tiers. */
-const AUTONOMY_TIER_NAMES: Record<0 | 1 | 2, AutonomyTier> = {
-  0: "always-ask",
-  1: "auto-if-clean",
-  2: "auto-always"
+/**
+ * The plan a workspace is entitled to *right now*, as a SQL expression over the workspaces
+ * row. It is the stored plan, except that a dunning grace period which has run out drops it
+ * to free without waiting for the sweep in billing-sweep.ts to write that down.
+ *
+ * Every enforcement path reads through this rather than `plan` directly, so an unswept row
+ * cannot buy a workspace extra seats, extra autonomy, or a longer retention promise.
+ */
+const EFFECTIVE_PLAN_SQL =
+  "CASE WHEN grace_period_ends_at IS NOT NULL AND grace_period_ends_at <= now() THEN 'free' ELSE plan END";
+
+/** Everything about a workspace's subscription, with the effective plan already applied. */
+export type WorkspaceBillingRecord = {
+  workspaceId: string;
+  /** Effective plan -- what limits apply. See EFFECTIVE_PLAN_SQL. */
+  plan: Plan;
+  /** The plan being paid for; differs from `plan` only while a payment is failing. */
+  billingPlan: PaidPlan | null;
+  billingInterval: BillingInterval | null;
+  billingStatus: string | null;
+  billingSeats: number | null;
+  gracePeriodEndsAt: string | null;
+  cancelAtPeriodEnd: boolean;
+  currentPeriodEnd: string | null;
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
+  billingOwnerMemberId: string | null;
+  billingOwnerActorId: string | null;
 };
+
+type BillingRow = {
+  billing_owner_actor_id?: string | null;
+  plan: Plan;
+  billing_plan: PaidPlan | null;
+  billing_interval: BillingInterval | null;
+  billing_status: string | null;
+  billing_seats: number | null;
+  grace_period_ends_at: Date | null;
+  subscription_cancel_at_period_end: boolean;
+  subscription_current_period_end: Date | null;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  billing_owner_member_id: string | null;
+};
+
+// Unqualified column names throughout, so the same list works in a SELECT over `workspaces
+// w` and in an UPDATE ... RETURNING, where it reads the post-update row.
+const BILLING_COLUMNS = `${EFFECTIVE_PLAN_SQL} AS plan, billing_plan, billing_interval, billing_status,
+        billing_seats, grace_period_ends_at, subscription_cancel_at_period_end,
+        subscription_current_period_end, stripe_customer_id, stripe_subscription_id,
+        billing_owner_member_id`;
+
+function mapBilling(workspaceId: string, row: BillingRow): WorkspaceBillingRecord {
+  return {
+    workspaceId,
+    plan: row.plan,
+    billingPlan: row.billing_plan,
+    billingInterval: row.billing_interval,
+    billingStatus: row.billing_status,
+    billingSeats: row.billing_seats,
+    gracePeriodEndsAt: row.grace_period_ends_at ? new Date(row.grace_period_ends_at).toISOString() : null,
+    cancelAtPeriodEnd: row.subscription_cancel_at_period_end,
+    currentPeriodEnd: row.subscription_current_period_end ? new Date(row.subscription_current_period_end).toISOString() : null,
+    stripeCustomerId: row.stripe_customer_id,
+    stripeSubscriptionId: row.stripe_subscription_id,
+    billingOwnerMemberId: row.billing_owner_member_id,
+    // Only the SELECT path joins members for the display name; the UPDATE ... RETURNING
+    // path does not, and its caller (applySubscriptionState) has no use for it.
+    billingOwnerActorId: row.billing_owner_actor_id ?? null
+  };
+}
 
 export class PgStore {
   readonly pool: Pool;
@@ -178,7 +268,16 @@ export class PgStore {
       await client.query(projectsSql);
       const teamPlanSql = await readFile(new URL("../migrations/011_team_plan.sql", import.meta.url), "utf8");
       await client.query(teamPlanSql);
-      const encryptionSql = await readFile(new URL("../migrations/012_encryption.sql", import.meta.url), "utf8");
+      const rateLimitsSql = await readFile(new URL("../migrations/012_rate_limits.sql", import.meta.url), "utf8");
+      await client.query(rateLimitsSql);
+      const contentHomeSql = await readFile(new URL("../migrations/013_single_content_home_and_retention.sql", import.meta.url), "utf8");
+      await client.query(contentHomeSql);
+      const billingLifecycleSql = await readFile(new URL("../migrations/014_billing_lifecycle.sql", import.meta.url), "utf8");
+      await client.query(billingLifecycleSql);
+      // After 013, which drops operations.transaction and operation_files.payload: the
+      // sealed columns and the encryption latch are added to the tables in their final
+      // shape, so this never has to be re-stated when a column it touches moves.
+      const encryptionSql = await readFile(new URL("../migrations/015_encryption.sql", import.meta.url), "utf8");
       await client.query(encryptionSql);
     } finally {
       await client.query("SELECT pg_advisory_unlock(hashtext('crosscode_migrate'))");
@@ -230,6 +329,16 @@ export class PgStore {
     const workspaceId = randomUUID();
     const memberId = randomUUID();
     await this.transaction(async (client) => {
+      // Serialize concurrent creates by the same user so two in-flight requests cannot both
+      // read a count under the cap and both insert. Keyed on the user, so it never contends
+      // with anybody else's create.
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`crosscode:workspace-create:${input.userId}`]);
+      const owned = await client.query<{ count: string }>(
+        `SELECT count(*) FROM members
+           WHERE user_id = $1 AND role = 'owner' AND NOT is_personal AND disabled_at IS NULL`,
+        [input.userId]
+      );
+      assertSelfServeWorkspaceAvailable(Number(owned.rows[0]!.count));
       await client.query("INSERT INTO workspaces (id, name) VALUES ($1, $2)", [workspaceId, input.workspaceName]);
       await client.query(
         "INSERT INTO members (id, workspace_id, user_id, actor_id, role) VALUES ($1, $2, $3, $4, 'owner')",
@@ -240,6 +349,16 @@ export class PgStore {
     return { workspaceId, memberId };
   }
 
+  /** Self-serve workspaces this user owns, which is what MAX_SELF_SERVE_WORKSPACES_PER_USER caps. */
+  async countOwnedSelfServeWorkspaces(userId: string): Promise<number> {
+    const result = await this.pool.query<{ count: string }>(
+      `SELECT count(*) FROM members
+         WHERE user_id = $1 AND role = 'owner' AND NOT is_personal AND disabled_at IS NULL`,
+      [userId]
+    );
+    return Number(result.rows[0]!.count);
+  }
+
   async addMember(input: {
     workspaceId: string;
     userId: string;
@@ -248,7 +367,7 @@ export class PgStore {
   }): Promise<{ workspaceId: string; memberId: string }> {
     const memberId = randomUUID();
     return this.transaction(async (client) => {
-      const workspace = await client.query<{ plan: Plan }>("SELECT plan FROM workspaces WHERE id = $1 FOR UPDATE", [input.workspaceId]);
+      const workspace = await client.query<{ plan: Plan }>(`SELECT ${EFFECTIVE_PLAN_SQL} AS plan FROM workspaces WHERE id = $1 FOR UPDATE`, [input.workspaceId]);
       if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
       await assertSeatAvailable(client, input.workspaceId, workspace.rows[0].plan);
       try {
@@ -277,9 +396,9 @@ export class PgStore {
 
   // Powers `GET /v1/memberships` and the CLI's workspace switching -- every workspace a
   // user currently belongs to, with the workspace name for display.
-  async listMembershipsForUser(userId: string): Promise<Array<Membership & { workspaceName: string }>> {
-    const result = await this.pool.query<{ member_id: string; actor_id: string; role: Membership["role"]; workspace_id: string; workspace_name: string }>(
-      `SELECT m.id AS member_id, m.actor_id, m.role, m.workspace_id, w.name AS workspace_name
+  async listMembershipsForUser(userId: string): Promise<Array<Membership & { workspaceName: string; isPersonal: boolean }>> {
+    const result = await this.pool.query<{ member_id: string; actor_id: string; role: Membership["role"]; workspace_id: string; workspace_name: string; is_personal: boolean }>(
+      `SELECT m.id AS member_id, m.actor_id, m.role, m.workspace_id, w.name AS workspace_name, m.is_personal
          FROM members m JOIN workspaces w ON w.id = m.workspace_id
          WHERE m.user_id = $1 AND m.disabled_at IS NULL
          ORDER BY w.name`,
@@ -287,7 +406,7 @@ export class PgStore {
     );
     return result.rows.map((row) => ({
       memberId: row.member_id, userId, actorId: row.actor_id, role: row.role,
-      workspaceId: row.workspace_id, workspaceName: row.workspace_name
+      workspaceId: row.workspace_id, workspaceName: row.workspace_name, isPersonal: row.is_personal
     }));
   }
 
@@ -355,7 +474,11 @@ export class PgStore {
       // invite was minted: an owner can hand out more invites than seats, and the plan
       // can change in between. FOR UPDATE on the workspace serialises concurrent
       // redemptions so two invites cannot both slip past the last free seat.
-      const workspace = await client.query<{ plan: Plan }>("SELECT plan FROM workspaces WHERE id = $1 FOR UPDATE", [invite.workspace_id]);
+      //
+      // This is also where "a downgrade below the current seat count keeps existing
+      // members and refuses new ones" is enforced: nothing here inspects or touches the
+      // members already in the workspace, it only refuses to add another one.
+      const workspace = await client.query<{ plan: Plan }>(`SELECT ${EFFECTIVE_PLAN_SQL} AS plan FROM workspaces WHERE id = $1 FOR UPDATE`, [invite.workspace_id]);
       if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
       await assertSeatAvailable(client, invite.workspace_id, workspace.rows[0].plan);
       const memberId = randomUUID();
@@ -644,6 +767,25 @@ export class PgStore {
       // tokens stop resolving, without waiting for anything to expire.
       await client.query("UPDATE replicas SET disabled_at = now() WHERE member_id = $1 AND disabled_at IS NULL", [memberId]);
       await client.query("UPDATE workspace_tokens SET revoked_at = now() WHERE member_id = $1 AND revoked_at IS NULL", [memberId]);
+      // The subscription belongs to the workspace, not to whoever happened to start it, so
+      // the payer leaving reassigns a label and cancels nothing. The remaining owner check
+      // above guarantees there is somebody to reassign to; the longest-tenured one is
+      // picked so the choice is stable rather than arbitrary.
+      const reassigned = await client.query<{ billing_owner_member_id: string | null }>(
+        `UPDATE workspaces SET billing_owner_member_id = (
+             SELECT id FROM members
+              WHERE workspace_id = $1 AND role = 'owner' AND disabled_at IS NULL AND id <> $2
+              ORDER BY created_at ASC LIMIT 1
+           )
+          WHERE id = $1 AND billing_owner_member_id = $2
+          RETURNING billing_owner_member_id`,
+        [identity.workspaceId, memberId]
+      );
+      if (reassigned.rows[0]) {
+        await this.audit(client, identity.workspaceId, identity.memberId, null, "billing.owner_reassigned", {
+          from: memberId, to: reassigned.rows[0].billing_owner_member_id
+        });
+      }
       await this.audit(client, identity.workspaceId, identity.memberId, null, "member.removed", { memberId });
       return {
         memberId: row.id,
@@ -665,8 +807,185 @@ export class PgStore {
     return Number(result.rows[0]!.count);
   }
 
+  async getWorkspaceBilling(workspaceId: string): Promise<WorkspaceBillingRecord> {
+    const result = await this.pool.query<BillingRow>(
+      `SELECT ${BILLING_COLUMNS}, (SELECT actor_id FROM members WHERE id = w.billing_owner_member_id) AS billing_owner_actor_id
+         FROM workspaces w WHERE w.id = $1`,
+      [workspaceId]
+    );
+    if (!result.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
+    return mapBilling(workspaceId, result.rows[0]);
+  }
+
+  /**
+   * Records the Stripe customer a workspace's cards live on, and who is paying. Both are
+   * written before checkout rather than after, so a customer created for a checkout that
+   * was then abandoned is still found and reused next time instead of being orphaned.
+   */
+  async linkStripeCustomer(workspaceId: string, customerId: string, billingOwnerMemberId: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE workspaces
+          SET stripe_customer_id = COALESCE(stripe_customer_id, $2),
+              billing_owner_member_id = COALESCE(billing_owner_member_id, $3)
+        WHERE id = $1`,
+      [workspaceId, customerId, billingOwnerMemberId]
+    );
+  }
+
+  /** The workspace a webhook is about, resolved from Stripe's own ids. */
+  async findWorkspaceForBilling(input: { subscriptionId?: string | null; customerId?: string | null }): Promise<string | null> {
+    if (!input.subscriptionId && !input.customerId) return null;
+    const result = await this.pool.query<{ id: string }>(
+      `SELECT id FROM workspaces
+        WHERE ($1::text IS NOT NULL AND stripe_subscription_id = $1)
+           OR ($2::text IS NOT NULL AND stripe_customer_id = $2)
+        ORDER BY (stripe_subscription_id = $1) DESC NULLS LAST
+        LIMIT 1`,
+      [input.subscriptionId ?? null, input.customerId ?? null]
+    );
+    return result.rows[0]?.id ?? null;
+  }
+
+  /**
+   * Applies a subscription's authoritative state to a workspace. This is the single write
+   * path for `plan`, and every lifecycle decision that has a database consequence lands
+   * here:
+   *
+   * - Payment failure opens a grace period (COALESCE, so redelivered or repeated failure
+   *   events extend nothing -- the deadline is set once, by the first failure).
+   * - A successful payment clears it.
+   * - Losing auto-always clamps autonomy_tier down instead of leaving a tier the plan no
+   *   longer unlocks, and never below auto-if-clean.
+   * - Nothing is deleted, disabled, or counted: members, operations, replicas and tokens
+   *   are not touched by a plan change in either direction.
+   *
+   * It is a pure function of the state passed in, which is what makes replayed and
+   * out-of-order webhooks safe: applying an old event re-reads current state from Stripe
+   * first, so the write it produces is the same one the newest event would produce.
+   */
+  async applySubscriptionState(input: {
+    workspaceId: string;
+    state: SubscriptionState;
+    graceDays?: number;
+  }): Promise<WorkspaceBillingRecord> {
+    const entitlement = entitlementForSubscription(input.state);
+    return this.transaction(async (client) => {
+      const previousRow = await client.query<BillingRow>(
+        `SELECT ${BILLING_COLUMNS} FROM workspaces WHERE id = $1 FOR UPDATE`,
+        [input.workspaceId]
+      );
+      if (!previousRow.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
+      const previous = mapBilling(input.workspaceId, previousRow.rows[0]);
+      // A workspace that cancelled and then bought again has two subscriptions in Stripe's
+      // history, and the dead one keeps emitting for a while (a final invoice, a deletion).
+      // Those events must not write, or a delayed one lands after the new checkout and
+      // takes the plan the user just paid for straight back off them. A non-current
+      // subscription may only be applied when the current one is itself finished
+      // (billingPlan null), which is exactly the case where it is the new one arriving.
+      if (
+        previous.stripeSubscriptionId !== null &&
+        previous.stripeSubscriptionId !== input.state.subscriptionId &&
+        previous.billingPlan !== null
+      ) return previous;
+      const updated = await client.query<BillingRow>(
+        `UPDATE workspaces w SET
+            plan = $2,
+            billing_plan = $3,
+            billing_interval = $4,
+            billing_status = $5,
+            billing_seats = $6,
+            stripe_customer_id = COALESCE($7, w.stripe_customer_id),
+            stripe_subscription_id = $8,
+            subscription_cancel_at_period_end = $9,
+            subscription_current_period_end = $10,
+            grace_period_ends_at = CASE WHEN $11::boolean
+              THEN COALESCE(w.grace_period_ends_at, now() + ($12 || ' days')::interval)
+              ELSE NULL END,
+            autonomy_tier = LEAST(w.autonomy_tier, $13::integer)
+          WHERE w.id = $1
+          RETURNING ${BILLING_COLUMNS}`,
+        [
+          input.workspaceId,
+          entitlement.plan,
+          // Keep naming the plan being paid for through a grace period; drop it only once
+          // the subscription is terminal, where there is nothing left being paid for.
+          entitlement.plan === "free" && !entitlement.inGrace ? null : input.state.plan,
+          input.state.interval,
+          input.state.status,
+          input.state.seats,
+          input.state.customerId,
+          input.state.subscriptionId,
+          input.state.cancelAtPeriodEnd,
+          input.state.currentPeriodEnd,
+          entitlement.inGrace,
+          input.graceDays ?? PAYMENT_GRACE_PERIOD_DAYS,
+          maxAutonomyTierFor(entitlement.plan)
+        ]
+      );
+      await this.audit(client, input.workspaceId, null, null, "billing.plan_applied", {
+        from: previous.plan, to: entitlement.plan,
+        status: input.state.status, subscriptionId: input.state.subscriptionId, inGrace: entitlement.inGrace
+      });
+      return mapBilling(input.workspaceId, updated.rows[0]!);
+    });
+  }
+
+  /** Mirrors a seat-quantity change Stripe has already accepted (Team's per-seat price). */
+  async recordSeatQuantity(workspaceId: string, seats: number): Promise<void> {
+    await this.pool.query("UPDATE workspaces SET billing_seats = $2 WHERE id = $1", [workspaceId, seats]);
+  }
+
+  /**
+   * Claims a Stripe webhook event id. Returns false when the event has already been
+   * processed to completion, which is what makes redelivery a no-op.
+   *
+   * An event that was claimed but never completed (the handler crashed, or Stripe timed us
+   * out mid-flight) is deliberately allowed through again: the handler is idempotent, and
+   * silently swallowing a half-applied delivery would be the worse failure.
+   */
+  async claimBillingEvent(eventId: string, type: string): Promise<boolean> {
+    const inserted = await this.pool.query(
+      "INSERT INTO billing_events (id, type) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING RETURNING id",
+      [eventId, type]
+    );
+    if (inserted.rows[0]) return true;
+    const existing = await this.pool.query<{ processed_at: Date | null }>(
+      "SELECT processed_at FROM billing_events WHERE id = $1",
+      [eventId]
+    );
+    return existing.rows[0]?.processed_at === null;
+  }
+
+  async completeBillingEvent(eventId: string, workspaceId: string | null): Promise<void> {
+    await this.pool.query(
+      "UPDATE billing_events SET processed_at = now(), workspace_id = $2 WHERE id = $1",
+      [eventId, workspaceId]
+    );
+  }
+
+  /**
+   * Drops workspaces whose payment grace period has run out to free's limits, durably.
+   * Nothing is deleted: members stay, history stays, and the autonomy tier is clamped to
+   * what free unlocks rather than reset. Reads already apply this via EFFECTIVE_PLAN_SQL,
+   * so the sweep is about writing the state down (and auditing it), not about enforcement.
+   */
+  async expireBillingGracePeriods(): Promise<number> {
+    return this.transaction(async (client) => {
+      const expired = await client.query<{ id: string; billing_plan: string | null }>(
+        `UPDATE workspaces SET plan = 'free', autonomy_tier = LEAST(autonomy_tier, $1::integer)
+          WHERE grace_period_ends_at IS NOT NULL AND grace_period_ends_at <= now() AND plan <> 'free'
+          RETURNING id, billing_plan`,
+        [maxAutonomyTierFor("free")]
+      );
+      for (const row of expired.rows) {
+        await this.audit(client, row.id, null, null, "billing.grace_period_expired", { previousPlan: row.billing_plan });
+      }
+      return expired.rows.length;
+    });
+  }
+
   async getWorkspacePlan(workspaceId: string): Promise<string> {
-    const result = await this.pool.query<{ plan: string }>("SELECT plan FROM workspaces WHERE id = $1", [workspaceId]);
+    const result = await this.pool.query<{ plan: string }>(`SELECT ${EFFECTIVE_PLAN_SQL} AS plan FROM workspaces WHERE id = $1`, [workspaceId]);
     if (!result.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
     return result.rows[0].plan;
   }
@@ -822,16 +1141,16 @@ export class PgStore {
     // it is the per-file key in operation_files, and it is what "each path only once"
     // ranges over. The service does not know, and no longer needs to know, which file it is.
     const files = isSealedTransaction(transaction)
-      ? transaction.changes.map((change) => ({ key: change.pathToken, kind: change.kind, beforeHash: null, afterHash: null, payload: change }))
-      : transaction.changes.map((change) => ({ key: change.path, kind: change.kind, beforeHash: change.beforeHash ?? null, afterHash: change.afterHash ?? null, payload: change }));
+      ? transaction.changes.map((change) => ({ key: change.pathToken, kind: change.kind, beforeHash: null, afterHash: null }))
+      : transaction.changes.map((change) => ({ key: change.path, kind: change.kind, beforeHash: change.beforeHash ?? null, afterHash: change.afterHash ?? null }));
     const sealed = isSealedTransaction(transaction);
     if (new Set(files.map((file) => file.key)).size !== files.length) {
       throw new StoreConflictError("An operation may change each path only once");
     }
     const payloadHash = hashCanonicalPayload(event);
     return this.transaction(async (client) => {
-      const workspace = await client.query<{ next_sequence: string; encryption_latched_at: Date | null }>(
-        "SELECT next_sequence, encryption_latched_at FROM workspaces WHERE id = $1 FOR UPDATE",
+      const workspace = await client.query<{ next_sequence: string; plan: Plan; encryption_latched_at: Date | null }>(
+        `SELECT next_sequence, encryption_latched_at, ${EFFECTIVE_PLAN_SQL} AS plan FROM workspaces WHERE id = $1 FOR UPDATE`,
         [identity.workspaceId]
       );
       if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
@@ -846,7 +1165,7 @@ export class PgStore {
       }
 
       const duplicate = await client.query<OperationRow>(
-        `SELECT id, workspace_id, replica_id, project_id, event, transaction, server_sequence, created_at, payload_hash
+        `SELECT id, workspace_id, replica_id, project_id, event, server_sequence, created_at, payload_hash
            FROM operations
           WHERE workspace_id = $1
             AND (id = $2 OR event_id = $3 OR (replica_id = $4 AND client_sequence = $5))`,
@@ -870,24 +1189,42 @@ export class PgStore {
         // the replica already declared its repository at registration, and a client must
         // not be able to attribute its edits to an arbitrary project. NULL when the
         // replica registered before projects existed.
+        //
+        // `event` is the single home of this operation's content: its payload is the
+        // transaction, whose changes[].afterContent are the file bodies -- or, for an
+        // encrypted workspace, the sealed envelope those bodies are inside. Nothing else
+        // stores those bytes; mapOperation() reads the transaction back out of this
+        // column, and operation_files below indexes into it by path (or, when sealed, by
+        // the opaque per-operation token that stands in for one).
+        //
+        // retention_days is stamped from the plan in effect *now*, which is what makes a
+        // later downgrade unable to delete this row early: retention is a promise made when
+        // the row is written, not a property of whatever plan the workspace is on when the
+        // sweep eventually runs (BUILD_INSTRUCTIONS.md Phase 10).
         `INSERT INTO operations
           (id, workspace_id, event_id, client_sequence, server_sequence, replica_id, member_id,
-           actor_id, payload_hash, event, transaction, project_id, sealed, key_epoch)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb,
-                 (SELECT project_id FROM replicas WHERE id = $6 AND workspace_id = $2), $12, $13)
-         RETURNING id, workspace_id, replica_id, project_id, event, transaction, server_sequence, created_at, payload_hash`,
+           actor_id, payload_hash, event, project_id, retention_days, sealed, key_epoch)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb,
+                 (SELECT project_id FROM replicas WHERE id = $6 AND workspace_id = $2), $11, $12, $13)
+         RETURNING id, workspace_id, replica_id, project_id, event, server_sequence, created_at, payload_hash`,
         [
           transaction.id, identity.workspaceId, event.id, event.clientSequence, sequence, event.replicaId,
-          identity.memberId, identity.actorId, payloadHash, JSON.stringify(storedEvent), JSON.stringify(transaction),
+          identity.memberId, identity.actorId, payloadHash, JSON.stringify(storedEvent),
+          PLAN_LIMITS[workspace.rows[0].plan].historyRetentionDays,
           sealed, isSealedTransaction(transaction) ? transaction.sealed.epoch : null
         ]
       );
+      // A per-path index into the operation above, not a second copy of it: kind and the
+      // two hashes are what a "who else touched this file" query needs, and the change
+      // itself is reachable from (workspace_id, operation_id, path). For a sealed
+      // operation the hashes are absent and `path` holds the opaque token instead -- the
+      // index keeps its shape, and stops being an index anyone here can read.
       for (const file of files) {
         await client.query(
           `INSERT INTO operation_files
-            (workspace_id, operation_id, path, kind, before_hash, after_hash, payload)
-           VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
-          [identity.workspaceId, transaction.id, file.key, file.kind, file.beforeHash, file.afterHash, JSON.stringify(file.payload)]
+            (workspace_id, operation_id, path, kind, before_hash, after_hash)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [identity.workspaceId, transaction.id, file.key, file.kind, file.beforeHash, file.afterHash]
         );
       }
       await client.query(
@@ -1054,13 +1391,21 @@ export class PgStore {
     return Number(result.rows[0].next_sequence);
   }
 
+  /**
+   * The clamp on the way out is what makes auto-always a wall rather than a suggestion. A
+   * plan change writes the clamped tier back (see applySubscriptionState), but a grace
+   * period that lapses does not write anything until the sweep runs, and this is the value
+   * the daemon syncs its auto-apply policy from -- so it is clamped here too. Falling back
+   * to auto-if-clean rather than erroring is deliberate: losing the paid tier should cost
+   * the feature, not the workspace.
+   */
   async getWorkspaceAutonomyTier(workspaceId: string): Promise<0 | 1 | 2> {
-    const result = await this.pool.query<{ autonomy_tier: number }>(
-      "SELECT autonomy_tier FROM workspaces WHERE id = $1",
+    const result = await this.pool.query<{ autonomy_tier: number; plan: Plan }>(
+      `SELECT autonomy_tier, ${EFFECTIVE_PLAN_SQL} AS plan FROM workspaces WHERE id = $1`,
       [workspaceId]
     );
     if (!result.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
-    return result.rows[0].autonomy_tier as 0 | 1 | 2;
+    return clampAutonomyTierToPlan(result.rows[0].autonomy_tier as 0 | 1 | 2, result.rows[0].plan);
   }
 
   /**
@@ -1071,7 +1416,7 @@ export class PgStore {
   async setWorkspaceAutonomyTier(identity: Membership, tier: 0 | 1 | 2): Promise<0 | 1 | 2> {
     if (identity.role !== "owner") throw new StoreUnauthorizedError("Only the workspace owner can change the autonomy tier");
     return this.transaction(async (client) => {
-      const workspace = await client.query<{ plan: Plan }>("SELECT plan FROM workspaces WHERE id = $1 FOR UPDATE", [identity.workspaceId]);
+      const workspace = await client.query<{ plan: Plan }>(`SELECT ${EFFECTIVE_PLAN_SQL} AS plan FROM workspaces WHERE id = $1 FOR UPDATE`, [identity.workspaceId]);
       if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
       // The tier a plan unlocks is checked here rather than only at the route, for the
       // same reason the owner check is: this is the single write path, so a new caller
@@ -1085,11 +1430,36 @@ export class PgStore {
     });
   }
 
-  async listOperations(workspaceId: string, cursor: number, limit: number): Promise<{
-    items: StoredOperation[]; nextCursor: number; hasMore: boolean;
-  }> {
+  /**
+   * Cursor-based reconnect, with retention made explicit.
+   *
+   * A replica resumes by asking for everything after its last-known server_sequence, so a
+   * short answer and "you are caught up" are the same message on the wire. Once retention
+   * deletes rows, that ambiguity becomes silent proposal loss: a replica whose cursor sits
+   * below the deleted range would be handed whatever survives -- possibly nothing -- and
+   * conclude it had seen everything.
+   *
+   * operations_pruned_through is what removes the ambiguity. Retention only ever deletes a
+   * prefix of the sequence, so every sequence above the watermark is still present and any
+   * cursor at or above it can be answered completely. A cursor below it is answered with
+   * "cursor-too-old" instead, which callers must surface as a resync rather than a page.
+   */
+  async listOperations(workspaceId: string, cursor: number, limit: number): Promise<OperationPage> {
+    const workspace = await this.pool.query<{ plan: Plan; operations_pruned_through: string }>(
+      "SELECT plan, operations_pruned_through FROM workspaces WHERE id = $1",
+      [workspaceId]
+    );
+    if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
+    const prunedThrough = Number(workspace.rows[0].operations_pruned_through);
+    if (cursor < prunedThrough) {
+      return {
+        status: "cursor-too-old",
+        resyncFrom: prunedThrough,
+        retentionDays: PLAN_LIMITS[workspace.rows[0].plan].historyRetentionDays
+      };
+    }
     const result = await this.pool.query<OperationRow>(
-      `SELECT id, workspace_id, replica_id, project_id, event, transaction, server_sequence, created_at
+      `SELECT id, workspace_id, replica_id, project_id, event, server_sequence, created_at
          FROM operations
         WHERE workspace_id = $1 AND server_sequence > $2
         ORDER BY server_sequence ASC
@@ -1097,7 +1467,7 @@ export class PgStore {
       [workspaceId, cursor, limit + 1]
     );
     const items = result.rows.slice(0, limit).map(mapOperation);
-    return { items, nextCursor: items.at(-1)?.serverSequence ?? cursor, hasMore: result.rows.length > limit };
+    return { status: "ok", items, nextCursor: items.at(-1)?.serverSequence ?? cursor, hasMore: result.rows.length > limit };
   }
 
   async upsertTask(identity: Membership, event: TaskCreatedEvent | TaskUpdatedEvent): Promise<RemoteTask> {
@@ -1318,6 +1688,37 @@ export class PgStore {
     );
   }
 
+  /**
+   * Shared-across-instances counterpart to the in-process rate limiter, for limits that are
+   * a security control rather than a courtesy (see migrations/012_rate_limits.sql).
+   *
+   * One statement, so concurrent requests on different instances cannot interleave a read
+   * and a write and both conclude they are under the limit. Returns false once the caller
+   * has spent its budget for the current window.
+   */
+  async takeRateLimit(bucket: string, maximum: number, windowSeconds: number): Promise<boolean> {
+    const result = await this.pool.query<{ count: number }>(
+      `INSERT INTO rate_limits (bucket, window_start, count) VALUES ($1, now(), 1)
+       ON CONFLICT (bucket) DO UPDATE SET
+         count = CASE WHEN now() - rate_limits.window_start >= make_interval(secs => $2)
+                      THEN 1 ELSE rate_limits.count + 1 END,
+         window_start = CASE WHEN now() - rate_limits.window_start >= make_interval(secs => $2)
+                             THEN now() ELSE rate_limits.window_start END
+       RETURNING count`,
+      [bucket, windowSeconds]
+    );
+    return (result.rows[0]?.count ?? 1) <= maximum;
+  }
+
+  /** Expired buckets carry no state worth keeping; without this the table grows per distinct IP. */
+  async pruneRateLimits(olderThanSeconds = 3_600): Promise<number> {
+    const result = await this.pool.query(
+      "DELETE FROM rate_limits WHERE window_start < now() - make_interval(secs => $1)",
+      [olderThanSeconds]
+    );
+    return result.rowCount ?? 0;
+  }
+
   async pruneAuditEvents(olderThanDays: number): Promise<number> {
     assertPositiveInteger(olderThanDays, "olderThanDays");
     const result = await this.pool.query(
@@ -1325,6 +1726,78 @@ export class PgStore {
       [olderThanDays]
     );
     return result.rowCount ?? result.rows.length;
+  }
+
+  /**
+   * Enforces PLAN_LIMITS[plan].historyRetentionDays across every workspace. Safe to run
+   * concurrently with ingest and with itself: each workspace is swept under its own row
+   * lock, and the watermark only ever moves forward.
+   *
+   * Requires a role with DELETE on operations, which the request-serving role deliberately
+   * does not have (assertRuntimePrivileges). Callers pass a privileged connection: the
+   * scheduled sweep in retention.ts, or `pnpm service:prune`.
+   */
+  async pruneOperationsByRetention(): Promise<RetentionSweepResult[]> {
+    const workspaces = await this.pool.query<{ id: string; plan: Plan }>("SELECT id, plan FROM workspaces ORDER BY id");
+    const results: RetentionSweepResult[] = [];
+    for (const workspace of workspaces.rows) {
+      results.push(await this.pruneWorkspaceOperations(workspace.id, workspace.plan));
+    }
+    return results;
+  }
+
+  private async pruneWorkspaceOperations(workspaceId: string, plan: Plan): Promise<RetentionSweepResult> {
+    const retentionDays = PLAN_LIMITS[plan].historyRetentionDays;
+    assertPositiveInteger(retentionDays, "historyRetentionDays");
+    return this.transaction(async (client) => {
+      const locked = await client.query<{ operations_pruned_through: string }>(
+        "SELECT operations_pruned_through FROM workspaces WHERE id = $1 FOR UPDATE",
+        [workspaceId]
+      );
+      const unchanged = { workspaceId, plan, retentionDays, deleted: 0 };
+      if (!locked.rows[0]) return { ...unchanged, prunedThrough: 0 };
+      const prunedThrough = Number(locked.rows[0].operations_pruned_through);
+      // Deleted by sequence, never directly by age. server_sequence is assigned under the
+      // workspace row lock while created_at is the inserting transaction's clock, so two
+      // concurrent ingests can commit with their timestamps inverted relative to their
+      // sequences. Deleting a prefix of the sequence keeps what remains a contiguous
+      // suffix, which is precisely what the watermark promises readers.
+      //
+      // Each row is measured against its *own* retention_days -- the window promised by the
+      // plan in effect when it was written -- rather than against the workspace's current
+      // plan. That is what makes a downgrade unable to delete history retroactively
+      // (BUILD_INSTRUCTIONS.md Phase 10): shrinking the window stops history being extended,
+      // it does not shorten what was already kept.
+      //
+      // The cutoff is therefore the sequence just below the oldest row that is *still* live,
+      // not the newest expired one. Those differ exactly when an expired row sits above a
+      // live one -- which per-row windows make possible and a single window does not -- and
+      // taking the newest expired sequence there would delete live rows underneath it.
+      // When nothing is live the whole table is expired and the cutoff is the highest
+      // sequence. COALESCE keeps a row that predates the column (none after 014's backfill)
+      // on the workspace's current window rather than treating NULL as expired.
+      const cutoff = await client.query<{ cutoff: string | null }>(
+        `SELECT COALESCE(
+                  (SELECT min(server_sequence) - 1 FROM operations
+                    WHERE workspace_id = $1
+                      AND created_at >= now() - (COALESCE(retention_days, $2) || ' days')::interval),
+                  (SELECT max(server_sequence) FROM operations WHERE workspace_id = $1)
+                ) AS cutoff`,
+        [workspaceId, retentionDays]
+      );
+      const cutoffSequence = Number(cutoff.rows[0]?.cutoff ?? 0);
+      if (cutoffSequence <= prunedThrough) return { ...unchanged, prunedThrough };
+      // operation_files rows follow via ON DELETE CASCADE.
+      const deleted = await client.query(
+        "DELETE FROM operations WHERE workspace_id = $1 AND server_sequence <= $2",
+        [workspaceId, cutoffSequence]
+      );
+      await client.query(
+        "UPDATE workspaces SET operations_pruned_through = $2 WHERE id = $1",
+        [workspaceId, cutoffSequence]
+      );
+      return { workspaceId, plan, retentionDays, deleted: deleted.rowCount ?? 0, prunedThrough: cutoffSequence };
+    });
   }
 
   async pruneEndedSessions(olderThanDays: number): Promise<number> {
@@ -1373,8 +1846,11 @@ type OperationRow = {
   workspace_id: string;
   replica_id: string;
   project_id: string | null;
-  event: EventEnvelope;
-  transaction: SyncedTransaction;
+  /**
+   * The stored envelope; its payload is this operation's transaction, plaintext
+   * (`transaction.created`) or sealed (`transaction.sealed`).
+   */
+  event: TransactionCreatedEvent | SealedTransactionCreatedEvent;
   server_sequence: string;
   created_at: Date;
   payload_hash?: string;
@@ -1388,7 +1864,12 @@ function mapOperation(row: OperationRow): StoredOperation {
     senderReplicaId: row.replica_id,
     projectId: row.project_id,
     event: row.event,
-    transaction: row.transaction,
+    // Read out of the envelope rather than from a column of its own. jsonb canonicalizes
+    // a value the same way wherever it is stored, so this is byte-for-byte what the
+    // dropped operations.transaction column returned -- see the byte-identity assertion
+    // in store.integration.test.ts. For an encrypted workspace this is the sealed
+    // envelope, and it passes through this service without ever being opened.
+    transaction: row.event.payload as SyncedTransaction,
     serverSequence: Number(row.server_sequence),
     createdAt: new Date(row.created_at).toISOString()
   };

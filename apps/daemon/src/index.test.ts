@@ -8,11 +8,29 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CoordinationService } from "../../service/src/index.js";
 import { contentHash } from "@crosscode/core";
 import { discoverRepository, unifiedDiff } from "@crosscode/git";
-import { LocalDaemon } from "./index.js";
+import { LocalDaemon, type RemoteSyncTransport } from "./index.js";
 
 const exec = promisify(execFile); const directories: string[] = [];
 async function repo(): Promise<string> { const path = await mkdtemp(join(tmpdir(), "crosscode-daemon-")); directories.push(path); await exec("git", ["init", "-q", "-b", "main", path]); await exec("git", ["-C", path, "config", "user.email", "test@example.com"]); await exec("git", ["-C", path, "config", "user.name", "Test"]); await writeFile(join(path, "a.txt"), "one\n"); await exec("git", ["-C", path, "add", "."]); await exec("git", ["-C", path, "commit", "-qm", "initial"]); return path; }
 afterEach(async () => { await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
+
+/** A transport with nothing to sync, for tests that care about exactly one of its methods. */
+function emptyTransport(): RemoteSyncTransport {
+  return {
+    upload: async (record) => ({ id: record.transaction.id, workspaceId: "w", senderReplicaId: "replica", transaction: record.transaction, sequence: 1, createdAt: new Date().toISOString() }),
+    list: async (after) => ({ operations: [], nextCursor: after }),
+    uploadTask: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", task: record.event.payload, updatedAt: new Date().toISOString() }),
+    listTasks: async (after) => ({ tasks: [], nextCursor: after }),
+    uploadClaim: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", claim: record.event.payload, released: record.event.type === "claim.released", updatedAt: new Date().toISOString() }),
+    listClaims: async (after) => ({ claims: [], nextCursor: after }),
+    uploadHandoff: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", handoff: record.event.payload, updatedAt: new Date().toISOString() }),
+    listHandoffs: async (after) => ({ handoffs: [], nextCursor: after }),
+    uploadIntent: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", intent: record.event.payload, updatedAt: new Date().toISOString() }),
+    listIntents: async (after) => ({ intents: [], nextCursor: after }),
+    uploadValidation: async (record) => ({ eventId: record.event.id, workspaceId: "w", senderReplicaId: "replica", validation: record.event.payload, createdAt: new Date().toISOString() }),
+    listValidations: async (after) => ({ validations: [], nextCursor: after })
+  };
+}
 
 describe("local daemon coordination", () => {
   it("shares a proposal only after explicit acceptance", async () => {
@@ -577,6 +595,67 @@ describe("local daemon coordination", () => {
     expect(daemon.remoteValidations.get("remote-validation")).toEqual(remoteValidationRecord);
     expect((await daemon.status()).remoteValidations).toEqual([remoteValidationRecord]);
     expect(result.uploaded).toBe(1);
+  });
+
+  // The failure this guards against is silent: with retention deleting operations, a
+  // replica whose cursor sits below the deleted range would be handed a short (often empty)
+  // list, conclude it was caught up, and never learn the proposals existed. The service now
+  // refuses that cursor outright, and the daemon's job is to adopt the watermark, say so,
+  // and keep syncing rather than stall.
+  it("resynchronizes from the retention watermark when its cursor is too old to serve", async () => {
+    const root = await repo();
+    let daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
+    const survivor = {
+      id: "operation-after-retention",
+      workspaceId: "w",
+      senderReplicaId: "other",
+      transaction: {
+        id: "operation-after-retention",
+        base: { files: [] },
+        changes: [{ path: "b.txt", kind: "add" as const, afterContent: "kept\n", afterHash: contentHash("kept\n") }],
+        provenance: { source: "filesystem" as const, confidence: "known" as const },
+        safety: { risk: "low" as const, requiresApproval: false }
+      },
+      sequence: 6,
+      createdAt: new Date().toISOString()
+    };
+    const requested: number[] = [];
+    const transport = {
+      ...emptyTransport(),
+      list: async (after: number) => {
+        requested.push(after);
+        // Everything at or below sequence 5 aged out of the plan's window.
+        if (after < 5) return { status: "cursor-too-old" as const, resyncFrom: 5, retentionDays: 7 };
+        return { operations: [survivor], nextCursor: 6 };
+      }
+    };
+
+    const result = await daemon.syncRemote(transport);
+
+    expect(requested).toEqual([0, 5]);
+    expect(result).toEqual({ uploaded: 0, downloaded: 1, cursor: 6 });
+    expect(daemon.operations.get(survivor.id)?.status).toBe("proposed");
+    const service = (await daemon.status()).service as { lastResyncAt?: string; lastResyncMessage?: string };
+    expect(service.lastResyncAt).toEqual(expect.any(String));
+    expect(service.lastResyncMessage).toContain("7 days");
+    expect(service.lastResyncMessage).toContain("resynchronized from sequence 0 to 5");
+
+    // The jump has to be durable, or the next start walks back into the unservable cursor.
+    daemon.close();
+    daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
+    expect((await daemon.status()).remoteCursor).toBe(6);
+  });
+
+  it("refuses a resync order that would rewind its cursor", async () => {
+    const root = await repo();
+    const daemon = await LocalDaemon.open(root, { workspaceId: "w", replicaId: "replica", actorId: "actor" });
+    // resyncFrom at or below the cursor contradicts the refusal: the service can serve this
+    // cursor. Obeying it would re-download and re-propose operations already resolved here.
+    await expect(daemon.syncRemote({
+      ...emptyTransport(),
+      list: async () => ({ status: "cursor-too-old" as const, resyncFrom: 0, retentionDays: 7 })
+    })).rejects.toThrow("resync to a cursor it can already serve");
+    expect((await daemon.status()).remoteCursor).toBe(0);
   });
 
   it("recognizes a same-HEAD hard reset as a Git transition", async () => {

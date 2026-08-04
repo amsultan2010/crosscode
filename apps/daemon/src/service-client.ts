@@ -4,7 +4,6 @@ import {
   claimIngestReceiptSchema,
   claimCursorResponseSchema,
   createWorkspaceKeyGrantsRequestSchema,
-  cursorResponseSchema,
   isSealedTransaction,
   listWorkspaceKeyRecipientsResponseSchema,
   registerDeviceKeyRequestSchema,
@@ -14,6 +13,8 @@ import {
   handoffIngestReceiptSchema,
   intentCursorResponseSchema,
   intentIngestReceiptSchema,
+  operationsResponseSchema,
+  OPERATIONS_PROTOCOL_VERSION,
   registerReplicaRequestSchema,
   registerReplicaResponseSchema,
   serviceIngestReceiptSchema,
@@ -34,7 +35,7 @@ import {
 } from "@crosscode/protocol";
 import type { LocalOperation } from "./types.js";
 import type { ClaimOutboundRecord, HandoffOutboundRecord, IntentOutboundRecord, OutboundRecord, TaskOutboundRecord, ValidationOutboundRecord } from "./state.js";
-import type { RemoteSyncTransport } from "./index.js";
+import type { RemoteCursorTooOld, RemoteSyncTransport } from "./index.js";
 import { getSupabaseClient, toStoredSession, type StoredSession } from "./supabase-client.js";
 import { MissingEpochKeyError, openTransaction, sealTransaction } from "./sealing.js";
 import {
@@ -185,15 +186,26 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
    * otherwise dense cursor. Reporting them keeps the daemon's anti-omission check intact:
    * a gap the transport did not declare is still treated as the service hiding an
    * operation, rather than being quietly tolerated because encryption exists.
+   *
+   * `protocolVersion` tells the service this client understands the cursor-too-old status.
+   * Without it the service answers an unservable cursor with 410 rather than a body an
+   * older daemon could misread, so sending it is what opts this daemon into resynchronizing
+   * instead of failing.
    */
-  async list(after: number): Promise<{ operations: LocalOperation[]; nextCursor: number; unreadable: number[] }> {
-    const data = cursorResponseSchema.parse(await this.authorizedRequest(`/v1/operations?afterSequence=${after}`, "GET"));
+  async list(after: number): Promise<{ operations: LocalOperation[]; nextCursor: number; unreadable: number[] } | RemoteCursorTooOld> {
+    const data = operationsResponseSchema.parse(
+      await this.authorizedRequest(`/v1/operations?afterSequence=${after}&protocolVersion=${OPERATIONS_PROTOCOL_VERSION}`, "GET")
+    );
+    // History this device never downloaded is gone from the service entirely -- a
+    // different loss from a sealed operation it cannot open, and handled by the daemon
+    // adopting the watermark rather than by declaring a gap.
+    if ("status" in data) return { status: data.status, resyncFrom: data.resyncFrom, retentionDays: data.retentionDays };
     const keyring = await this.keys?.get();
     const operations: LocalOperation[] = [];
     const unreadable: number[] = [];
     let cursor = after;
     for (const parsed of data.operations) {
-      // Already validated: cursorResponseSchema parsed every entry through
+      // Already validated: operationsResponseSchema parsed every entry through
       // remoteOperationSchema. Re-parsing each one here cost a second pass through the
       // sealed/plaintext union, inside the daemon's exclusive lock, on every sync.
       const binding = { workspaceId: parsed.workspaceId, replicaId: parsed.senderReplicaId };

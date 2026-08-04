@@ -102,8 +102,8 @@ revoke it. Both are audited (`member.removed`, `workspace_token.revoked`).
 
 Every file payload Crosscode syncs is encrypted on the sending device with a key the
 coordination service has never held. `api.getcrosscode.dev` stores ciphertext in
-`operations.transaction` and `operation_files.payload` and cannot read it — not with a
-database dump, not with a subpoena, not with an engineer at a console.
+`operations.event` — the single home of file content since migration 013 — and cannot read
+it, not with a database dump, not with a subpoena, not with an engineer at a console.
 
 This section is the reasoning, not just the mechanism. If any of it stops being true, the
 claim on the landing page has to come down with it.
@@ -323,6 +323,46 @@ comparison, which is why that step is mandatory rather than advisory.
 
 Not yet covered: tasks, claims, intents, handoffs, and validation output.
 
+## The billing webhook
+
+`POST /v1/webhooks/stripe` is the only unauthenticated write route in a service that
+authenticates everything else, and unlike `POST /v1/pairing-codes/claim` it is not
+single-use either. Stripe holds no Crosscode credential, so the request signature is the
+credential. Four independent defenses:
+
+1. **The route does not exist without a signing secret.** No `CROSSCODE_STRIPE_WEBHOOK_SECRET`
+   configured means 404, rather than a weaker check. A deployment that could take money but
+   not verify what it is told about that money would be exactly the configuration in which
+   this endpoint is worth attacking, so `apps/service/src/main.ts` requires the secret
+   whenever a Stripe key is present.
+2. **The signature is verified over the raw bytes, before parsing.**
+   `verifyStripeSignature` (`apps/service/src/stripe.ts`) recomputes HMAC-SHA256 over
+   `<timestamp>.<body>` and compares it constant-time (`timingSafeEqual`) against every
+   `v1=` entry in the header — there is more than one during a secret rotation. The
+   signature is attacker-supplied and the secret is not, so a byte-at-a-time comparison
+   would leak the expected digest under enough attempts. A header with no timestamp or no
+   `v1` entry is refused rather than falling through to "nothing to compare, so pass", which
+   is the classic way this check is written wrong. An unsigned body never reaches
+   `JSON.parse`, let alone a write.
+3. **Replay is bounded twice.** The signed timestamp must be within five minutes, checked in
+   both directions (a future timestamp is as much a sign of forgery as a stale one), which
+   bounds how long a captured-off-the-wire *valid* delivery stays useful. Inside that window
+   the `billing_events` table records Stripe's event id, so a redelivery is a no-op.
+   `processed_at` is set only after the handler succeeds, so a delivery that died halfway is
+   retried rather than silently swallowed.
+4. **The event is a signal, not a fact.** The handler
+   (`apps/service/src/billing-webhook.ts`) takes the subscription id out of the body and
+   re-reads that subscription's authoritative state from Stripe before writing anything.
+   Out-of-order delivery, redelivery, and replay therefore all converge on the same write, so
+   a stale event cannot roll a plan backwards. Which workspace an event applies to comes
+   from the service's own customer/subscription mapping in Postgres;
+   `client_reference_id`/`metadata` in the body are consulted only when no mapping exists
+   yet, and only when they parse as a workspace id.
+
+The routes that spend money (`/v1/workspace/billing/checkout|cancel|portal`) are the mirror
+image: owner-only and Supabase-session-only, so a leaked `ccw_` workspace token reaches the
+daemon ingest/read surface and can never start, change, or cancel a subscription.
+
 ## Provisioning and replica self-registration
 
 Workspace and member provisioning is still an administrator-side operation
@@ -442,7 +482,10 @@ Trust boundaries:
 - **Service ↔ PostgreSQL:** the runtime connects with a least-privilege role
   (`CROSSCODE_RUNTIME_DB_ROLE`) that cannot update/delete immutable `operations`
   or `audit_events` rows, and the service refuses to start with a role that can.
-  The runtime never executes DDL. Row Level Security policies
+  The runtime never executes DDL. History retention is the one thing that deletes
+  `operations`, and it is deliberately kept outside that role: the scheduled sweep
+  opens a second connection with `CROSSCODE_RETENTION_DATABASE_URL`, so no
+  request-handling code path can reach a connection able to erase history. Row Level Security policies
   (`004_supabase_auth.sql`) are defense-in-depth on top of this — the service
   itself still connects with a privileged role rather than through PostgREST,
   so application-level authorization in `resolveMembership` remains the primary

@@ -3,15 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Crosscode: coordinate a Git repo across people and agents</title>
-  <meta name="description" content="Crosscode lets several people and coding agents work on the same repository at once without overwriting each other. Changes arrive as proposals you review before they touch your files, and file payloads are end-to-end encrypted — we can't read your code." />
+  <title>Crosscode: work on one codebase together, the way you work on one doc</title>
+  <meta name="description" content="Google Docs made writing together easy. Coding together is still everyone on a separate copy, merging at the end. Crosscode syncs your team's edits as they settle, so a teammate's work is one command away instead of one pull request away — end-to-end encrypted, so we can't read your code." />
   <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml" />
   <link rel="alternate icon" href="/brand/favicon-32.png" sizes="32x32" />
   <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="Crosscode" />
-  <meta property="og:title" content="Crosscode: coordinate a Git repo across people and agents" />
-  <meta property="og:description" content="A background program that watches each checkout and shares every settled edit with your teammates and agents. Their changes arrive as proposals you review — never as automatic writes — and they're end-to-end encrypted, so we can't read your code." />
+  <meta property="og:title" content="Crosscode: work on one codebase together, the way you work on one doc" />
+  <meta property="og:description" content="Everyone on your team has their own checkout and their own agents, and nobody sees anyone else&#39;s work until a pull request lands. Crosscode closes that gap to seconds — and encrypts every file payload on your machine, so we can&#39;t read your code." />
   <meta property="og:image" content="/brand/logo-social.png" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:image" content="/brand/logo-social.png" />
@@ -41,21 +41,22 @@
       <div class="inner hero-grid">
         <div class="hero-copy reveal">
           <span class="eyebrow">Pre-1.0 &middot; Open source &middot; MCP-native</span>
-          <h1>Your coding agents are overwriting each other. Crosscode stops that.</h1>
+          <h1>Coding together still works like emailing a <code class="h1-code">.docx</code> around.</h1>
           <p class="subtitle">
-            Run Claude in one worktree and Codex in another and they will quietly
-            clobber each other's edits. Crosscode gives each checkout a small
-            background daemon that notices every edit once it has settled and shares
-            it with the others. Nothing is ever written to your files behind your back
-            &mdash; each change arrives as a proposal you accept or reject, like a pull
-            request that takes seconds instead of a round trip through your Git host.
+            Google Docs fixed this for writing. Code is still everyone on their own
+            copy, working in the dark, stitching it together at the end. Crosscode
+            closes that gap: a small daemon in each teammate's checkout notices every
+            edit as it settles and puts it in front of everyone else within seconds,
+            one command away from being in their files. Not quite live typing &mdash;
+            you still decide what lands, which is the part you actually want in code
+            &mdash; but a lot closer than waiting on a pull request.
           </p>
           <div class="cta-row">
             <a class="cta" href="#install">Set it up with one prompt</a>
             <a class="cta secondary" href="#pricing">See pricing</a>
           </div>
-          <p class="hero-microcopy"><strong>We can't read your code.</strong> File contents, paths, and diffs are encrypted on your machine with a key we never receive &mdash; on by default. Not a promise; we don't have the key. <a href="/docs/privacy.html">What we can and can't see</a>.</p>
-          <p class="hero-microcopy"><strong>You don't need a team.</strong> One person running two agents is already two editors on one repo &mdash; that's the case Crosscode was built for. Free forever for that, and free forever if you self-host.</p>
+          <p class="hero-microcopy"><strong>For teams shipping something together</strong> &mdash; a startup, a hackathon crew, any project moving faster than its pull requests. Free for small teams, and free forever if you self-host.</p>
+          <p class="hero-microcopy"><strong>We can't read your code.</strong> Your team's edits pass through our service, so file contents, paths, and diffs are encrypted on your machine with a key we never receive &mdash; on by default. Not a promise; we don't have the key. <a href="/docs/privacy.html">What we can and can't see</a>.</p>
         </div>
 
         <div class="hero-visual reveal">
@@ -83,39 +84,39 @@
     <section id="compare" class="alt">
       <div class="inner">
         <div class="section-heading reveal">
-          <h2>What you're probably doing now &mdash; and what it costs you</h2>
-          <p>Everyone running more than one agent has already invented a workaround. Here's how each one actually plays out.</p>
+          <h2>How your team works now &mdash; and what it costs you</h2>
+          <p>Every one of these is a way of coping with the same thing: you can't see what anyone else is doing until they're finished.</p>
         </div>
 
         <div class="compare-table reveal">
           <div class="compare-row compare-head">
             <div>Your current approach</div>
-            <div>Where it breaks</div>
+            <div>What that costs</div>
             <div>With Crosscode</div>
           </div>
           <div class="compare-row">
-            <div class="compare-now">Point both agents at one checkout</div>
-            <div class="compare-pain">Whoever writes last wins. You find out when the tests fail, or later.</div>
-            <div class="compare-fix">An edit is never applied on top of a newer local change. Stale writes are refused, not merged.</div>
+            <div class="compare-now">Everyone on their own branch</div>
+            <div class="compare-pain">Nobody sees anyone else's work until a PR lands, hours later. Two people solve the same thing twice.</div>
+            <div class="compare-fix">Every settled edit reaches your teammates in seconds, so you find the overlap while it's still one line.</div>
           </div>
           <div class="compare-row">
-            <div class="compare-now">Separate worktrees, merge by hand</div>
-            <div class="compare-pain">You're the merge queue. Conflicts surface hours later, far from the context that caused them.</div>
-            <div class="compare-fix">Conflicts are classified the moment an edit settles, while you still remember what each agent was doing.</div>
+            <div class="compare-now">Merge it all at the end</div>
+            <div class="compare-pain">You're the merge queue, reconstructing what everyone meant hours after they meant it.</div>
+            <div class="compare-fix">Overlap surfaces the moment an edit settles, while everyone still remembers what they were doing.</div>
           </div>
           <div class="compare-row">
-            <div class="compare-now">A branch and a PR per agent</div>
+            <div class="compare-now">A pull request for every change</div>
             <div class="compare-pain">Minutes of round trip through your Git host for a change that took four seconds to make.</div>
-            <div class="compare-fix">Review happens locally, in your terminal or through your agent, in seconds. Publish to a real branch when you're ready.</div>
+            <div class="compare-fix">Take a teammate's work with one command, locally. Publish to a real branch when the work is actually done.</div>
           </div>
           <div class="compare-row">
-            <div class="compare-now">Tell the agents which files to avoid</div>
-            <div class="compare-pain">Works until one of them ignores you, which they do.</div>
-            <div class="compare-fix">Claims and live presence make it a fact the other agent can query, not an instruction it might drop.</div>
+            <div class="compare-now">Coordinate in Slack</div>
+            <div class="compare-pain">Out of date the second an agent starts working, and no agent is reading it anyway.</div>
+            <div class="compare-fix">Claims and live presence are a fact every agent can query, not a message someone has to remember.</div>
           </div>
           <div class="compare-row">
-            <div class="compare-now">Let an AI merge tool resolve it</div>
-            <div class="compare-pain">Now something you didn't read has rewritten your working tree.</div>
+            <div class="compare-now">Let an AI merge tool sort it out</div>
+            <div class="compare-pain">Now something nobody read has rewritten your working tree.</div>
             <div class="compare-fix">The AI reviewer only ever advises, runs on your own agent, and can't apply anything without you.</div>
           </div>
         </div>
@@ -131,15 +132,15 @@
       <div class="inner">
         <div class="section-heading reveal">
           <h2>Use cases</h2>
-          <p>Real scenarios teams run into once more than one agent touches a repo.</p>
+          <p>Where a shared codebase stops feeling like separate copies.</p>
         </div>
 
         <div class="usecase-grid stagger">
           <div class="usecase-card usecase-card--featured reveal">
             <div class="usecase-card-main">
-              <h3>Run multiple agents on one repo, in parallel</h3>
+              <h3>A startup or hackathon team, all shipping at once</h3>
               <ul class="usecase-card-list">
-                <li>Claude Code and Codex CLI can work the same checkout without clobbering each other's edits</li>
+                <li>Your Claude Code and a teammate's Codex CLI on the same codebase, each seeing the other's work land</li>
                 <li>Every settled change becomes a durable transaction the instant it lands</li>
                 <li>Ask "who else is working on this repo right now?" and get a real answer</li>
               </ul>
@@ -165,9 +166,9 @@
           </div>
 
           <div class="usecase-card reveal">
-            <h3>Review agent output like a pull request</h3>
+            <h3>Review without the pull-request round trip</h3>
             <ul class="usecase-card-list">
-              <li>Every remote change arrives as a proposal, never auto-applied</li>
+              <li>A teammate's change arrives as a proposal in seconds, not after a push and a CI run</li>
               <li>Diff, accept, or reject before it touches your branch</li>
             </ul>
           </div>
@@ -237,33 +238,34 @@
     <section id="benefits" class="alt">
       <div class="inner">
         <div class="section-heading reveal">
-          <h2>Why teams running multiple agents reach for Crosscode</h2>
-          <p>Once more than one agent (or person) touches a repo at the same time, coordination stops being optional.</p>
+          <h2>What changes when your team is actually in sync</h2>
+          <p>The difference between working near each other and working together.</p>
         </div>
 
         <div class="benefit-grid stagger">
           <div class="benefit reveal">
             <div class="benefit-num">01</div>
-            <h3>Stop losing work to collisions</h3>
+            <h3>See your teammates' work as it happens</h3>
             <p>
-              Two agents editing the same files in separate checkouts usually means
-              silent overwrites, or you diffing by hand to find out what happened.
-              Crosscode records each edit the moment it settles and refuses to apply
-              anything on top of a newer local change, so nothing gets clobbered.
+              The moment an edit settles in anyone's checkout, everyone else can see
+              it &mdash; what changed, which files, by whom. No waiting for a branch to
+              be pushed or a pull request to be opened before the rest of the team
+              finds out the shape of what you built.
             </p>
           </div>
           <div class="benefit reveal">
             <div class="benefit-num">02</div>
-            <h3>Never auto-apply someone else's diff</h3>
+            <h3>Take a change when you want it, not when Git says so</h3>
             <p>
-              Remote work, whether from a teammate or another agent, always
-              shows up as a reviewable proposal. Your working tree stays yours
-              until you explicitly accept a change.
+              A teammate's work arrives as a proposal you can read and pull in with
+              one command, in seconds. Your working tree stays yours until you say
+              otherwise &mdash; the one place code should not behave like a shared
+              document.
             </p>
           </div>
           <div class="benefit reveal">
             <div class="benefit-num">03</div>
-            <h3>Give your agent real situational awareness</h3>
+            <h3>Your agent knows what everyone else is doing</h3>
             <p>
               Your coding agent can ask "who else is working on this repo right
               now, and on what?" and get a real answer: live presence,
@@ -280,9 +282,9 @@
         <div class="section-heading reveal">
           <h2>Pricing</h2>
           <p>
-            The free plan is meant to be the one most people never leave. Unlimited AI review,
-            unlimited repos, auto-apply, and up to 5 people &mdash; and if you host it yourself,
-            everything is free forever with no limits at all.
+            The free plan is meant to cover a real team, not tease you into upgrading. Up to
+            5 people, unlimited repos, unlimited AI review, auto-apply &mdash; and if you host
+            it yourself, everything is free forever with no limits at all.
           </p>
         </div>
 
@@ -382,8 +384,8 @@
         </div>
 
         <p class="install-steps" style="text-align:center;">
-          <strong>Heads up:</strong> the hosted coordination service is still being deployed, so paid plans
-          aren't chargeable yet. Self-hosting works today &mdash; see the
+          <strong>Heads up:</strong> no payment provider is wired up yet, so paid plans aren't chargeable
+          &mdash; the free tier is what runs today. Self-hosting is always an option; see the
           <a href="/docs/install.html">install &amp; quickstart guide</a>.
         </p>
       </div>
@@ -392,13 +394,33 @@
     <section id="install" class="alt">
       <div class="inner">
         <div class="section-heading reveal">
-          <h2>Set up in one paste</h2>
+          <h2>Set up in one command</h2>
           <p>
-            Copy this prompt into your coding agent's chat: Claude Code,
-            Codex CLI, OpenCode, Cursor, or any other MCP-capable agent. It clones
-            Crosscode, installs dependencies, and wires up the MCP config itself.
-            The daemon bootstraps on the first tool call, so there's no manual
-            <code>init</code> and no daemon to start by hand.
+            Run this in the repository your team shares. It signs you in, starts the
+            daemon, and registers Crosscode with your coding agent &mdash; no service
+            to deploy, no Supabase project, no flags.
+          </p>
+        </div>
+
+        <div class="install-panel reveal">
+          <div class="code-toolbar">
+            <span>Run in your project</span>
+            <button class="copy-btn" data-copy-target="install-command-text" type="button">Copy command</button>
+          </div>
+          <pre><code id="install-command-text">npx @crosscode/cli start</code></pre>
+        </div>
+
+        <p class="install-steps">
+          Node 24 and a Git checkout are all it needs. Using it daily?
+          <code>npm install -g @crosscode/cli</code> first, then <code>crosscode start</code>.
+        </p>
+
+        <div class="section-heading reveal" style="margin-top:3rem;">
+          <h3>Or let your agent do it</h3>
+          <p>
+            Copy this prompt into your coding agent's chat: Claude Code, Codex CLI,
+            OpenCode, Cursor, or any other MCP-capable agent. It runs the same
+            command and wires up your MCP config itself.
           </p>
         </div>
 
@@ -407,63 +429,50 @@
             <span>Paste into your coding agent</span>
             <button class="copy-btn" data-copy-target="install-prompt-text" type="button">Copy prompt</button>
           </div>
-          <pre><code id="install-prompt-text">Set up Crosscode for this project. Crosscode is a local-first safety daemon that
-watches Git and filesystem activity and exposes itself to me as an MCP server, so
-you (my coding agent) can coordinate safely with other people and agents working in
-other checkouts of this same repository. Do the following:
+          <pre><code id="install-prompt-text">Set up Crosscode for this project. Crosscode keeps everyone working on this
+codebase in sync: a local daemon watches Git and filesystem activity and exposes
+itself to you (my coding agent) as an MCP server, so you can see what my teammates
+and their agents are doing in their own checkouts, and they can see what we do here
+— within seconds, instead of at pull-request time. Their work arrives as proposals
+we review, never as writes into our files. Do the following:
 
-1. Check whether `~/.crosscode` already exists.
-   - If it does not exist: run `git clone https://github.com/amsultan2010/crosscode.git ~/.crosscode`.
-   - If it does exist: run `git -C ~/.crosscode pull --ff-only`.
-2. Make sure pnpm is available (`pnpm --version`). If it is not installed, run
-   `npm install -g pnpm`.
-3. Run `pnpm install` inside `~/.crosscode`.
-4. Determine the absolute path of this project's Git root (`git rev-parse --show-toplevel`
-   from the current directory). Call this `$PROJECT_ROOT`.
-5. Add a `crosscode` MCP server entry to whichever MCP config applies to you:
-   - If you are Claude Code: create or edit `.mcp.json` in `$PROJECT_ROOT`.
-   - If you are Codex CLI: create or edit `~/.codex/config.toml`.
-   - If you are OpenCode: create or edit `opencode.json` in `$PROJECT_ROOT` (or the
-     global OpenCode config).
-   - If you are another MCP-capable agent: use whatever MCP config file or command
-     you use to register a local stdio MCP server.
+1. Check that Node 24 or newer is available (`node --version`). If it is not, stop
+   and tell me — everything below needs it.
+2. From this project's Git root, run:
 
-   Use these exact values (do not change them):
-   - command: `~/.crosscode/node_modules/.bin/tsx` (expand `~` to the real home
-     directory path)
-   - args: `["~/.crosscode/apps/mcp-server/src/main.ts"]` (expand `~` here too)
-   - cwd: `$PROJECT_ROOT`
-
-   For Claude Code's `.mcp.json`, that looks like:
-   ```json
-   {
-     "mcpServers": {
-       "crosscode": {
-         "command": "/absolute/home/.crosscode/node_modules/.bin/tsx",
-         "args": ["/absolute/home/.crosscode/apps/mcp-server/src/main.ts"],
-         "cwd": "$PROJECT_ROOT"
-       }
-     }
-   }
    ```
-   Merge this into the file if it already has other `mcpServers` entries; don't
-   overwrite unrelated entries.
+   npx --yes @crosscode/cli start --no-browser
+   ```
 
-6. Tell me the config was written and that I need to restart/reload you (or
-   reconnect MCP servers) for the new "crosscode" server to be picked up.
-7. Once reconnected, call the `get_workspace_state` tool once to confirm it works.
-   You do not need to run any install/init command yourself first — the first tool
-   call automatically creates a local Crosscode identity for this checkout and
-   starts its background daemon if one isn't already running. If the call fails,
-   report the exact error back to me instead of guessing at a fix.</code></pre>
+   `start` does the whole setup: it configures this checkout, signs me in, attaches
+   it to my personal workspace, starts the background daemon, and writes the
+   Crosscode MCP server into this project's MCP config. It registers with Claude
+   Code (`.mcp.json`) by default; pass `--mcp cursor`, `--mcp gemini`, or
+   `--mcp opencode` if I use one of those instead.
+3. `--no-browser` makes it print a sign-in URL instead of trying to open a browser
+   you cannot see. Show me that URL and wait — I have to open it and sign in (or
+   create an account) before the command finishes. Do not try to sign in for me,
+   and do not ask me for my password.
+4. If I say I would rather not use a browser at all, run it headlessly instead:
+   `npx --yes @crosscode/cli start --email &lt;my email&gt; --password &lt;my password&gt;`,
+   using credentials I give you. If I have no account yet, that path needs
+   `npx --yes @crosscode/cli signup --email &lt;e&gt; --password &lt;p&gt;` first.
+5. Once `start` reports success, tell me the config was written and that I need to
+   restart/reload you (or reconnect MCP servers) for the new "crosscode" server to
+   be picked up.
+6. Once reconnected, call the `get_workspace_state` tool once to confirm it works.
+   If the call fails, report the exact error back to me instead of guessing at a
+   fix.
+
+If I am joining a teammate's workspace rather than using my own, run
+`npx --yes @crosscode/cli join --invite &lt;code&gt;` with the invite code I give you
+after step 5, then restart as above.</code></pre>
         </div>
 
         <p class="install-steps">
           Works with any MCP-capable coding agent, and there's no editor plugin to
-          install. This gets the daemon running locally; to actually sync with other
-          people and agents you also need a coordination service for your team and an
-          account on it &mdash; the <a href="/docs/install.html">install &amp; quickstart guide</a>
-          covers both. See <a href="/docs/mcp-clients.html">MCP client setup</a> for per-agent notes.
+          install. See <a href="/docs/mcp-clients.html">MCP client setup</a> for
+          per-agent notes, including Codex CLI, whose TOML config you add by hand.
         </p>
       </div>
     </section>
@@ -585,9 +594,9 @@ other checkouts of this same repository. Do the following:
           <div class="today-card reveal">
             <h3>Not there yet <span class="badge soon">Honest gaps</span></h3>
             <ul>
-              <li>The hosted coordination service isn't deployed yet. Until it is, someone on your team runs it, backed by a Supabase project you create. That's the main setup cost today.</li>
+              <li>Live push runs through the hosted service as polling, not a held-open socket, so remote work shows up on the next sync rather than instantly. Self-hosting the service gets you the WebSocket path.</li>
               <li>No payment provider is wired up, so no paid plan is chargeable yet. Plan limits themselves are enforced server-side.</li>
-              <li>Not on npm or any editor marketplace yet &mdash; you run it from a cloned checkout.</li>
+              <li>No editor marketplace listing &mdash; install from npm.</li>
               <li>No editor extension, and there won't be one: MCP is the single integration contract.</li>
             </ul>
           </div>
@@ -605,7 +614,7 @@ other checkouts of this same repository. Do the following:
         <div class="faq-list stagger">
           <details class="faq-item reveal">
             <summary>What do I actually have to set up?</summary>
-            <p>Two things, once per team. Create a free <a href="https://supabase.com" rel="noopener">Supabase</a> project (it handles sign-in and stores the shared state), then run the coordination service &mdash; one small Node process, or the included Dockerfile on any container host. After that everyone else just points their checkout at it and runs <code>crosscode signup</code>. There is no hosted version we run for you yet. The <a href="/docs/install.html">install guide</a> walks through it.</p>
+            <p>Nothing, beyond Node 24 and a Git checkout. Run <code>npx @crosscode/cli start</code> in the repository your team shares: it signs you in, gives your account a workspace, starts the daemon, and registers Crosscode with your coding agent. Teammates run the same command and join with an invite code. Teams who would rather hold their own data can still run the coordination service themselves &mdash; one small Node process, or the included Dockerfile &mdash; backed by a <a href="https://supabase.com" rel="noopener">Supabase</a> project; the <a href="/docs/install.html">install guide</a> covers that.</p>
           </details>
           <details class="faq-item reveal">
             <summary>What does it cost?</summary>
@@ -628,8 +637,8 @@ other checkouts of this same repository. Do the following:
             <p>Yes. The CLI works for human-only teams too, though the proposal-review workflow matters most once agents are in the mix.</p>
           </details>
           <details class="faq-item reveal">
-            <summary>Do I need a team to get anything out of this?</summary>
-            <p>No, and this is the most common misread. One person running two agents in two worktrees is already two editors on one repo, which is exactly the problem Crosscode solves. Everything works with a single account and no one to invite. Teammates are something you add later, not a prerequisite.</p>
+            <summary>What if I'm the only one working on it today?</summary>
+            <p>That's still the case Crosscode is for, as long as the project is shared. Your teammates' agents will land work on this repo again, and the proposals waiting for you when they do are exactly what Crosscode exists to make safe. What it is <em>not</em> built for is a project only you will ever touch &mdash; there is nothing to coordinate with, and you should just use Git.</p>
           </details>
           <details class="faq-item reveal">
             <summary>Can you read my code?</summary>

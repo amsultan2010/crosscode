@@ -1,10 +1,11 @@
+import { createHmac } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type { HandoffRequestedEvent, IntentPublishedEvent, TransactionCreatedEvent } from "@crosscode/protocol";
 import { contentHash } from "@crosscode/core";
 import { afterEach, describe, expect, it } from "vitest";
-import { createServiceServer } from "./http.js";
-import { BillingLimitError } from "./billing.js";
-import type { Membership, PgStore, StoredOperation } from "./store.js";
+import { createServiceServer, type BillingOptions } from "./http.js";
+import { BillingLimitError, MAX_SELF_SERVE_WORKSPACES_PER_USER, type BillingProvider } from "./billing.js";
+import type { Membership, PgStore, StoredOperation, WorkspaceBillingRecord } from "./store.js";
 import { signTestSupabaseToken, testSupabaseJwks } from "./test-jwks.js";
 
 const supabaseUrl = "https://rzsslbmahvoesjxmgefr.supabase.co";
@@ -32,7 +33,7 @@ describe("service HTTP boundary", () => {
       registerReplica: async () => ({ replicaId: "replica-1", createdAt: "2026-01-01T00:00:00.000Z", projectId: null }),
       assertReplicaOwnership: async () => {},
       appendOperation: async () => operation,
-      listOperations: async () => ({ items: [operation], nextCursor: 1, hasMore: false })
+      listOperations: async () => ({ status: "ok", items: [operation], nextCursor: 1, hasMore: false })
     } as unknown as PgStore;
     const base = await listen(store);
     const accessToken = await signToken(membership.userId);
@@ -207,7 +208,7 @@ describe("service HTTP boundary", () => {
     unattributed.serverSequence = 2;
     const store = {
       resolveMembership: async () => membership,
-      listOperations: async () => ({ items: [attributed, unattributed], nextCursor: 2, hasMore: false }),
+      listOperations: async () => ({ status: "ok", items: [attributed, unattributed], nextCursor: 2, hasMore: false }),
       listPresence: async () => [
         { replicaId: "replica-1", actorId: membership.actorId, status: "online", lastSeenAt: "2026-01-01T00:00:00.000Z", cursor: 0, projectId },
         { replicaId: "replica-2", actorId: membership.actorId, status: "offline", lastSeenAt: null, cursor: null, projectId: null }
@@ -232,6 +233,39 @@ describe("service HTTP boundary", () => {
       ["replica-2", null]
     ]);
     expect(Object.keys(presence.data.sessions[1])).toContain("projectId");
+  });
+
+  // A cursor pointing below the retention watermark has exactly one honest answer, and it
+  // is not a page: serving the surviving rows (or an empty list, once everything the
+  // replica had not seen is deleted) is indistinguishable from "you are caught up", which
+  // is how a replica silently loses proposals forever.
+  it("answers a cursor below the retention watermark with a resync order, never a short page", async () => {
+    const store = {
+      resolveMembership: async () => membership,
+      listOperations: async () => ({ status: "cursor-too-old", resyncFrom: 42, retentionDays: 7 })
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken(membership.userId);
+    const headers = { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId };
+
+    const current = await fetch(`${base}/v1/operations?afterSequence=3&protocolVersion=2`, { headers });
+    expect(current.status).toBe(200);
+    expect(await current.json()).toEqual({
+      ok: true,
+      data: { status: "cursor-too-old", protocolVersion: 2, resyncFrom: 42, retentionDays: 7 }
+    });
+
+    // A daemon built before this status sends no protocolVersion. It must not receive a
+    // 200 at all: it would parse the body with cursorResponseSchema and, whatever that
+    // does, "the request succeeded" is the one conclusion it must never reach. A 410 lands
+    // in the sync-error path it already has.
+    const legacy = await fetch(`${base}/v1/operations?afterSequence=3`, { headers });
+    expect(legacy.status).toBe(410);
+    const legacyBody = await legacy.json() as { ok: boolean; error: string };
+    expect(legacyBody.ok).toBe(false);
+    expect(legacyBody.error).toContain("upgrade the daemon");
+
+    expect((await fetch(`${base}/v1/operations?afterSequence=3&protocolVersion=nope`, { headers })).status).toBe(400);
   });
 
   it("registers a replica with its repository so the replica is attributed to a project", async () => {
@@ -526,13 +560,9 @@ describe("service HTTP boundary", () => {
   it("reports workspace billing status, converting an unlimited (Infinity) cap to null over JSON", async () => {
     const store = {
       resolveMembership: async () => membership,
-      pool: {
-        query: async (sql: string) => {
-          if (sql.includes("FROM workspaces")) return { rows: [{ plan: "unlimited" }] };
-          if (sql.includes("FROM members")) return { rows: [{ count: "2" }] };
-          return { rows: [] };
-        }
-      }
+      getWorkspaceBilling: async () => billingRecord({ plan: "unlimited", billingPlan: "unlimited", billingInterval: "year" }),
+      countActiveMembers: async () => 2,
+      pool: { query: async () => ({ rows: [] }) }
     } as unknown as PgStore;
     const base = await listen(store);
     const accessToken = await signToken(membership.userId);
@@ -548,7 +578,17 @@ describe("service HTTP boundary", () => {
         semanticReviewCallsPerMonth: null,
         semanticReviewCallsUsedThisMonth: 0,
         autonomyTiers: ["always-ask", "auto-if-clean", "auto-always"],
-        historyRetentionDays: 365
+        historyRetentionDays: 365,
+        billingPlan: "unlimited",
+        billingInterval: "year",
+        billingStatus: "active",
+        billingSeats: 1,
+        gracePeriodEndsAt: null,
+        cancelAtPeriodEnd: false,
+        currentPeriodEnd: null,
+        billingOwnerActorId: "actor-1",
+        // $7.50/month billed annually is $75.00 — ten months for twelve.
+        priceCents: 7_500
       }
     });
   });
@@ -625,9 +665,58 @@ async function signToken(userId: string): Promise<string> {
   return signTestSupabaseToken(supabaseUrl, { sub: userId });
 }
 
+/** A healthy, active subscription record; overridden field by field per test. */
+function billingRecord(overrides: Partial<WorkspaceBillingRecord>): WorkspaceBillingRecord {
+  return {
+    workspaceId: membership.workspaceId,
+    plan: "free",
+    billingPlan: null,
+    billingInterval: null,
+    billingStatus: "active",
+    billingSeats: 1,
+    gracePeriodEndsAt: null,
+    cancelAtPeriodEnd: false,
+    currentPeriodEnd: null,
+    stripeCustomerId: null,
+    stripeSubscriptionId: null,
+    billingOwnerMemberId: null,
+    billingOwnerActorId: "actor-1",
+    ...overrides
+  };
+}
+
+function fakeProvider(overrides: Partial<BillingProvider> = {}): BillingProvider {
+  return {
+    createCustomer: async (workspaceId: string) => ({ customerId: "cus_fake", workspaceId }),
+    createCheckoutSession: async (workspaceId: string, plan: string) => ({ url: `https://checkout.example/${workspaceId}/${plan}` }),
+    changeSubscription: async () => {},
+    setSeatQuantity: async () => {},
+    cancelSubscription: async () => {},
+    getSubscriptionState: async (subscriptionId: string) => ({
+      subscriptionId, customerId: "cus_fake", status: "active" as const, plan: "pro" as const,
+      interval: "year" as const, seats: 1, cancelAtPeriodEnd: false, currentPeriodEnd: null
+    }),
+    createPortalSession: async (customerId: string) => ({ url: `https://portal.example/${customerId}` }),
+    ...overrides
+  } as BillingProvider;
+}
+
+/** The header Stripe would send for this body: `t=<unix>,v1=<hex hmac of "t.body">`. */
+function stripeSignature(body: string, secret: string, timestamp = Math.floor(Date.now() / 1_000)): string {
+  return `t=${timestamp},v1=${createHmac("sha256", secret).update(`${timestamp}.${body}`, "utf8").digest("hex")}`;
+}
+
+function postSigned(base: string, body: string, secret: string) {
+  return fetch(`${base}/v1/webhooks/stripe`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "stripe-signature": stripeSignature(body, secret) },
+    body
+  });
+}
+
 async function listen(
   store: PgStore, bodyLimitBytes?: number, allowedOrigins?: readonly string[],
-  extra: { trustProxy?: boolean; onError?: (error: unknown) => void } = {}
+  extra: { trustProxy?: boolean; onError?: (error: unknown) => void; billing?: BillingOptions } = {}
 ): Promise<string> {
   const server = createServiceServer({ store, jwks: await testSupabaseJwks(), supabaseUrl, bodyLimitBytes, allowedOrigins, ...extra });
   servers.push(server);
@@ -801,6 +890,60 @@ describe("end-to-end encrypted ingest", () => {
     const viewerStore = { ...store, resolveMembership: async () => ({ ...membership, role: "viewer" as const }) } as unknown as PgStore;
     const viewerBase = await listen(viewerStore);
     expect((await fetch(`${viewerBase}/v1/workspace-keys/recipients`, { headers })).status).toBe(403);
+  });
+});
+
+describe("per-identity rate limiting", () => {
+  // Every daemon in an office or a CI fleet leaves through one NAT egress address. Keying
+  // the real quota on that address makes them throttle each other, which reads to the user
+  // as Crosscode being broken rather than as a limit.
+  it("does not throttle many distinct identities sharing one address", async () => {
+    const store = {
+      resolveMembership: async (userId: string, workspaceId: string) => ({
+        memberId: `member-${userId}`, userId, actorId: userId, workspaceId, role: "member" as const
+      }),
+      listPresence: async () => []
+    } as unknown as PgStore;
+    const base = await listen(store);
+
+    // Ten separate accounts, one shared source address, well past the old 300/min per-IP
+    // bucket they would all have shared.
+    for (let user = 0; user < 10; user += 1) {
+      const accessToken = await signToken(`user-${user}`);
+      for (let call = 0; call < 40; call += 1) {
+        const response = await fetch(`${base}/v1/presence`, {
+          headers: { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId }
+        });
+        expect(response.status).toBe(200);
+      }
+    }
+  });
+
+  it("throttles a single identity once it exhausts its own budget", async () => {
+    const store = {
+      resolveMembership: async (userId: string, workspaceId: string) => ({
+        memberId: `member-${userId}`, userId, actorId: userId, workspaceId, role: "member" as const
+      }),
+      listPresence: async () => []
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken("noisy-user");
+    const call = () => fetch(`${base}/v1/presence`, {
+      headers: { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId }
+    });
+
+    let throttled = false;
+    for (let attempt = 0; attempt < 700 && !throttled; attempt += 1) {
+      throttled = (await call()).status === 429;
+    }
+    expect(throttled).toBe(true);
+
+    // ...and a different account from the same address is untouched by that exhaustion.
+    const otherToken = await signToken("quiet-user");
+    const other = await fetch(`${base}/v1/presence`, {
+      headers: { authorization: `Bearer ${otherToken}`, [WORKSPACE_HEADER]: membership.workspaceId }
+    });
+    expect(other.status).toBe(200);
   });
 });
 
@@ -986,5 +1129,252 @@ describe("plan limits", () => {
     expect(response.status).toBe(402);
     // The message names the plan and the tier, so a client can say what to upgrade to.
     expect((await response.json() as any).error).toContain("auto-always");
+  });
+
+  // The workspace cap is enforced inside createWorkspace's transaction; what the boundary
+  // owes a client is the same 402 the other billing limits answer, so a script farming
+  // free workspaces can tell "you have run out" from "you may not" (403) or a bad request.
+  it("answers 402 when the self-serve workspace cap refuses a create", async () => {
+    const store = {
+      createWorkspace: async () => {
+        throw new BillingLimitError(`You already own ${MAX_SELF_SERVE_WORKSPACES_PER_USER} workspaces, which is the per-account limit`);
+      }
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken("farmer");
+
+    const response = await post(base, "/v1/workspaces", { name: "farm-11" }, accessToken);
+    expect(response.status).toBe(402);
+    expect((await response.json() as any).error).toContain("per-account limit");
+  });
+});
+
+describe("billing checkout, change, and cancel", () => {
+  const owner: Membership = { ...membership, role: "owner", actorId: "owner@example.com" };
+
+  it("creates a customer, links it, and hands back a hosted checkout URL", async () => {
+    const linked: Array<[string, string, string]> = [];
+    const store = {
+      resolveMembership: async () => owner,
+      getWorkspaceBilling: async () => billingRecord({}),
+      countActiveMembers: async () => 3,
+      linkStripeCustomer: async (workspaceId: string, customerId: string, memberId: string) => {
+        linked.push([workspaceId, customerId, memberId]);
+      }
+    } as unknown as PgStore;
+    const provider = fakeProvider();
+    const base = await listen(store, undefined, undefined, { billing: { provider, webhookSecret: "whsec_test" } });
+
+    const response = await post(base, "/v1/workspace/billing/checkout", { plan: "pro" }, await signToken(owner.userId), owner.workspaceId);
+
+    expect(response.status).toBe(200);
+    const body = (await response.json() as any).data;
+    // Annual is what you get when you do not ask, and $5.00/month annually is $50.00.
+    expect(body).toMatchObject({ mode: "checkout", plan: "pro", interval: "year", seats: 1, priceCents: 5_000, monthlyEquivalentCents: 500 });
+    expect(body.url).toContain("pro");
+    // The customer is attached before the redirect, so an abandoned checkout still leaves
+    // the workspace with one customer rather than a fresh one on every attempt.
+    expect(linked).toEqual([[owner.workspaceId, "cus_fake", owner.memberId]]);
+  });
+
+  it("bills team per active member and honors a larger up-front seat count", async () => {
+    const store = {
+      resolveMembership: async () => owner,
+      getWorkspaceBilling: async () => billingRecord({}),
+      countActiveMembers: async () => 4,
+      linkStripeCustomer: async () => {}
+    } as unknown as PgStore;
+    const base = await listen(store, undefined, undefined, { billing: { provider: fakeProvider(), webhookSecret: "whsec_test" } });
+    const accessToken = await signToken(owner.userId);
+
+    const derived = await post(base, "/v1/workspace/billing/checkout", { plan: "team" }, accessToken, owner.workspaceId);
+    expect((await derived.json() as any).data).toMatchObject({ seats: 4, priceCents: 4 * 5_000 });
+
+    const bought = await post(base, "/v1/workspace/billing/checkout", { plan: "team", seats: 10 }, accessToken, owner.workspaceId);
+    expect((await bought.json() as any).data).toMatchObject({ seats: 10, priceCents: 10 * 5_000 });
+
+    // The quantity is a Stripe line-item quantity, so on a flat-priced plan it has to stay
+    // 1 no matter what the client asks for -- otherwise `--seats 10` on Pro would quietly
+    // buy ten Pro subscriptions.
+    const flat = await post(base, "/v1/workspace/billing/checkout", { plan: "pro", seats: 10 }, accessToken, owner.workspaceId);
+    expect((await flat.json() as any).data).toMatchObject({ seats: 1, priceCents: 5_000 });
+  });
+
+  it("moves an existing subscription in place, prorated, instead of selling a second one", async () => {
+    const changes: unknown[] = [];
+    const applied: unknown[] = [];
+    const provider = fakeProvider({ changeSubscription: async (input: unknown) => { changes.push(input); } });
+    const store = {
+      resolveMembership: async () => owner,
+      getWorkspaceBilling: async () => billingRecord({ plan: "pro", billingPlan: "pro", stripeSubscriptionId: "sub_1" }),
+      countActiveMembers: async () => 1,
+      applySubscriptionState: async (input: unknown) => {
+        applied.push(input);
+        return billingRecord({ plan: "essential", billingPlan: "essential" });
+      }
+    } as unknown as PgStore;
+    const base = await listen(store, undefined, undefined, { billing: { provider, webhookSecret: "whsec_test" } });
+
+    // A downgrade takes the same path as an upgrade: there is one subscription, and it moves.
+    const response = await post(base, "/v1/workspace/billing/checkout", { plan: "essential", interval: "month" }, await signToken(owner.userId), owner.workspaceId);
+
+    expect((await response.json() as any).data).toMatchObject({ mode: "updated", url: null, plan: "essential", interval: "month", priceCents: 250 });
+    expect(changes).toEqual([{ subscriptionId: "sub_1", plan: "essential", interval: "month", seats: 1 }]);
+    // Written straight away from the same authoritative re-read the webhook will do, so the
+    // caller is not told "done" before the plan has actually moved.
+    expect(applied).toHaveLength(1);
+  });
+
+  it("cancels at period end and says so, without touching workspace data", async () => {
+    const cancelled: string[] = [];
+    const provider = fakeProvider({ cancelSubscription: async (id: string) => { cancelled.push(id); } });
+    const store = {
+      resolveMembership: async () => owner,
+      getWorkspaceBilling: async () => billingRecord({ plan: "pro", billingPlan: "pro", stripeSubscriptionId: "sub_1" }),
+      applySubscriptionState: async () => billingRecord({
+        plan: "pro", billingPlan: "pro", cancelAtPeriodEnd: true, currentPeriodEnd: "2026-09-01T00:00:00.000Z"
+      })
+    } as unknown as PgStore;
+    const base = await listen(store, undefined, undefined, { billing: { provider, webhookSecret: "whsec_test" } });
+
+    const response = await post(base, "/v1/workspace/billing/cancel", {}, await signToken(owner.userId), owner.workspaceId);
+
+    expect(cancelled).toEqual(["sub_1"]);
+    // Still on pro: cancelling never takes the plan away mid-period.
+    expect((await response.json() as any).data).toEqual({
+      plan: "pro", cancelAtPeriodEnd: true, currentPeriodEnd: "2026-09-01T00:00:00.000Z"
+    });
+  });
+
+  it("refuses student self-serve, non-owners, workspace tokens, and unconfigured deployments", async () => {
+    const store = {
+      resolveMembership: async (userId: string) => (userId === "user-1" ? owner : membership),
+      resolveWorkspaceToken: async () => ({ ...owner, replicaId: "replica-1" }),
+      getWorkspaceBilling: async () => billingRecord({}),
+      countActiveMembers: async () => 1,
+      linkStripeCustomer: async () => {}
+    } as unknown as PgStore;
+    const base = await listen(store, undefined, undefined, { billing: { provider: fakeProvider(), webhookSecret: "whsec_test" } });
+    const ownerToken = await signToken(owner.userId);
+
+    // Student is Pro's limits at Essential's price; selling it self-serve is just a discount.
+    const student = await post(base, "/v1/workspace/billing/checkout", { plan: "student" }, ownerToken, owner.workspaceId);
+    expect(student.status).toBe(403);
+    expect((await student.json() as any).error).toContain("verification");
+
+    const member = await post(base, "/v1/workspace/billing/checkout", { plan: "pro" }, await signToken("user-2"), membership.workspaceId);
+    expect(member.status).toBe(403);
+
+    // A terminal-side credential must never be able to spend money.
+    const token = await fetch(`${base}/v1/workspace/billing/checkout`, {
+      method: "POST", headers: { authorization: "Bearer ccw_leaked-token", "content-type": "application/json" }, body: JSON.stringify({ plan: "pro" })
+    });
+    expect(token.status).toBe(403);
+
+    // No provider configured: 503, not a fabricated URL.
+    const unconfigured = await listen(store);
+    expect((await post(unconfigured, "/v1/workspace/billing/checkout", { plan: "pro" }, ownerToken, owner.workspaceId)).status).toBe(503);
+  });
+});
+
+describe("stripe webhook", () => {
+  const secret = "whsec_test_secret";
+
+  it("verifies the signature, reconciles from authoritative state, and ignores redeliveries", async () => {
+    const claimed: string[] = [];
+    const completed: Array<[string, string | null]> = [];
+    const applied: any[] = [];
+    let alreadyProcessed = false;
+    const store = {
+      claimBillingEvent: async (id: string) => {
+        claimed.push(id);
+        return !alreadyProcessed;
+      },
+      completeBillingEvent: async (id: string, workspaceId: string | null) => {
+        completed.push([id, workspaceId]);
+        alreadyProcessed = true;
+      },
+      findWorkspaceForBilling: async () => "11111111-1111-4111-8111-111111111111",
+      applySubscriptionState: async (input: unknown) => {
+        applied.push(input);
+        return billingRecord({ plan: "pro", billingPlan: "pro" });
+      }
+    } as unknown as PgStore;
+    const base = await listen(store, undefined, undefined, { billing: { provider: fakeProvider(), webhookSecret: secret } });
+    const body = JSON.stringify({
+      id: "evt_1", type: "customer.subscription.updated",
+      data: { object: { id: "sub_1", object: "subscription", customer: "cus_1" } }
+    });
+
+    const first = await postSigned(base, body, secret);
+    expect(first.status).toBe(200);
+    expect((await first.json() as any).data).toEqual({ received: true, duplicate: false, applied: true });
+    expect(applied).toHaveLength(1);
+    expect(completed).toEqual([["evt_1", "11111111-1111-4111-8111-111111111111"]]);
+
+    // Stripe redelivers freely; the second delivery must change nothing.
+    const second = await postSigned(base, body, secret);
+    expect((await second.json() as any).data).toEqual({ received: true, duplicate: true });
+    expect(applied).toHaveLength(1);
+    expect(claimed).toEqual(["evt_1", "evt_1"]);
+  });
+
+  it("refuses a forged signature, a tampered body, and a stale timestamp before any write", async () => {
+    let claims = 0;
+    const store = { claimBillingEvent: async () => { claims += 1; return true; } } as unknown as PgStore;
+    const base = await listen(store, undefined, undefined, { billing: { provider: fakeProvider(), webhookSecret: secret } });
+    const body = JSON.stringify({ id: "evt_2", type: "customer.subscription.updated", data: { object: { id: "sub_1" } } });
+
+    expect((await postSigned(base, body, "whsec_wrong")).status).toBe(400);
+    // Signed correctly, then edited in flight.
+    const tampered = await fetch(`${base}/v1/webhooks/stripe`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "stripe-signature": stripeSignature(body, secret) },
+      body: body.replace("sub_1", "sub_2")
+    });
+    expect(tampered.status).toBe(400);
+    // A genuine capture, replayed after the tolerance window.
+    const stale = await fetch(`${base}/v1/webhooks/stripe`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "stripe-signature": stripeSignature(body, secret, Math.floor(Date.now() / 1_000) - 3_600) },
+      body
+    });
+    expect(stale.status).toBe(400);
+    const unsigned = await fetch(`${base}/v1/webhooks/stripe`, {
+      method: "POST", headers: { "content-type": "application/json" }, body
+    });
+    expect(unsigned.status).toBe(400);
+
+    // Nothing reached the database on any of the four.
+    expect(claims).toBe(0);
+  });
+
+  it("does not exist at all when no signing secret is configured", async () => {
+    const store = { claimBillingEvent: async () => true } as unknown as PgStore;
+    const withoutSecret = await listen(store, undefined, undefined, { billing: { provider: fakeProvider() } });
+    const withoutBilling = await listen(store);
+    const body = JSON.stringify({ id: "evt_3", type: "customer.subscription.updated", data: { object: { id: "sub_1" } } });
+
+    // An unauthenticated route the service cannot verify anything about should not be
+    // reachable, so its absence is a 404 rather than a weaker check.
+    expect((await postSigned(withoutSecret, body, secret)).status).toBe(404);
+    expect((await postSigned(withoutBilling, body, secret)).status).toBe(404);
+  });
+
+  it("acknowledges events it has no opinion about, so Stripe stops retrying them", async () => {
+    const applied: unknown[] = [];
+    const store = {
+      claimBillingEvent: async () => true,
+      completeBillingEvent: async () => {},
+      findWorkspaceForBilling: async () => null,
+      applySubscriptionState: async (input: unknown) => { applied.push(input); return billingRecord({}); }
+    } as unknown as PgStore;
+    const base = await listen(store, undefined, undefined, { billing: { provider: fakeProvider(), webhookSecret: secret } });
+    const body = JSON.stringify({ id: "evt_4", type: "radar.early_fraud_warning.created", data: { object: { id: "issfr_1" } } });
+
+    const response = await postSigned(base, body, secret);
+    expect(response.status).toBe(200);
+    expect((await response.json() as any).data).toEqual({ received: true, duplicate: false, applied: false });
+    expect(applied).toEqual([]);
   });
 });

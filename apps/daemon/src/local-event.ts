@@ -86,6 +86,16 @@ export const localEventSchema = z.discriminatedUnion("type", [
   // epoch that sealed them. Recorded rather than logged and forgotten, so "why does my
   // history start here" has an answer in the durable local log.
   event("remote.unreadable", z.object({ sequences: z.array(z.number().int().positive()).min(1) }).strict()),
+  // The service dropped history below `cursor` under the workspace's plan retention, so
+  // this replica jumped its cursor forward from `previousCursor`. Recorded because it is
+  // the only trace that operations in that range existed and were never seen here. Note
+  // this is a different loss from `remote.unreadable` above: there the service still has
+  // the operation and this device cannot decrypt it, here the operation is gone.
+  event("remote.resync_required", z.object({
+    cursor: z.number().int().nonnegative(),
+    previousCursor: z.number().int().nonnegative(),
+    retentionDays: z.number().int().positive()
+  }).strict()),
   event("transaction.proposed", z.object({ proposals: z.array(storedOperationSchema), remoteCursor: z.number().int().nonnegative() }).strict()),
   event("transaction.applying", storedOperationSchema),
   event("transaction.apply_rolled_back", z.object({ id: z.string(), checkpoint: z.string(), recovery: z.string() }).strict()),
