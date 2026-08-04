@@ -3,7 +3,7 @@ import type { HandoffRequestedEvent, IntentPublishedEvent, TransactionCreatedEve
 import { contentHash } from "@crosscode/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createServiceServer } from "./http.js";
-import { BillingLimitError } from "./billing.js";
+import { BillingLimitError, MAX_SELF_SERVE_WORKSPACES_PER_USER } from "./billing.js";
 import type { Membership, PgStore, StoredOperation } from "./store.js";
 import { signTestSupabaseToken, testSupabaseJwks } from "./test-jwks.js";
 
@@ -962,5 +962,22 @@ describe("plan limits", () => {
     expect(response.status).toBe(402);
     // The message names the plan and the tier, so a client can say what to upgrade to.
     expect((await response.json() as any).error).toContain("auto-always");
+  });
+
+  // The workspace cap is enforced inside createWorkspace's transaction; what the boundary
+  // owes a client is the same 402 the other billing limits answer, so a script farming
+  // free workspaces can tell "you have run out" from "you may not" (403) or a bad request.
+  it("answers 402 when the self-serve workspace cap refuses a create", async () => {
+    const store = {
+      createWorkspace: async () => {
+        throw new BillingLimitError(`You already own ${MAX_SELF_SERVE_WORKSPACES_PER_USER} workspaces, which is the per-account limit`);
+      }
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken("farmer");
+
+    const response = await post(base, "/v1/workspaces", { name: "farm-11" }, accessToken);
+    expect(response.status).toBe(402);
+    expect((await response.json() as any).error).toContain("per-account limit");
   });
 });
