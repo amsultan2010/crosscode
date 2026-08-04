@@ -381,8 +381,8 @@
         </div>
 
         <p class="install-steps" style="text-align:center;">
-          <strong>Heads up:</strong> the hosted coordination service is still being deployed, so paid plans
-          aren't chargeable yet. Self-hosting works today &mdash; see the
+          <strong>Heads up:</strong> no payment provider is wired up yet, so paid plans aren't chargeable
+          &mdash; the free tier is what runs today. Self-hosting is always an option; see the
           <a href="/docs/install.html">install &amp; quickstart guide</a>.
         </p>
       </div>
@@ -391,13 +391,33 @@
     <section id="install" class="alt">
       <div class="inner">
         <div class="section-heading reveal">
-          <h2>Set up in one paste</h2>
+          <h2>Set up in one command</h2>
           <p>
-            Copy this prompt into your coding agent's chat: Claude Code,
-            Codex CLI, OpenCode, Cursor, or any other MCP-capable agent. It clones
-            Crosscode, installs dependencies, and wires up the MCP config itself.
-            The daemon bootstraps on the first tool call, so there's no manual
-            <code>init</code> and no daemon to start by hand.
+            Run this in the repository your team shares. It signs you in, starts the
+            daemon, and registers Crosscode with your coding agent &mdash; no service
+            to deploy, no Supabase project, no flags.
+          </p>
+        </div>
+
+        <div class="install-panel reveal">
+          <div class="code-toolbar">
+            <span>Run in your project</span>
+            <button class="copy-btn" data-copy-target="install-command-text" type="button">Copy command</button>
+          </div>
+          <pre><code id="install-command-text">npx @crosscode/cli start</code></pre>
+        </div>
+
+        <p class="install-steps">
+          Node 24 and a Git checkout are all it needs. Using it daily?
+          <code>npm install -g @crosscode/cli</code> first, then <code>crosscode start</code>.
+        </p>
+
+        <div class="section-heading reveal" style="margin-top:3rem;">
+          <h3>Or let your agent do it</h3>
+          <p>
+            Copy this prompt into your coding agent's chat: Claude Code, Codex CLI,
+            OpenCode, Cursor, or any other MCP-capable agent. It runs the same
+            command and wires up your MCP config itself.
           </p>
         </div>
 
@@ -406,63 +426,49 @@
             <span>Paste into your coding agent</span>
             <button class="copy-btn" data-copy-target="install-prompt-text" type="button">Copy prompt</button>
           </div>
-          <pre><code id="install-prompt-text">Set up Crosscode for this project. Crosscode is a local-first safety daemon that
+          <pre><code id="install-prompt-text">Set up Crosscode for this project. Crosscode is a local-first coordination daemon
+for repositories that several people share while all of them run coding agents: it
 watches Git and filesystem activity and exposes itself to me as an MCP server, so
-you (my coding agent) can coordinate safely with other people and agents working in
-other checkouts of this same repository. Do the following:
+you (my coding agent) can see and safely land work alongside the agents my
+teammates are running in their own checkouts. Do the following:
 
-1. Check whether `~/.crosscode` already exists.
-   - If it does not exist: run `git clone https://github.com/amsultan2010/crosscode.git ~/.crosscode`.
-   - If it does exist: run `git -C ~/.crosscode pull --ff-only`.
-2. Make sure pnpm is available (`pnpm --version`). If it is not installed, run
-   `npm install -g pnpm`.
-3. Run `pnpm install` inside `~/.crosscode`.
-4. Determine the absolute path of this project's Git root (`git rev-parse --show-toplevel`
-   from the current directory). Call this `$PROJECT_ROOT`.
-5. Add a `crosscode` MCP server entry to whichever MCP config applies to you:
-   - If you are Claude Code: create or edit `.mcp.json` in `$PROJECT_ROOT`.
-   - If you are Codex CLI: create or edit `~/.codex/config.toml`.
-   - If you are OpenCode: create or edit `opencode.json` in `$PROJECT_ROOT` (or the
-     global OpenCode config).
-   - If you are another MCP-capable agent: use whatever MCP config file or command
-     you use to register a local stdio MCP server.
+1. Check that Node 24 or newer is available (`node --version`). If it is not, stop
+   and tell me — everything below needs it.
+2. From this project's Git root, run:
 
-   Use these exact values (do not change them):
-   - command: `~/.crosscode/node_modules/.bin/tsx` (expand `~` to the real home
-     directory path)
-   - args: `["~/.crosscode/apps/mcp-server/src/main.ts"]` (expand `~` here too)
-   - cwd: `$PROJECT_ROOT`
-
-   For Claude Code's `.mcp.json`, that looks like:
-   ```json
-   {
-     "mcpServers": {
-       "crosscode": {
-         "command": "/absolute/home/.crosscode/node_modules/.bin/tsx",
-         "args": ["/absolute/home/.crosscode/apps/mcp-server/src/main.ts"],
-         "cwd": "$PROJECT_ROOT"
-       }
-     }
-   }
    ```
-   Merge this into the file if it already has other `mcpServers` entries; don't
-   overwrite unrelated entries.
+   npx --yes @crosscode/cli start --no-browser
+   ```
 
-6. Tell me the config was written and that I need to restart/reload you (or
-   reconnect MCP servers) for the new "crosscode" server to be picked up.
-7. Once reconnected, call the `get_workspace_state` tool once to confirm it works.
-   You do not need to run any install/init command yourself first — the first tool
-   call automatically creates a local Crosscode identity for this checkout and
-   starts its background daemon if one isn't already running. If the call fails,
-   report the exact error back to me instead of guessing at a fix.</code></pre>
+   `start` does the whole setup: it configures this checkout, signs me in, attaches
+   it to my personal workspace, starts the background daemon, and writes the
+   Crosscode MCP server into this project's MCP config. It registers with Claude
+   Code (`.mcp.json`) by default; pass `--mcp cursor`, `--mcp gemini`, or
+   `--mcp opencode` if I use one of those instead.
+3. `--no-browser` makes it print a sign-in URL instead of trying to open a browser
+   you cannot see. Show me that URL and wait — I have to open it and sign in (or
+   create an account) before the command finishes. Do not try to sign in for me,
+   and do not ask me for my password.
+4. If I say I would rather not use a browser at all, run it headlessly instead:
+   `npx --yes @crosscode/cli start --email &lt;my email&gt; --password &lt;my password&gt;`,
+   using credentials I give you. If I have no account yet, that path needs
+   `npx --yes @crosscode/cli signup --email &lt;e&gt; --password &lt;p&gt;` first.
+5. Once `start` reports success, tell me the config was written and that I need to
+   restart/reload you (or reconnect MCP servers) for the new "crosscode" server to
+   be picked up.
+6. Once reconnected, call the `get_workspace_state` tool once to confirm it works.
+   If the call fails, report the exact error back to me instead of guessing at a
+   fix.
+
+If I am joining a teammate's workspace rather than using my own, run
+`npx --yes @crosscode/cli join --invite &lt;code&gt;` with the invite code I give you
+after step 5, then restart as above.</code></pre>
         </div>
 
         <p class="install-steps">
           Works with any MCP-capable coding agent, and there's no editor plugin to
-          install. This gets the daemon running locally; to actually sync with other
-          people and agents you also need a coordination service for your team and an
-          account on it &mdash; the <a href="/docs/install.html">install &amp; quickstart guide</a>
-          covers both. See <a href="/docs/mcp-clients.html">MCP client setup</a> for per-agent notes.
+          install. See <a href="/docs/mcp-clients.html">MCP client setup</a> for
+          per-agent notes, including Codex CLI, whose TOML config you add by hand.
         </p>
       </div>
     </section>
@@ -582,9 +588,9 @@ other checkouts of this same repository. Do the following:
           <div class="today-card reveal">
             <h3>Not there yet <span class="badge soon">Honest gaps</span></h3>
             <ul>
-              <li>The hosted coordination service isn't deployed yet. Until it is, someone on your team runs it, backed by a Supabase project you create. That's the main setup cost today.</li>
+              <li>Live push runs through the hosted service as polling, not a held-open socket, so remote work shows up on the next sync rather than instantly. Self-hosting the service gets you the WebSocket path.</li>
               <li>No payment provider is wired up, so no paid plan is chargeable yet. Plan limits themselves are enforced server-side.</li>
-              <li>Not on npm or any editor marketplace yet &mdash; you run it from a cloned checkout.</li>
+              <li>No editor marketplace listing &mdash; install from npm.</li>
               <li>No editor extension, and there won't be one: MCP is the single integration contract.</li>
             </ul>
           </div>
@@ -602,7 +608,7 @@ other checkouts of this same repository. Do the following:
         <div class="faq-list stagger">
           <details class="faq-item reveal">
             <summary>What do I actually have to set up?</summary>
-            <p>Two things, once per team. Create a free <a href="https://supabase.com" rel="noopener">Supabase</a> project (it handles sign-in and stores the shared state), then run the coordination service &mdash; one small Node process, or the included Dockerfile on any container host. After that everyone else just points their checkout at it and runs <code>crosscode signup</code>. There is no hosted version we run for you yet. The <a href="/docs/install.html">install guide</a> walks through it.</p>
+            <p>Nothing, beyond Node 24 and a Git checkout. Run <code>npx @crosscode/cli start</code> in the repository your team shares: it signs you in, gives your account a workspace, starts the daemon, and registers Crosscode with your coding agent. Teammates run the same command and join with an invite code. Teams who would rather hold their own data can still run the coordination service themselves &mdash; one small Node process, or the included Dockerfile &mdash; backed by a <a href="https://supabase.com" rel="noopener">Supabase</a> project; the <a href="/docs/install.html">install guide</a> covers that.</p>
           </details>
           <details class="faq-item reveal">
             <summary>What does it cost?</summary>

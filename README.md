@@ -17,11 +17,40 @@ Everything stays ordinary Git. Crosscode doesn't replace your editor, your agent
 
 ### What you need before you start
 
-Crosscode is not a hosted service yet. Someone on your team has to run the coordination service (a small Node process backed by a [Supabase](https://supabase.com) project) — see [Set up Supabase and run the coordination service](#set-up-supabase-and-run-the-coordination-service). Once that exists, everyone else just points their checkout at it.
+Node 24 and a Git checkout. Crosscode runs against the hosted coordination service by default, so there is nothing to deploy and no Supabase project to create. Teams who would rather run the service themselves still can — see [Set up Supabase and run the coordination service](#set-up-supabase-and-run-the-coordination-service) — and then point their checkouts at it with `--service`.
 
 ## Quickstart
 
-This assumes the coordination service is already running and you know its URL (`http://127.0.0.1:8788` if you started it locally).
+From inside the repository you want your team's agents to share:
+
+```bash
+npx @crosscode/cli start
+```
+
+That is the whole setup. It configures the checkout, opens your browser to sign in or create an account, attaches you to the personal workspace your account is given automatically, starts the background daemon, and registers the Crosscode MCP server with your coding agent. No flags, no service URL, no Supabase setup. Restart your agent afterwards so it picks up the new MCP server.
+
+Install it properly once you know you want it — the daemon then runs from a stable path instead of npm's cache:
+
+```bash
+npm install -g @crosscode/cli
+crosscode start
+```
+
+`start` is safe to re-run: every step it performs is skipped if it is already done, so in a configured checkout it just reports the state and makes sure the daemon is up. Useful flags:
+
+```bash
+crosscode start --mcp cursor        # register with Cursor, Gemini CLI (gemini), or OpenCode instead of Claude Code
+crosscode start --no-mcp            # skip MCP registration entirely
+crosscode start --no-browser        # print the sign-in URL instead of opening it, for remote shells
+crosscode start --email <e> --password <p>   # headless sign-in, for agents and CI
+crosscode start --service <url>     # a self-hosted coordination service
+```
+
+To bring a teammate in, generate an invite and have them run `crosscode start` and then `crosscode join --invite <code>` in their own checkout.
+
+### The same setup, one step at a time
+
+`crosscode start` is exactly the sequence below, and each command still exists if you want to drive it yourself.
 
 1. **Set up the checkout.** `init` writes Crosscode's local state for this worktree, and has to come first.
 
@@ -69,11 +98,11 @@ This assumes the coordination service is already running and you know its URL (`
    crosscode join --workspace <workspaceId> --json   # or --invite <code>, or --pair <code>
    ```
 
-5. **Do real work.** Start the daemon (`pnpm daemon`, or let the MCP server start it for you) and use the commands under [Normal workflow](#normal-workflow).
+5. **Do real work.** Start the daemon (`crosscode start`, or let the MCP server start it for you) and use the commands under [Normal workflow](#normal-workflow).
 
 ## Fastest way to try it with an agent
 
-Paste the prompt in [`docs/install-prompt.md`](./docs/install-prompt.md) into any MCP-capable coding agent (Claude Code, Codex CLI, OpenCode, Cursor, etc.). The agent clones this repository, installs dependencies, and registers the Crosscode MCP server for your project itself — no manual `init`/daemon step. The daemon starts itself, in the background, the first time the agent calls a Crosscode tool.
+Paste the prompt in [`docs/install-prompt.md`](./docs/install-prompt.md) into any MCP-capable coding agent (Claude Code, Codex CLI, OpenCode, Cursor, etc.). The agent installs the CLI from npm, runs `crosscode start`, and registers the Crosscode MCP server for your project itself — no manual `init`/daemon step. The daemon starts itself, in the background, the first time the agent calls a Crosscode tool.
 
 ## What works today
 
@@ -146,12 +175,12 @@ The daemon binds only to loopback and publishes a mode-`0600` connection descrip
 
 ## Prerequisites
 
-- Node.js 24 or newer
-- pnpm 11
-- Git
-- A Supabase project (or Docker Desktop/another Docker-compatible runtime, for local-only testing against a plain Postgres instance — see `infra/docker-compose.yml`)
+To *use* Crosscode: Node.js 24 or newer, and Git. That is all — `npm install -g @crosscode/cli` (or `npx @crosscode/cli start`) brings the CLI, the daemon, and the MCP server, and the hosted coordination service is the default.
 
-Install dependencies:
+To *work on* Crosscode, or to run the coordination service yourself, you also need:
+
+- pnpm 11
+- A Supabase project (or Docker Desktop/another Docker-compatible runtime, for local-only testing against a plain Postgres instance — see `infra/docker-compose.yml`)
 
 ```bash
 pnpm install
@@ -404,12 +433,22 @@ pnpm audit --audit-level high
 
 ### Packaging
 
-`pnpm build` bundles three entrypoints into `dist/` with esbuild — `cli.js` (the
-`crosscode` bin), `mcp.js` (the `crosscode-mcp` bin), and `daemon.js`, which is not a bin
-but is spawned by the MCP server's bootstrap from wherever it was installed. The
-`@crosscode/*` workspace packages are inlined; the ten real npm dependencies stay external
-and are declared on the root manifest. `scripts/build.mjs` fails the build if anything from
-`node_modules` gets inlined, which is what keeps that list honest.
+`pnpm build` bundles three entrypoints into `dist/` with esbuild — `cli.js`, `mcp.js`, and
+`daemon.js`. The `@crosscode/*` workspace packages are inlined; the ten real npm
+dependencies stay external and are declared on the root manifest. `scripts/build.mjs` fails
+the build if anything from `node_modules` gets inlined, which is what keeps that list
+honest.
+
+Both published bins — `crosscode` and `crosscode-mcp` — point at `dist/cli.js`, which
+dispatches on the name it was invoked under. That is not cosmetic: npm only auto-resolves
+`npx <package>` when every `bin` entry names the same file (or one is named after the
+package), and `@crosscode/cli`'s unscoped name is `cli`, so two distinct bin targets made
+`npx @crosscode/cli start` fail with "could not determine executable to run". `dist/mcp.js`
+is still its own bundle, imported by `dist/cli.js` only when serving MCP, so ordinary CLI
+invocations don't pay to load the MCP SDK. `dist/daemon.js` is not a bin at all; it is
+spawned from wherever it was installed. Windows `.cmd` shims lose the invoked bin name, so
+`crosscode mcp` is the portable spelling of `crosscode-mcp`, and it is what `crosscode
+start` writes into an MCP config there.
 
 The root package is the published one. To check the tarball before publishing:
 
@@ -419,7 +458,9 @@ npm i -g ./crosscode-cli-*.tgz             # or --prefix <dir> to keep it out of
 cd $(mktemp -d) && git init -q . && crosscode init --json && crosscode status --json
 ```
 
-`apps/service` is deliberately not part of this package: it deploys as a container.
+`apps/service` is deliberately not part of this package: it runs as functions inside the
+website's deployment (`apps/docs-site/api/[...path].ts`), and self-hosters run it as a
+container.
 
 `pnpm test` skips the PostgreSQL suites unless `CROSSCODE_TEST_DATABASE_URL` is set, and
 they should be run through `pnpm test:postgres` rather than by setting that variable for
@@ -444,7 +485,7 @@ For the implementation plan and current milestone ledger, see [BUILD_INSTRUCTION
 - Billing has no payment provider behind it yet (see BUILD_INSTRUCTIONS.md Phase 10). The limits themselves are enforced: seat caps are checked inside the transaction that adds a member, and the autonomy tier a plan unlocks is checked on the write path, both answering `402` rather than `403` so a client can tell "out of seats" from "not allowed". The semantic-review call counter is deliberately not metered — review is delegated to your own already-connected MCP agent and never leaves your machine, so there is no per-call cost to bill and `GET /v1/workspace/billing` correctly reports zero calls used.
 - `pnpm test` skips the PostgreSQL integration suites unless `CROSSCODE_TEST_DATABASE_URL` is set, so a local run leaves the service's store, pairing, and reconnect paths unexercised. CI sets it; to run them locally use `pnpm test:postgres`.
 - There is no linter or formatter configured. `pnpm build` (`tsc --noEmit`) under `strict` is the only static gate.
-- Not on npm yet. The `@crosscode/cli` package builds, packs, and installs — `npm pack` produces a tarball whose `crosscode` and `crosscode-mcp` binaries work outside this repo on nothing but Node 24 — but it has never been published, so the documented install path is still a cloned checkout run via `pnpm install` and `tsx` (see `docs/install-prompt.md`). The unscoped name `crosscode` is owned by an unrelated project, which is why the package is published under the `@crosscode` scope while both binaries keep their short names. Publishing is one `npm publish` away; `docs/install-prompt.md`, `docs/mcp-clients.md`, and the marketing site's install snippet all need updating to the npm path at the same time. There is no editor marketplace extension.
+- The CLI ships on npm as [`@crosscode/cli`](https://www.npmjs.com/package/@crosscode/cli) — scoped because the unscoped name `crosscode` belongs to an unrelated project — while both binaries keep their short names, `crosscode` and `crosscode-mcp`. There is no editor marketplace extension, and there will not be one: MCP is the single integration contract.
 
 ## Contributing
 

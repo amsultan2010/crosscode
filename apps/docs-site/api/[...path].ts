@@ -4,14 +4,15 @@ import { createServerlessHandler } from "@crosscode/service/serverless";
 /**
  * The coordination service, served from the same project as the marketing site.
  *
- * Everything under /api/* is routed here by vercel.json and handed to the service's own
- * router, so there is exactly one implementation of routing, auth, and rate limiting
- * rather than a web copy and a self-hosted copy that drift apart. `pnpm service` remains
- * the persistent-process entrypoint self-hosters run.
+ * Everything under /api/* and /v1/* is routed here by vercel.json and handed to the
+ * service's own router, so there is exactly one implementation of routing, auth, and rate
+ * limiting rather than a web copy and a self-hosted copy that drift apart. `pnpm service`
+ * remains the persistent-process entrypoint self-hosters run.
  *
- * The daemon addresses the service by base URL and appends `/v1/...`, so it needs a base
- * of `https://<host>/api` here. That is what DEFAULT_SERVICE_URL in
- * apps/daemon/src/hosted.ts must point at.
+ * Both prefixes exist because clients address the service by *origin* and join an absolute
+ * `/v1/...` onto it (`new URL(path, base)` discards any path the base carries), so
+ * DEFAULT_SERVICE_URL in apps/daemon/src/hosted.ts is origin-only and the service has to
+ * answer at the root. `/api/*` stays as the explicit spelling.
  *
  * Node runtime, not edge: the service uses node-postgres and node:crypto.
  */

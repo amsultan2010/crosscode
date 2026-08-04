@@ -1,23 +1,21 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
+import { basename } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
 import { DaemonClient, DaemonUnavailableError } from "../../daemon/src/client.js";
 import { BrowserLoginError, resolveWebUrl } from "../../daemon/src/browser-login.js";
 import { SupabaseConfigError } from "../../daemon/src/supabase-client.js";
 import { browserLogin, login, logout, readDaemonConfig, redeemInvite, redeemPairingCode, serviceRequest, signup, writeDaemonConfig } from "../../daemon/src/runtime.js";
 import { VERSION } from "../../daemon/src/version.js";
+import { CliError } from "./errors.js";
+import { MCP_CLIENTS, parseMcpClient } from "./mcp-config.js";
+import { start } from "./start.js";
 
 type CliResult = { value?: unknown; exitCode?: number };
-
-class CliError extends Error {
-  constructor(public readonly code: string, message: string, public readonly hint?: string) {
-    super(message);
-  }
-}
 
 async function confirm(prompt: string): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -60,6 +58,13 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
     return { exitCode };
   }
 
+  // Serves MCP over this process's stdio and never returns, so it is handled before the
+  // parser rather than as an action that would fall through to printing a result.
+  if (command === "mcp") {
+    await serveMcpServer();
+    return {};
+  }
+
   if (command === "validate" && args.includes("--")) {
     throw new CliError("UNTRUSTED_VALIDATION_ARGS", "Validation commands must come from trusted .crosscode/config.yaml profiles", "Add the command to a profile in .crosscode/config.yaml and run `crosscode validate --profile <name>`.");
   }
@@ -80,6 +85,35 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
     .option("--json", "output compact JSON instead of pretty-printed JSON")
     .exitOverride()
     .configureOutput({ writeOut: (str) => process.stdout.write(str), writeErr: () => {} });
+
+  program
+    .command("start")
+    .description("set this checkout up end to end: configure it, sign in, attach a workspace, start the daemon, and register the MCP server")
+    .option("--email <email>", "account email; with --password, signs in headlessly instead of opening a browser (or set CROSSCODE_EMAIL)")
+    .option("--password <password>", "account password for the headless sign-in (or set CROSSCODE_PASSWORD)")
+    .option("--web <url>", "base URL of the crosscode website hosting the sign-in page (or set CROSSCODE_WEB_URL)")
+    .option("--service <url>", "coordination service URL to record for this checkout")
+    .option("--no-browser", "print the sign-in URL instead of opening a browser, for remote shells and CI")
+    .option("--mcp <client>", `MCP client to register with: ${MCP_CLIENTS.join(", ")}`, "claude")
+    .option("--no-mcp", "skip MCP client registration")
+    .action(async (options: { email?: string; password?: string; web?: string; service?: string; browser?: boolean; mcp?: string | boolean }) => {
+      result = {
+        value: await start(directory, {
+          email: options.email,
+          password: options.password,
+          web: options.web,
+          service: options.service,
+          browser: options.browser,
+          mcp: options.mcp === false ? false : parseMcpClient(typeof options.mcp === "string" ? options.mcp : "claude"),
+          // stderr, not stdout: --json output has to stay a single parseable object.
+          report: (line) => process.stderr.write(`${line}\n`)
+        })
+      };
+    });
+
+  program
+    .command("mcp")
+    .description("serve the crosscode MCP server over stdio (the portable spelling of the crosscode-mcp binary)");
 
   program
     .command("init")
@@ -487,6 +521,21 @@ function formatError(error: unknown): { error: { code: string; message: string; 
   return { error: { code: "COMMAND_FAILED", message } };
 }
 
+/**
+ * Loads and runs the MCP server, which starts serving on import.
+ *
+ * The specifier is built at runtime so esbuild leaves it alone: the MCP server is its own
+ * bundle (`dist/mcp.js`) and inlining it here would make every `crosscode` invocation pay
+ * to load the MCP SDK. The two candidates mirror `resolveDaemonLaunch`'s two layouts --
+ * bundled beside us when installed from npm, TypeScript source in a monorepo clone.
+ */
+async function serveMcpServer(): Promise<void> {
+  const bundled = new URL("./mcp.js", import.meta.url);
+  const source = new URL("../../mcp-server/src/main.ts", import.meta.url);
+  const entry = existsSync(fileURLToPath(bundled)) ? bundled : source;
+  await import(entry.href);
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const json = args.includes("--json");
@@ -517,4 +566,23 @@ function isMainModule(): boolean {
   }
 }
 
-if (isMainModule()) void main();
+/**
+ * Both published bins point at this file, and this is what tells them apart.
+ *
+ * npm only auto-picks a package's executable when every `bin` entry names the same file, or
+ * when one is named after the package -- and `@crosscode/cli`'s unscoped name is `cli`,
+ * which matches neither `crosscode` nor `crosscode-mcp`. Shipping two distinct bin targets
+ * therefore made `npx @crosscode/cli start` fail outright with "could not determine
+ * executable to run". Pointing both at this file satisfies the first rule, so npx resolves
+ * `crosscode`, and dispatching on the name we were invoked under keeps `crosscode-mcp`.
+ *
+ * npm's Windows `.cmd` shims pass the resolved script path as argv[1] rather than the bin
+ * name, so there is nothing to dispatch on there; `crosscode mcp` is the spelling that works
+ * everywhere, and it is what `crosscode start` writes into an MCP config on Windows.
+ */
+function invokedAsMcpBin(): boolean {
+  const invoked = process.argv[1];
+  return Boolean(invoked) && basename(invoked!).replace(/\.(cmd|exe|ps1)$/i, "") === "crosscode-mcp";
+}
+
+if (isMainModule()) void (invokedAsMcpBin() ? serveMcpServer() : main());

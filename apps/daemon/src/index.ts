@@ -87,6 +87,19 @@ function changesOverlap(left: ChangeTransaction["changes"][number], right: Chang
   if (left.kind === "delete" || right.kind === "delete") return true;
   return hunksOverlap(left.unifiedPatch, right.unifiedPatch);
 }
+/** Git's canonical empty tree, which every repository can name without it being written. */
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+/**
+ * What to diff the working tree against. `HEAD` for any repository with a commit; the empty
+ * tree before the first one, where `git diff HEAD` is a fatal "ambiguous argument" that took
+ * the whole daemon down on startup. That is exactly the state `git init` leaves a new
+ * project in, so it was the first thing a user starting from nothing hit. Diffing against
+ * the empty tree reports staged-but-never-committed files as adds, which `ls-files --others`
+ * would miss.
+ */
+async function diffBase(root: string): Promise<string> {
+  return git(root, ["rev-parse", "-q", "--verify", "HEAD"]).then(() => "HEAD", () => EMPTY_TREE);
+}
 /**
  * How many of this replica's checkpoints to keep. Deep enough that `checkpoint restore`
  * still reaches back across a normal working session, bounded so a long-lived checkout
@@ -713,7 +726,8 @@ export class LocalDaemon {
     return result;
   }
   private async changedPaths(): Promise<Array<{ path: string; kind: "add" | "modify" | "delete" | "rename"; previousPath?: string }>> {
-    const [tracked, untracked, exclusions] = await Promise.all([git(this.root, ["diff", "--name-status", "-z", "-M", "HEAD"]), git(this.root, ["ls-files", "-z", "--others", "--exclude-standard"]), configuredExcludedPaths(this.root)]);
+    const [base, untracked, exclusions] = await Promise.all([diffBase(this.root), git(this.root, ["ls-files", "-z", "--others", "--exclude-standard"]), configuredExcludedPaths(this.root)]);
+    const tracked = await git(this.root, ["diff", "--name-status", "-z", "-M", base]);
     const trackedParts = tracked.split("\0").filter(Boolean);
     const changed: Array<{ path: string; kind: "add" | "modify" | "delete" | "rename"; previousPath?: string }> = [];
     for (let index = 0; index < trackedParts.length;) {

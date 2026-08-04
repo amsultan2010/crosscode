@@ -292,9 +292,9 @@ export class PgStore {
 
   // Powers `GET /v1/memberships` and the CLI's workspace switching -- every workspace a
   // user currently belongs to, with the workspace name for display.
-  async listMembershipsForUser(userId: string): Promise<Array<Membership & { workspaceName: string }>> {
-    const result = await this.pool.query<{ member_id: string; actor_id: string; role: Membership["role"]; workspace_id: string; workspace_name: string }>(
-      `SELECT m.id AS member_id, m.actor_id, m.role, m.workspace_id, w.name AS workspace_name
+  async listMembershipsForUser(userId: string): Promise<Array<Membership & { workspaceName: string; isPersonal: boolean }>> {
+    const result = await this.pool.query<{ member_id: string; actor_id: string; role: Membership["role"]; workspace_id: string; workspace_name: string; is_personal: boolean }>(
+      `SELECT m.id AS member_id, m.actor_id, m.role, m.workspace_id, w.name AS workspace_name, m.is_personal
          FROM members m JOIN workspaces w ON w.id = m.workspace_id
          WHERE m.user_id = $1 AND m.disabled_at IS NULL
          ORDER BY w.name`,
@@ -302,7 +302,7 @@ export class PgStore {
     );
     return result.rows.map((row) => ({
       memberId: row.member_id, userId, actorId: row.actor_id, role: row.role,
-      workspaceId: row.workspace_id, workspaceName: row.workspace_name
+      workspaceId: row.workspace_id, workspaceName: row.workspace_name, isPersonal: row.is_personal
     }));
   }
 
