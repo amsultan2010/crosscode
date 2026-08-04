@@ -15,6 +15,13 @@ coordination service --- Supabase-hosted PostgreSQL operations + audit log
 other daemons receive reviewable proposals
 ```
 
+Crosscode's job is to get every teammate's settled work in front of everyone
+else within seconds, instead of at pull-request time. The topology above is
+what that requires: a daemon per checkout so edits are captured where they
+happen, and one coordination service so every other checkout learns about them.
+The accept step is deliberate rather than a limitation — proposals are applied
+by the person whose working tree it is, never pushed into it.
+
 Crosscode is CLI-first. Every coordination operation — status, tasks, claims,
 proposal review, accept/reject, checkpoints, validation, publish — happens
 against the local daemon through the CLI or MCP. The website
