@@ -1,0 +1,32 @@
+name: Deployment smoke
+
+# A green build has already meant a dead API once: the function shipped, imported a
+# TypeScript file Node refuses to load, and returned 500 on every route while CI stayed
+# green. Nothing in this repository talked to a running deployment, so nothing caught it.
+on:
+  # Vercel's GitHub integration reports each deployment here, so production and previews are
+  # both checked the moment they go live.
+  deployment_status:
+  # Catches a deployment that starts failing later, when no push is happening: an expired
+  # database credential, a Vercel-side change, a rolled-back environment variable.
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      url:
+        description: Base URL to check
+        required: false
+        default: https://www.getcrosscode.dev
+
+jobs:
+  smoke:
+    # deployment_status fires for every state (pending, error, success). Only a live
+    # deployment is worth calling.
+    if: github.event_name != 'deployment_status' || github.event.deployment_status.state == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the deployed service answers
+        env:
+          TARGET: ${{ github.event.deployment_status.environment_url || inputs.url || 'https://www.getcrosscode.dev' }}
+        run: ./scripts/smoke-deployment.sh "$TARGET"
