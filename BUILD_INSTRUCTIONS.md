@@ -109,7 +109,7 @@ What did **not** change, deliberately: the coordination service and every migrat
 **Verification baseline (re-measured 2026-08-04).** Treat the numbers below as a dated observation, not a spec — run the commands rather than trusting the transcription. This paragraph sat at "25 files / 231 tests" for two days after the real figures moved, which is exactly the failure mode of hand-copied counts.
 
 - `pnpm build` — `tsc --noEmit` under `strict`, then `scripts/build.mjs` bundles the three entrypoints to `dist/`. Passes.
-- `pnpm test` — **30 files passed, 8 skipped (38); 352 tests passed, 39 skipped (391)**. The skips are the PostgreSQL-gated suites, which deliberately get no `CROSSCODE_TEST_DATABASE_URL` here.
+- `pnpm test` — **30 files passed, 8 skipped (38); 353 tests passed, 39 skipped (392)**. The skips are the PostgreSQL-gated suites, which deliberately get no `CROSSCODE_TEST_DATABASE_URL` here.
 - `pnpm test:postgres` — **8 files, 39 tests, none skipped.** Suites are discovered by the gate they read, and the run fails if a selected test reports as skipped rather than passed.
 - `pnpm docs:build` — passes; emits the landing page, four auth pages, and eight docs pages.
 - `docker build -f apps/service/Dockerfile -t crosscode-service .` — passes, and the container refuses to start without `DATABASE_URL`, as intended.
