@@ -19,12 +19,12 @@ Crosscode's job is to get every teammate's settled work in front of everyone
 else within seconds, instead of at pull-request time. The topology above is
 what that requires: a daemon per checkout so edits are captured where they
 happen, and one coordination service so every other checkout learns about them.
-The accept step is deliberate rather than a limitation — proposals are applied
-by the person whose working tree it is, never pushed into it.
+The accept step is a design choice, not a limitation. Proposals are applied by
+the person whose working tree it is, never pushed into it.
 
-Crosscode is CLI-first. Every coordination operation — status, tasks, claims,
-proposal review, accept/reject, checkpoints, validation, publish — happens
-against the local daemon through the CLI or MCP. The website
+Crosscode is CLI-first. Every coordination operation happens against the local
+daemon through the CLI or MCP: status, tasks, claims, proposal review,
+accept/reject, checkpoints, validation, and publish. The website
 (`apps/docs-site`) is not part of this topology: it is a landing page, the auth
 pages (sign-up, sign-in, password reset, and the `crosscode login` callback at
 `/auth/cli.html`), and the documentation generated from the root `docs/*.md`.
@@ -48,9 +48,9 @@ The service is a Supabase-hosted-PostgreSQL-backed record of workspace state:
 operations, tasks, claims, handoffs, intents, and an audit log
 (`apps/service/migrations/001_initial.sql`, `002_handoffs_intents.sql`,
 `003_validations_cursor.sql`, `004_supabase_auth.sql`). Workspace members
-authenticate directly against Supabase Auth — `crosscode login` (loopback
-browser callback) or `crosscode login --email/--password` (headless), see
-[Sign-in](#sign-in-crosscode-login) below; the service verifies the resulting Supabase-issued JWTs
+authenticate directly against Supabase Auth, with `crosscode login` (loopback
+browser callback) or `crosscode login --email/--password` (headless). See
+[Sign-in](#sign-in-crosscode-login) below. The service verifies the resulting Supabase-issued JWTs
 (fetched from `SUPABASE_URL`'s JWKS endpoint, `apps/service/src/auth.ts`) rather than
 signing its own. A replica (an individual daemon/device identity) is
 self-registered by an authenticated member calling `POST /v1/replicas`
@@ -70,10 +70,18 @@ beyond storing and relaying it. Workspace and member provisioning
 by the Supabase admin API (`SUPABASE_SERVICE_ROLE_KEY`) to create or invite
 Supabase Auth users instead of writing one-time enrollment tokens.
 
-The service is multi-tenant and keeps the whole team surface — workspaces,
+The service is multi-tenant and keeps the whole team surface: workspaces,
 memberships, roles, invites (`/v1/invites`), one-time pairing codes
 (`/v1/pairing-codes`), projects (`/v1/projects`), presence, and billing. All of
 it is reached from the CLI or over HTTP; none of it has a web UI.
+
+File payloads reach the service sealed. Contents, paths, diffs, content hashes,
+and the change intent recorded with a transaction are encrypted under a
+workspace key the service never holds, so `operations.transaction` stores an
+opaque blob plus one HMAC path token per changed file. Tasks, claims, handoffs,
+published intents, and validation results are stored in the clear, which is what
+lets the service enforce membership and order them by cursor. See
+[security.md](./security.md#end-to-end-encryption).
 
 ## Sign-in (`crosscode login`)
 
@@ -83,10 +91,11 @@ cannot tell them apart afterwards.
 **Browser (default, needs a TTY).** The CLI starts a short-lived HTTP server
 bound to `127.0.0.1` on an ephemeral port with a single `/callback` route, and
 generates a 32-character random `state`. It opens
-`${WEB_URL}/auth/cli.html?port=<port>&state=<state>` — `WEB_URL` from `--web`,
-else `CROSSCODE_WEB_URL`, else the deprecated `CROSSCODE_DASHBOARD_URL`. There
-is no production default: no site is deployed yet, so with none of the three
-set this fails with `WEB_URL_REQUIRED` rather than guessing a domain. That page signs the
+`${WEB_URL}/auth/cli.html?port=<port>&state=<state>`. `WEB_URL` comes from
+`--web`, else `CROSSCODE_WEB_URL`, else the deprecated `CROSSCODE_DASHBOARD_URL`,
+else the hosted default `https://www.getcrosscode.dev` compiled into
+`apps/daemon/src/hosted.ts`. Because there is a default, bare `crosscode login`
+works and `WEB_URL_REQUIRED` is no longer reachable. That page signs the
 visitor in against Supabase (rendering the ordinary sign-in form if they aren't
 already), then POSTs the session back to `http://127.0.0.1:<port>/callback` as
 `{ state, access_token, refresh_token, expires_at, user: { id, email } }` and
@@ -118,10 +127,9 @@ additionally bootstraps the daemon on first connection if one isn't already runn
 for the worktree. These two, plus the daemon itself, are the entire supported
 product surface: every editor and agent, including VS Code and Cursor,
 integrates via MCP ([mcp-clients.md](./mcp-clients.md)). There is no editor
-extension. This CLI/MCP-first contract — humans and agents alike get direct
-access to every routine operation (status, claims, checkpoints, accept/reject,
-publish) with no website required — is formalized in
-[`AGENTS.md`](../AGENTS.md).
+extension. [`AGENTS.md`](../AGENTS.md) formalizes the contract: humans and
+agents alike get direct access to every routine operation (status, claims,
+checkpoints, accept/reject, publish) with no website involved.
 
 ## Safety invariants
 
@@ -130,12 +138,12 @@ publish) with no website required — is formalized in
 3. Every materialization checks the local base again and creates a checkpoint first.
 4. Excluded paths, common secret files, symlink traversal, and payloads that are
    malformed or whose content does not match its recorded hash are rejected.
-   (Binary files themselves are supported — they travel base64-encoded and are
-   materialized byte-exactly — but any *conflict* involving one requires human
-   approval, since hunk-level merge analysis is text-only.)
+   Binary files themselves are supported. They travel base64-encoded and are
+   materialized byte-exactly, but any *conflict* involving one requires human
+   approval, since hunk-level merge analysis is text-only.
 
 If Crosscode is stopped or removed, the repository remains an ordinary Git
-repository — Git is the durable history and publishing layer, and checkpoints live
+repository. Git is the durable history and publishing layer, and checkpoints live
 under `refs/crosscode/checkpoints/...` without polluting normal branch history.
 
 See [README.md](../README.md) for setup and current capabilities, and
