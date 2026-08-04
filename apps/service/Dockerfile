@@ -13,21 +13,27 @@ ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 RUN corepack enable
 
-WORKDIR /app
+# pnpm needs every workspace member's package.json present to resolve the lockfile graph,
+# and only the manifests, so that a source edit does not invalidate the install layer.
+#
+# They are collected by a find rather than listed one per line. The list was previously
+# written out by hand and named apps/vscode-extension, which was deleted in the CLI-only
+# pass -- COPY of a missing path is a hard error, so every build of this image failed from
+# that merge until this was fixed. A find cannot go stale that way: add or remove a workspace
+# member and the image follows. This stage copies the whole repo, so it re-runs on any
+# change, but it is only a file copy; the expensive `pnpm install` below keys off the
+# manifests alone and still caches.
+FROM base AS manifests
+WORKDIR /src
+COPY . .
+RUN mkdir /manifests && \
+    find . -name node_modules -prune -o -name package.json -print \
+      | while read -r manifest; do mkdir -p "/manifests/$(dirname "$manifest")" && cp "$manifest" "/manifests/$manifest"; done && \
+    cp pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json /manifests/
 
-# The workspace manifests alone, so a dependency install caches independently of source
-# edits. pnpm needs every member package's package.json present to build the lockfile graph.
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json ./
-COPY apps/service/package.json ./apps/service/
-COPY packages/core/package.json ./packages/core/
-COPY packages/protocol/package.json ./packages/protocol/
-COPY packages/git/package.json ./packages/git/
-COPY packages/test-fixtures/package.json ./packages/test-fixtures/
-COPY apps/cli/package.json ./apps/cli/
-COPY apps/daemon/package.json ./apps/daemon/
-COPY apps/mcp-server/package.json ./apps/mcp-server/
-COPY apps/vscode-extension/package.json ./apps/vscode-extension/
-COPY apps/docs-site/package.json ./apps/docs-site/
+FROM base AS runtime
+WORKDIR /app
+COPY --from=manifests /manifests ./
 
 # --ignore-scripts: no member package needs a postinstall to run the service, and skipping
 # them avoids pulling build toolchains into the image.
