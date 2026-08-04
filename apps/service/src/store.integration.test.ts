@@ -2,10 +2,17 @@ import { randomUUID } from "node:crypto";
 import { EPOCH_CURSOR, type HandoffRequestedEvent, type IntentPublishedEvent, type TransactionCreatedEvent } from "@crosscode/protocol";
 import { contentHash } from "@crosscode/core";
 import { describe, expect, it } from "vitest";
-import { StoreConflictError, StoreUnauthorizedError, PgStore, type Membership } from "./store.js";
+import { toRemoteOperation } from "./http.js";
+import { StoreConflictError, StoreUnauthorizedError, PgStore, type Membership, type OperationPage, type StoredOperation } from "./store.js";
 import { BillingLimitError, MAX_SELF_SERVE_WORKSPACES_PER_USER } from "./billing.js";
 
 const databaseUrl = process.env.CROSSCODE_TEST_DATABASE_URL;
+
+/** Unwraps a page, failing loudly if retention refused the cursor instead of answering it. */
+function items(page: OperationPage): StoredOperation[] {
+  if (page.status !== "ok") throw new Error(`Expected an operation page, got '${page.status}'`);
+  return page.items;
+}
 
 describe.skipIf(!databaseUrl)("PostgreSQL service store", () => {
   it("provisions a member, registers a replica, and sequences exact event retries idempotently", async () => {
@@ -37,7 +44,7 @@ describe.skipIf(!databaseUrl)("PostgreSQL service store", () => {
       const first = await store.appendOperation(membership, event);
       const retry = await store.appendOperation(membership, event);
       expect(retry.serverSequence).toBe(first.serverSequence);
-      expect((await store.listOperations(provisioned.workspaceId, 0, 100)).items).toHaveLength(1);
+      expect(items(await store.listOperations(provisioned.workspaceId, 0, 100))).toHaveLength(1);
       await expect(store.appendOperation(membership, makeEvent(membership, replica.replicaId, randomUUID(), 1)))
         .rejects.toBeInstanceOf(StoreConflictError);
 
@@ -156,7 +163,7 @@ describe.skipIf(!databaseUrl)("PostgreSQL service store", () => {
       // The column being right is not enough -- the read paths a consumer uses have to
       // return it. This asserts on what listOperations/listPresence hand back, which is
       // what GET /v1/operations and GET /v1/presence serialize verbatim.
-      const listed = (await store.listOperations(owner.workspaceId, 0, 100)).items.find((item) => item.id === operationId);
+      const listed = items(await store.listOperations(owner.workspaceId, 0, 100)).find((item) => item.id === operationId);
       expect(listed?.projectId).toBe(first!.id);
       // The same value must survive the write path's own return, since that object is
       // what gets broadcast over the WebSocket immediately after ingest.
@@ -539,6 +546,77 @@ describe.skipIf(!databaseUrl)("PostgreSQL project keys", () => {
       expect(converged?.id).toBe(claimed?.id);
       expect((await store.getProject(owner.workspaceId, rootOnly!.id))?.repoRemote).toBeNull();
     } finally {
+      await store.close();
+    }
+  });
+
+});
+
+describe.skipIf(!databaseUrl)("PostgreSQL operation content storage", () => {
+  // File bodies are the bulk of this database, and they used to be written three times:
+  // operations.event (the envelope, whose payload is the transaction), operations.transaction
+  // (a verbatim copy of that payload), and operation_files.payload (a verbatim copy of each
+  // change inside it). Only the envelope stores them now; the other two are references.
+  it("stores a change's content exactly once, and reads back byte-identical operations", async () => {
+    const store = new PgStore(databaseUrl!);
+    let workspaceId: string | undefined;
+    try {
+      await store.migrate();
+      const userId = randomUUID();
+      const provisioned = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId, actorId: `owner-${randomUUID()}@example.com` });
+      workspaceId = provisioned.workspaceId;
+      const membership = await store.resolveMembership(userId, workspaceId);
+      const replica = await store.registerReplica(userId, workspaceId, `replica-${randomUUID()}`);
+
+      // A sentinel long and unique enough that counting its occurrences across whole rows
+      // is an exact census of where this file's body is stored.
+      const body = `sentinel-${randomUUID()}-${"x".repeat(64)}`;
+      const operationId = randomUUID();
+      const event = makeEvent(membership, replica.replicaId, operationId, 1);
+      event.payload = {
+        ...event.payload,
+        changes: [{ path: "src/big.ts", kind: "add", afterContent: body, afterHash: contentHash(body) }]
+      };
+      const stored = await store.appendOperation(membership, event);
+
+      const copies = await store.pool.query<{ operations: string; operation_files: string }>(
+        `SELECT
+           (SELECT coalesce(sum((length(o::text) - length(replace(o::text, $2, ''))) / length($2)), 0)
+              FROM operations o WHERE o.workspace_id = $1 AND o.id = $3) AS operations,
+           (SELECT coalesce(sum((length(f::text) - length(replace(f::text, $2, ''))) / length($2)), 0)
+              FROM operation_files f WHERE f.workspace_id = $1 AND f.operation_id = $3) AS operation_files`,
+        [workspaceId, body, operationId]
+      );
+      expect(Number(copies.rows[0]!.operations)).toBe(1);
+      expect(Number(copies.rows[0]!.operation_files)).toBe(0);
+      // operation_files is still the per-path index into the operation it always was.
+      const indexed = await store.pool.query<{ path: string; kind: string; after_hash: string | null }>(
+        "SELECT path, kind, after_hash FROM operation_files WHERE workspace_id = $1 AND operation_id = $2",
+        [workspaceId, operationId]
+      );
+      expect(indexed.rows).toEqual([{ path: "src/big.ts", kind: "add", after_hash: contentHash(body) }]);
+
+      // Byte-identity, not just deep equality. GET /v1/operations serializes whatever
+      // listOperations hands back, and the transaction now comes out of the envelope rather
+      // than the dropped operations.transaction column. `$1::jsonb` reproduces exactly what
+      // that column stored and returned -- same input, same jsonb canonicalization -- so
+      // comparing the serialized forms is comparing the response before and after the change.
+      const legacyColumn = await store.pool.query<{ transaction: unknown }>(
+        "SELECT $1::jsonb AS transaction", [JSON.stringify(event.payload)]
+      );
+      const listed = items(await store.listOperations(workspaceId, 0, 100)).find((item) => item.id === operationId)!;
+      expect(JSON.stringify(toRemoteOperation(listed))).toBe(JSON.stringify(
+        toRemoteOperation({ ...listed, transaction: legacyColumn.rows[0]!.transaction as typeof listed.transaction })
+      ));
+      // And the same for the object appendOperation returns, which is what the WebSocket
+      // fan-out broadcasts immediately after ingest.
+      expect(JSON.stringify(toRemoteOperation(stored))).toBe(JSON.stringify(toRemoteOperation(listed)));
+      expect(listed.transaction.changes[0]?.afterContent).toBe(body);
+    } finally {
+      if (workspaceId) {
+        await store.pool.query("DELETE FROM audit_events WHERE workspace_id = $1", [workspaceId]);
+        await store.pool.query("DELETE FROM workspaces WHERE id = $1", [workspaceId]);
+      }
       await store.close();
     }
   });

@@ -24,6 +24,13 @@ import type { WebSocketGateway } from "./ws.js";
  *   in-memory rate limiter counts per instance rather than globally. Routes whose limit is
  *   a security control rather than a courtesy must be backed by the database instead; see
  *   the durable limiter wired in below.
+ * - **The history-retention sweep.** main.ts runs it on an interval, which needs a process
+ *   that stays alive; there is none here. It is deliberately not started per request --
+ *   that would put a delete of the largest table on a user's latency path. Until this
+ *   deployment has a scheduled invocation (a platform cron calling a guarded endpoint, or
+ *   `pnpm service:prune` from anywhere with CROSSCODE_RETENTION_DATABASE_URL), operation
+ *   history on the function platform grows unbounded regardless of plan. Reads stay
+ *   correct either way: nothing is deleted, so no cursor is ever refused.
  */
 
 /** Broadcasts have nowhere to go without a persistent process; dropping them is safe. */

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { createSupabaseJwks } from "./auth.js";
 import { assertSafeServiceBinding, createServiceServer } from "./http.js";
+import { DEFAULT_SWEEP_INTERVAL_MS, startRetentionSweep } from "./retention.js";
 import { PgStore } from "./store.js";
 
 export async function main(environment: NodeJS.ProcessEnv = process.env): Promise<void> {
@@ -43,11 +44,13 @@ export async function main(environment: NodeJS.ProcessEnv = process.env): Promis
     throw error;
   }
   process.stdout.write(`Crosscode service listening on ${tls ? "https" : "http"}://${host}:${port}\n`);
+  const retention = startConfiguredRetentionSweep(environment);
   let stopping = false;
   const stop = async () => {
     if (stopping) return;
     stopping = true;
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await retention?.stop();
     await store.close();
   };
   const onSignal = () => void stop()
@@ -58,6 +61,42 @@ export async function main(environment: NodeJS.ProcessEnv = process.env): Promis
     });
   process.once("SIGINT", onSignal);
   process.once("SIGTERM", onSignal);
+}
+
+/**
+ * Enforces PLAN_LIMITS[plan].historyRetentionDays on a schedule, if this deployment gave it
+ * a role that can. DATABASE_URL deliberately cannot delete operations, so the sweep needs
+ * CROSSCODE_RETENTION_DATABASE_URL (or the MIGRATION_DATABASE_URL that already exists for
+ * `pnpm service:migrate`). Without one, retention only happens when an admin runs
+ * `pnpm service:prune`, which is worth saying out loud at startup rather than leaving the
+ * operator to discover from a growing bill.
+ */
+function startConfiguredRetentionSweep(environment: NodeJS.ProcessEnv) {
+  const databaseUrl = environment.CROSSCODE_RETENTION_DATABASE_URL ?? environment.MIGRATION_DATABASE_URL;
+  if (!databaseUrl) {
+    process.stdout.write("Crosscode retention sweep is disabled: set CROSSCODE_RETENTION_DATABASE_URL to a role with DELETE on operations, or run 'pnpm service:prune' manually\n");
+    return undefined;
+  }
+  const intervalMs = parseSweepIntervalMs(environment.CROSSCODE_RETENTION_SWEEP_MINUTES);
+  process.stdout.write(`Crosscode retention sweep running every ${Math.round(intervalMs / 60_000)} minute(s)\n`);
+  return startRetentionSweep({
+    databaseUrl,
+    intervalMs,
+    onSwept: (results) => {
+      for (const result of results) {
+        process.stdout.write(`Crosscode retention: workspace ${result.workspaceId} (${result.plan}, ${result.retentionDays}d) deleted ${result.deleted} operation(s) through sequence ${result.prunedThrough}\n`);
+      }
+    },
+    onError: (error: unknown) => {
+      process.stderr.write(`Crosscode retention sweep failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  });
+}
+
+function parseSweepIntervalMs(value: string | undefined): number {
+  if (value === undefined) return DEFAULT_SWEEP_INTERVAL_MS;
+  if (!/^\d+$/.test(value) || Number(value) < 1) throw new Error("CROSSCODE_RETENTION_SWEEP_MINUTES must be a positive integer");
+  return Number(value) * 60_000;
 }
 
 async function loadTls(environment: NodeJS.ProcessEnv) {

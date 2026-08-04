@@ -32,7 +32,7 @@ describe("service HTTP boundary", () => {
       registerReplica: async () => ({ replicaId: "replica-1", createdAt: "2026-01-01T00:00:00.000Z", projectId: null }),
       assertReplicaOwnership: async () => {},
       appendOperation: async () => operation,
-      listOperations: async () => ({ items: [operation], nextCursor: 1, hasMore: false })
+      listOperations: async () => ({ status: "ok", items: [operation], nextCursor: 1, hasMore: false })
     } as unknown as PgStore;
     const base = await listen(store);
     const accessToken = await signToken(membership.userId);
@@ -207,7 +207,7 @@ describe("service HTTP boundary", () => {
     unattributed.serverSequence = 2;
     const store = {
       resolveMembership: async () => membership,
-      listOperations: async () => ({ items: [attributed, unattributed], nextCursor: 2, hasMore: false }),
+      listOperations: async () => ({ status: "ok", items: [attributed, unattributed], nextCursor: 2, hasMore: false }),
       listPresence: async () => [
         { replicaId: "replica-1", actorId: membership.actorId, status: "online", lastSeenAt: "2026-01-01T00:00:00.000Z", cursor: 0, projectId },
         { replicaId: "replica-2", actorId: membership.actorId, status: "offline", lastSeenAt: null, cursor: null, projectId: null }
@@ -232,6 +232,39 @@ describe("service HTTP boundary", () => {
       ["replica-2", null]
     ]);
     expect(Object.keys(presence.data.sessions[1])).toContain("projectId");
+  });
+
+  // A cursor pointing below the retention watermark has exactly one honest answer, and it
+  // is not a page: serving the surviving rows (or an empty list, once everything the
+  // replica had not seen is deleted) is indistinguishable from "you are caught up", which
+  // is how a replica silently loses proposals forever.
+  it("answers a cursor below the retention watermark with a resync order, never a short page", async () => {
+    const store = {
+      resolveMembership: async () => membership,
+      listOperations: async () => ({ status: "cursor-too-old", resyncFrom: 42, retentionDays: 7 })
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken(membership.userId);
+    const headers = { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId };
+
+    const current = await fetch(`${base}/v1/operations?afterSequence=3&protocolVersion=2`, { headers });
+    expect(current.status).toBe(200);
+    expect(await current.json()).toEqual({
+      ok: true,
+      data: { status: "cursor-too-old", protocolVersion: 2, resyncFrom: 42, retentionDays: 7 }
+    });
+
+    // A daemon built before this status sends no protocolVersion. It must not receive a
+    // 200 at all: it would parse the body with cursorResponseSchema and, whatever that
+    // does, "the request succeeded" is the one conclusion it must never reach. A 410 lands
+    // in the sync-error path it already has.
+    const legacy = await fetch(`${base}/v1/operations?afterSequence=3`, { headers });
+    expect(legacy.status).toBe(410);
+    const legacyBody = await legacy.json() as { ok: boolean; error: string };
+    expect(legacyBody.ok).toBe(false);
+    expect(legacyBody.error).toContain("upgrade the daemon");
+
+    expect((await fetch(`${base}/v1/operations?afterSequence=3&protocolVersion=nope`, { headers })).status).toBe(400);
   });
 
   it("registers a replica with its repository so the replica is attributed to a project", async () => {

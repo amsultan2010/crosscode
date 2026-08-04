@@ -76,6 +76,32 @@ own cursor. `POST /v1/validations` / `GET /v1/validations` follow the same
 request/receipt/cursor/fan-out pattern as `task`/`claim`/`handoff`/`intent` above,
 letting replicas see each other's local validation results.
 
+## Reading operations, and history retention
+
+`GET /v1/operations?afterSequence=<n>` is how a replica resumes: it asks for everything
+after its last-known `server_sequence` and gets a `cursorResponseSchema` page back.
+
+That works only while the history is complete. Per-plan retention
+(`PLAN_LIMITS[plan].historyRetentionDays`) deletes operations once they age out, and a
+short page and "you are caught up" are the same message on this endpoint — so a replica
+whose cursor points into the deleted range would silently lose those proposals. The
+service therefore records, per workspace, the highest `server_sequence` retention has
+deleted, and refuses any cursor below it rather than answering with what survives:
+
+```ts
+{ status: "cursor-too-old"; protocolVersion: 2; resyncFrom: number; retentionDays: number }
+```
+
+`resyncFrom` is the oldest cursor that can still be served in full. A replica adopts it
+and continues from there. What it loses is proposals it never downloaded; Git remains the
+source of truth, so no committed or working-tree work is at stake.
+
+`protocolVersion` (a query parameter on the request, echoed in this response) versions this
+endpoint's answers, separately from the envelope's `schemaVersion`. A client that does not
+send `protocolVersion=2` predates the status above, so an unservable cursor is answered
+with `410 Gone` instead — a hard failure it already surfaces, rather than a body it might
+misread as success. `operationsResponseSchema` is the union a version-2 client parses.
+
 ## Relationship to the daemon's local event log
 
 The schemas above govern only what crosses the wire between a daemon and the

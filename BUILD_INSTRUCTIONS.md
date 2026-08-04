@@ -177,8 +177,8 @@ running at a loss; it is not the optimization target.
 
 The axes actually used:
 
-- **History retention** — bounds `operation_files.payload`, the only table that grows
-  without limit. This is the real cost governor.
+- **History retention** — bounds `operations`, the only table that grows without limit.
+  This is the real cost governor.
 - **Autonomy tier availability** — auto-always (Phase 9) is the "I trust it now" moment,
   which is the honest point to ask for money.
 - **Org controls** — SSO, audit export, SLA. What organizations actually buy.
@@ -215,14 +215,6 @@ ever stop working.
 **Not yet done:**
 
 - The Stripe account itself, and therefore any real checkout.
-- **Retention is declared but not enforced.** `PLAN_LIMITS[plan].historyRetentionDays` is
-  surfaced to users and is the intended cost governor, but nothing prunes against it yet.
-  This is not a small wiring job: `apps/service/src/prune.ts` deliberately refuses to touch
-  `operations` because cursor-based reconnect lets a long-offline replica download
-  everything after its last-known cursor, and age-pruning would silently break that
-  guarantee. A safe implementation needs either (a) pruning only below the minimum cursor
-  across live replicas, or (b) a defined "cursor too old, resync from Git" protocol
-  response. Until one of those exists, storage is unbounded on every plan.
 - Per-seat pricing mechanics for Team (the plan enforces Unlimited's caps today; the
   per-seat *charge* has no implementation because there is no billing provider).
 
@@ -240,6 +232,18 @@ ever stop working.
   address, where daemons throttled each other. `POST /v1/pairing-codes/claim` stays per-IP
   at 10/min: it is unauthenticated, so there is no identity to charge, and that limit is the
   brute-force defense for the 40-bit code space.
+
+**Retention is enforced** (option (b) of the two designs sketched here previously).
+`PgStore.pruneOperationsByRetention()` deletes each workspace's operations outside
+`PLAN_LIMITS[plan].historyRetentionDays` and records how far it reached in
+`workspaces.operations_pruned_through`. `GET /v1/operations` answers a cursor below that
+watermark with an explicit `cursor-too-old` resync status (`410 Gone` for daemons that
+predate it) instead of a truncated page, and the daemon adopts the watermark and reports
+the gap — see docs/protocol.md. The sweep runs on a service-side interval configured with
+`CROSSCODE_RETENTION_DATABASE_URL` (the request-serving role deliberately cannot delete
+operations); `pnpm service:prune` runs it manually. Content is also no longer stored
+twice: `operations.event` is the single home of a transaction's file bodies, and
+`operation_files` is a per-path index into it.
 
 `assertSemanticReviewCallAvailable` is deliberately left unwired rather than pending: semantic review is delegated to the member's own MCP agent and never reaches the service, so there is no per-call cost to meter, and wiring it would mean adding a network round-trip before every local review purely to bill for it (see the comment above `incrementSemanticReviewUsage` in `apps/service/src/billing.ts`). Every plan now carries an unlimited cap for it, so it can never fire.
 

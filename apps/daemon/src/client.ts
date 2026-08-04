@@ -22,7 +22,7 @@ type Status = {
   eventSequence: number;
   remoteCursor: number;
   pendingOutbound: number;
-  service: { configured: boolean; online: boolean; lastSyncAt?: string; lastSyncError?: string };
+  service: { configured: boolean; online: boolean; lastSyncAt?: string; lastSyncError?: string; lastResyncAt?: string; lastResyncMessage?: string };
 };
 
 /**

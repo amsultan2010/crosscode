@@ -11,6 +11,8 @@ import {
   createWorkspaceRequestSchema,
   createWorkspaceResponseSchema,
   cursorQuerySchema,
+  cursorTooOldResponseSchema,
+  OPERATIONS_PROTOCOL_VERSION,
   handoffIngestRequestSchema,
   handoffIngestReceiptSchema,
   intentIngestRequestSchema,
@@ -462,8 +464,27 @@ async function handleRequest(
     if (!/^\d+$/.test(rawCursor)) throw new HttpError(400, "afterSequence must be a non-negative integer");
     const afterSequence = Number(rawCursor);
     if (!Number.isSafeInteger(afterSequence)) throw new HttpError(400, "afterSequence is outside the supported range");
+    // Absent means version 1: a daemon built before the cursor-too-old status existed.
+    const rawVersion = url.searchParams.get("protocolVersion");
+    if (rawVersion !== null && !/^\d+$/.test(rawVersion)) throw new HttpError(400, "protocolVersion must be a positive integer");
+    const clientProtocolVersion = rawVersion === null ? 1 : Number(rawVersion);
     const query = cursorQuerySchema.parse({ afterSequence });
     const page = await options.store.listOperations(identity.workspaceId, query.afterSequence, 200);
+    if (page.status === "cursor-too-old") {
+      // Never answer this with a 200 page. Serving what survives would be indistinguishable
+      // from "caught up" and would silently drop every proposal retention deleted, which is
+      // the whole failure this status exists to prevent.
+      if (clientProtocolVersion < OPERATIONS_PROTOCOL_VERSION) {
+        throw new HttpError(410, `Operations before ${page.resyncFrom} are outside this workspace's ${page.retentionDays}-day history retention and have been deleted; upgrade the daemon to resynchronize automatically`);
+      }
+      send(response, 200, cursorTooOldResponseSchema.parse({
+        status: "cursor-too-old",
+        protocolVersion: OPERATIONS_PROTOCOL_VERSION,
+        resyncFrom: page.resyncFrom,
+        retentionDays: page.retentionDays
+      }));
+      return;
+    }
     send(response, 200, {
       operations: page.items.map(toRemoteOperation),
       nextCursor: page.nextCursor
@@ -724,7 +745,8 @@ async function readJson(request: IncomingMessage, maximumBytes: number): Promise
   }
 }
 
-function toRemoteOperation(operation: StoredOperation): RemoteOperation {
+/** Exported so tests can assert on the exact bytes `GET /v1/operations` serializes. */
+export function toRemoteOperation(operation: StoredOperation): RemoteOperation {
   return {
     id: operation.id,
     eventId: operation.eventId,

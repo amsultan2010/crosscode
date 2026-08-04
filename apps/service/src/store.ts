@@ -1,13 +1,13 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type {
-  ChangeTransaction, Claim, ClaimCreatedEvent, ClaimReleasedEvent, EventEnvelope, Handoff, HandoffRequestedEvent,
+  Claim, ClaimCreatedEvent, ClaimReleasedEvent, EventEnvelope, Handoff, HandoffRequestedEvent,
   HandoffRespondedEvent, Intent, IntentPublishedEvent, PairingStatus, Project, RemoteClaim, RemoteHandoff, RemoteIntent,
   RemoteOperation, RemoteTask, RemoteValidation, Task, TaskCreatedEvent, TaskUpdatedEvent, TransactionCreatedEvent, Validation, ValidationCompletedEvent
 } from "@crosscode/protocol";
 import { PAIRING_CODE_ALPHABET, PAIRING_CODE_TTL_MS, WORKSPACE_TOKEN_PREFIX } from "@crosscode/protocol";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
-import { assertPlanAllowsAutonomyTier, assertSeatCapAvailable, assertSelfServeWorkspaceAvailable, type AutonomyTier, type Plan } from "./billing.js";
+import { assertPlanAllowsAutonomyTier, assertSeatCapAvailable, assertSelfServeWorkspaceAvailable, PLAN_LIMITS, type AutonomyTier, type Plan } from "./billing.js";
 import { hashCanonicalPayload } from "./crypto.js";
 import { normalizeRepoRemote, normalizeRepoRoot, projectNameFrom } from "./projects.js";
 
@@ -22,6 +22,26 @@ export class StoreGoneError extends Error {}
 
 export type StoredOperation = RemoteOperation & {
   event: EventEnvelope;
+};
+
+/**
+ * One page of the operation history, or a refusal to answer this cursor at all because
+ * retention has deleted the rows it asks for. `resyncFrom` is the oldest cursor that can
+ * still be served completely; `retentionDays` is the plan window that caused the deletion,
+ * so the message a client shows can name it.
+ */
+export type OperationPage =
+  | { status: "ok"; items: StoredOperation[]; nextCursor: number; hasMore: boolean }
+  | { status: "cursor-too-old"; resyncFrom: number; retentionDays: number };
+
+/** What one workspace's retention sweep did; `deleted: 0` means it was already inside its window. */
+export type RetentionSweepResult = {
+  workspaceId: string;
+  plan: Plan;
+  retentionDays: number;
+  deleted: number;
+  /** The watermark after the sweep: the highest server_sequence no longer present. */
+  prunedThrough: number;
 };
 
 export type PresenceSummary = {
@@ -175,6 +195,8 @@ export class PgStore {
       await client.query(teamPlanSql);
       const rateLimitsSql = await readFile(new URL("../migrations/012_rate_limits.sql", import.meta.url), "utf8");
       await client.query(rateLimitsSql);
+      const contentHomeSql = await readFile(new URL("../migrations/013_single_content_home_and_retention.sql", import.meta.url), "utf8");
+      await client.query(contentHomeSql);
     } finally {
       await client.query("SELECT pg_advisory_unlock(hashtext('crosscode_migrate'))");
       client.release();
@@ -841,7 +863,7 @@ export class PgStore {
       if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
 
       const duplicate = await client.query<OperationRow>(
-        `SELECT id, workspace_id, replica_id, project_id, event, transaction, server_sequence, created_at, payload_hash
+        `SELECT id, workspace_id, replica_id, project_id, event, server_sequence, created_at, payload_hash
            FROM operations
           WHERE workspace_id = $1
             AND (id = $2 OR event_id = $3 OR (replica_id = $4 AND client_sequence = $5))`,
@@ -865,23 +887,31 @@ export class PgStore {
         // the replica already declared its repository at registration, and a client must
         // not be able to attribute its edits to an arbitrary project. NULL when the
         // replica registered before projects existed.
+        //
+        // `event` is the single home of this operation's content: its payload is the
+        // ChangeTransaction, whose changes[].afterContent are the file bodies. Nothing
+        // else stores those bytes -- mapOperation() reads the transaction back out of
+        // this column, and operation_files below indexes into it by path.
         `INSERT INTO operations
           (id, workspace_id, event_id, client_sequence, server_sequence, replica_id, member_id,
-           actor_id, payload_hash, event, transaction, project_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb,
+           actor_id, payload_hash, event, project_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb,
                  (SELECT project_id FROM replicas WHERE id = $6 AND workspace_id = $2))
-         RETURNING id, workspace_id, replica_id, project_id, event, transaction, server_sequence, created_at, payload_hash`,
+         RETURNING id, workspace_id, replica_id, project_id, event, server_sequence, created_at, payload_hash`,
         [
           transaction.id, identity.workspaceId, event.id, event.clientSequence, sequence, event.replicaId,
-          identity.memberId, identity.actorId, payloadHash, JSON.stringify(storedEvent), JSON.stringify(transaction)
+          identity.memberId, identity.actorId, payloadHash, JSON.stringify(storedEvent)
         ]
       );
+      // A per-path index into the operation above, not a second copy of it: path, kind and
+      // the two hashes are what a "who else touched this file" query needs, and the change
+      // itself (content included) is reachable from (workspace_id, operation_id, path).
       for (const file of transaction.changes) {
         await client.query(
           `INSERT INTO operation_files
-            (workspace_id, operation_id, path, kind, before_hash, after_hash, payload)
-           VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
-          [identity.workspaceId, transaction.id, file.path, file.kind, file.beforeHash ?? null, file.afterHash ?? null, JSON.stringify(file)]
+            (workspace_id, operation_id, path, kind, before_hash, after_hash)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [identity.workspaceId, transaction.id, file.path, file.kind, file.beforeHash ?? null, file.afterHash ?? null]
         );
       }
       await client.query("UPDATE workspaces SET next_sequence = $2 WHERE id = $1", [identity.workspaceId, sequence]);
@@ -932,11 +962,36 @@ export class PgStore {
     });
   }
 
-  async listOperations(workspaceId: string, cursor: number, limit: number): Promise<{
-    items: StoredOperation[]; nextCursor: number; hasMore: boolean;
-  }> {
+  /**
+   * Cursor-based reconnect, with retention made explicit.
+   *
+   * A replica resumes by asking for everything after its last-known server_sequence, so a
+   * short answer and "you are caught up" are the same message on the wire. Once retention
+   * deletes rows, that ambiguity becomes silent proposal loss: a replica whose cursor sits
+   * below the deleted range would be handed whatever survives -- possibly nothing -- and
+   * conclude it had seen everything.
+   *
+   * operations_pruned_through is what removes the ambiguity. Retention only ever deletes a
+   * prefix of the sequence, so every sequence above the watermark is still present and any
+   * cursor at or above it can be answered completely. A cursor below it is answered with
+   * "cursor-too-old" instead, which callers must surface as a resync rather than a page.
+   */
+  async listOperations(workspaceId: string, cursor: number, limit: number): Promise<OperationPage> {
+    const workspace = await this.pool.query<{ plan: Plan; operations_pruned_through: string }>(
+      "SELECT plan, operations_pruned_through FROM workspaces WHERE id = $1",
+      [workspaceId]
+    );
+    if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
+    const prunedThrough = Number(workspace.rows[0].operations_pruned_through);
+    if (cursor < prunedThrough) {
+      return {
+        status: "cursor-too-old",
+        resyncFrom: prunedThrough,
+        retentionDays: PLAN_LIMITS[workspace.rows[0].plan].historyRetentionDays
+      };
+    }
     const result = await this.pool.query<OperationRow>(
-      `SELECT id, workspace_id, replica_id, project_id, event, transaction, server_sequence, created_at
+      `SELECT id, workspace_id, replica_id, project_id, event, server_sequence, created_at
          FROM operations
         WHERE workspace_id = $1 AND server_sequence > $2
         ORDER BY server_sequence ASC
@@ -944,7 +999,7 @@ export class PgStore {
       [workspaceId, cursor, limit + 1]
     );
     const items = result.rows.slice(0, limit).map(mapOperation);
-    return { items, nextCursor: items.at(-1)?.serverSequence ?? cursor, hasMore: result.rows.length > limit };
+    return { status: "ok", items, nextCursor: items.at(-1)?.serverSequence ?? cursor, hasMore: result.rows.length > limit };
   }
 
   async upsertTask(identity: Membership, event: TaskCreatedEvent | TaskUpdatedEvent): Promise<RemoteTask> {
@@ -1205,6 +1260,63 @@ export class PgStore {
     return result.rowCount ?? result.rows.length;
   }
 
+  /**
+   * Enforces PLAN_LIMITS[plan].historyRetentionDays across every workspace. Safe to run
+   * concurrently with ingest and with itself: each workspace is swept under its own row
+   * lock, and the watermark only ever moves forward.
+   *
+   * Requires a role with DELETE on operations, which the request-serving role deliberately
+   * does not have (assertRuntimePrivileges). Callers pass a privileged connection: the
+   * scheduled sweep in retention.ts, or `pnpm service:prune`.
+   */
+  async pruneOperationsByRetention(): Promise<RetentionSweepResult[]> {
+    const workspaces = await this.pool.query<{ id: string; plan: Plan }>("SELECT id, plan FROM workspaces ORDER BY id");
+    const results: RetentionSweepResult[] = [];
+    for (const workspace of workspaces.rows) {
+      results.push(await this.pruneWorkspaceOperations(workspace.id, workspace.plan));
+    }
+    return results;
+  }
+
+  private async pruneWorkspaceOperations(workspaceId: string, plan: Plan): Promise<RetentionSweepResult> {
+    const retentionDays = PLAN_LIMITS[plan].historyRetentionDays;
+    assertPositiveInteger(retentionDays, "historyRetentionDays");
+    return this.transaction(async (client) => {
+      const locked = await client.query<{ operations_pruned_through: string }>(
+        "SELECT operations_pruned_through FROM workspaces WHERE id = $1 FOR UPDATE",
+        [workspaceId]
+      );
+      const unchanged = { workspaceId, plan, retentionDays, deleted: 0 };
+      if (!locked.rows[0]) return { ...unchanged, prunedThrough: 0 };
+      const prunedThrough = Number(locked.rows[0].operations_pruned_through);
+      // Deleted by sequence, never directly by age. server_sequence is assigned under the
+      // workspace row lock while created_at is the inserting transaction's clock, so two
+      // concurrent ingests can commit with their timestamps inverted relative to their
+      // sequences. Deleting everything at or below the newest expired sequence keeps what
+      // remains a contiguous suffix -- which is precisely what the watermark promises
+      // readers -- at the cost of occasionally taking one barely-inside-the-window row
+      // with it.
+      const cutoff = await client.query<{ cutoff: string | null }>(
+        `SELECT max(server_sequence) AS cutoff
+           FROM operations
+          WHERE workspace_id = $1 AND created_at < now() - ($2 || ' days')::interval`,
+        [workspaceId, retentionDays]
+      );
+      const cutoffSequence = Number(cutoff.rows[0]?.cutoff ?? 0);
+      if (cutoffSequence <= prunedThrough) return { ...unchanged, prunedThrough };
+      // operation_files rows follow via ON DELETE CASCADE.
+      const deleted = await client.query(
+        "DELETE FROM operations WHERE workspace_id = $1 AND server_sequence <= $2",
+        [workspaceId, cutoffSequence]
+      );
+      await client.query(
+        "UPDATE workspaces SET operations_pruned_through = $2 WHERE id = $1",
+        [workspaceId, cutoffSequence]
+      );
+      return { workspaceId, plan, retentionDays, deleted: deleted.rowCount ?? 0, prunedThrough: cutoffSequence };
+    });
+  }
+
   async pruneEndedSessions(olderThanDays: number): Promise<number> {
     assertPositiveInteger(olderThanDays, "olderThanDays");
     const result = await this.pool.query(
@@ -1251,8 +1363,8 @@ type OperationRow = {
   workspace_id: string;
   replica_id: string;
   project_id: string | null;
-  event: EventEnvelope;
-  transaction: ChangeTransaction;
+  /** The stored transaction.created envelope; its payload is this operation's transaction. */
+  event: TransactionCreatedEvent;
   server_sequence: string;
   created_at: Date;
   payload_hash?: string;
@@ -1266,7 +1378,11 @@ function mapOperation(row: OperationRow): StoredOperation {
     senderReplicaId: row.replica_id,
     projectId: row.project_id,
     event: row.event,
-    transaction: row.transaction,
+    // Read out of the envelope rather than from a column of its own. jsonb canonicalizes
+    // a value the same way wherever it is stored, so this is byte-for-byte what the
+    // dropped operations.transaction column returned -- see the byte-identity assertion
+    // in store.integration.test.ts.
+    transaction: row.event.payload,
     serverSequence: Number(row.server_sequence),
     createdAt: new Date(row.created_at).toISOString()
   };
