@@ -547,7 +547,8 @@ describe("service HTTP boundary", () => {
         currentMemberCount: 2,
         semanticReviewCallsPerMonth: null,
         semanticReviewCallsUsedThisMonth: 0,
-        autonomyTiers: ["always-ask", "auto-if-clean", "auto-always"]
+        autonomyTiers: ["always-ask", "auto-if-clean", "auto-always"],
+        historyRetentionDays: 365
       }
     });
   });

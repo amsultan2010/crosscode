@@ -12,6 +12,7 @@ import {
   type DaemonConfig, type DaemonConnection, type PresenceUpdate
 } from "@crosscode/protocol";
 import { cliSignInUrl, openInBrowser, startLoginCallbackServer } from "./browser-login.js";
+import { resolveDefaultServiceUrl } from "./hosted.js";
 import { startDaemon, type RunningDaemon } from "./index.js";
 import { CoordinationServiceClient, type CoordinationServiceIdentity } from "./service-client.js";
 import { LiveSyncClient } from "./ws-client.js";
@@ -67,8 +68,7 @@ export type LoggedIn = { config: DaemonConfig; user: { id: string; email: string
 /** Headless/agent login: credentials in, session persisted, nothing to open. */
 export async function login(directory: string, credentials: { email: string; password: string; serviceUrl?: string }): Promise<LoggedIn> {
   const config = await loginTarget(directory);
-  const serviceUrl = credentials.serviceUrl ?? config.service?.url;
-  if (!serviceUrl) throw new Error("A service URL is required to log in; pass --service or run `crosscode join` first");
+  const serviceUrl = credentials.serviceUrl ?? config.service?.url ?? resolveDefaultServiceUrl();
   const supabase = getSupabaseClient();
   const { data, error } = await supabase.auth.signInWithPassword({ email: credentials.email, password: credentials.password });
   if (error || !data.session) throw new Error(`Supabase sign-in failed: ${error?.message ?? "no session returned"}`);
@@ -87,8 +87,7 @@ export async function browserLogin(
   options: { webUrl: string; serviceUrl?: string; openBrowser?: boolean; timeoutMs?: number; onUrl?: (url: string) => void }
 ): Promise<LoggedIn> {
   const config = await loginTarget(directory);
-  const serviceUrl = options.serviceUrl ?? config.service?.url;
-  if (!serviceUrl) throw new Error("A service URL is required to log in; pass --service or run `crosscode join` first");
+  const serviceUrl = options.serviceUrl ?? config.service?.url ?? resolveDefaultServiceUrl();
   const server = await startLoginCallbackServer({ timeoutMs: options.timeoutMs });
   try {
     const url = cliSignInUrl(options.webUrl, server.port, server.state);
@@ -126,8 +125,7 @@ async function loginTarget(directory: string): Promise<DaemonConfig> {
 export async function signup(directory: string, credentials: { email: string; password: string; invite?: string; workspaceName?: string; serviceUrl?: string }): Promise<DaemonConfig> {
   const config = await readDaemonConfig(directory).catch(() => undefined);
   if (!config) throw new Error("Run `crosscode init` before `crosscode signup`");
-  const serviceUrl = credentials.serviceUrl ?? config.service?.url;
-  if (!serviceUrl) throw new Error("A service URL is required to sign up; pass --service or run `crosscode join` first");
+  const serviceUrl = credentials.serviceUrl ?? config.service?.url ?? resolveDefaultServiceUrl();
   const supabase = getSupabaseClient();
   const { data, error } = await supabase.auth.signUp({ email: credentials.email, password: credentials.password });
   if (error || !data.session) {

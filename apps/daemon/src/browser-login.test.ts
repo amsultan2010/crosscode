@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { BrowserLoginError, cliSignInUrl, resolveWebUrl, startLoginCallbackServer, type LoginCallbackServer } from "./browser-login.js";
+import { cliSignInUrl, resolveWebUrl, startLoginCallbackServer, type LoginCallbackServer } from "./browser-login.js";
+import { DEFAULT_WEB_URL } from "./hosted.js";
 
 async function post(server: LoginCallbackServer, body: unknown): Promise<Response> {
   return fetch(`http://127.0.0.1:${server.port}/callback`, {
@@ -91,7 +92,7 @@ describe("sign-in URL resolution", () => {
     expect(cliSignInUrl("https://example.test", 5678, "abc")).toBe("https://example.test/auth/cli.html?port=5678&state=abc");
   });
 
-  it("prefers --web, then CROSSCODE_WEB_URL, and errors actionably when neither is set", () => {
+  it("prefers --web, then CROSSCODE_WEB_URL, then the hosted default", () => {
     const previousWeb = process.env.CROSSCODE_WEB_URL;
     const previousDashboard = process.env.CROSSCODE_DASHBOARD_URL;
     try {
@@ -100,7 +101,9 @@ describe("sign-in URL resolution", () => {
       expect(resolveWebUrl()).toBe("https://env.test");
       delete process.env.CROSSCODE_WEB_URL;
       delete process.env.CROSSCODE_DASHBOARD_URL;
-      expect(() => resolveWebUrl()).toThrow(BrowserLoginError);
+      // Falling back to the hosted site is what makes bare `crosscode login` work.
+      expect(resolveWebUrl()).toBe(DEFAULT_WEB_URL);
+      expect(DEFAULT_WEB_URL).not.toMatch(/\/$/);
     } finally {
       if (previousWeb === undefined) delete process.env.CROSSCODE_WEB_URL; else process.env.CROSSCODE_WEB_URL = previousWeb;
       if (previousDashboard === undefined) delete process.env.CROSSCODE_DASHBOARD_URL; else process.env.CROSSCODE_DASHBOARD_URL = previousDashboard;

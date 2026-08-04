@@ -1,19 +1,38 @@
 import type { PgStore } from "./store.js";
 
-export type Plan = "free" | "essential" | "pro" | "unlimited" | "student";
+export type Plan = "free" | "essential" | "pro" | "unlimited" | "team" | "student";
 export type AutonomyTier = "always-ask" | "auto-if-clean" | "auto-always";
 
 export class BillingLimitError extends Error {}
 
-// Draft caps from BUILD_INSTRUCTIONS.md Phase 10, "subject to real usage data once
-// Phase 8 ships." Student mirrors Pro's limits at Essential's price (verification is
-// enforced elsewhere, not by these caps).
-export const PLAN_LIMITS: Record<Plan, { seatCap: number; semanticReviewCallsPerMonth: number; autonomyTiers: readonly AutonomyTier[] }> = {
-  free: { seatCap: 3, semanticReviewCallsPerMonth: 0, autonomyTiers: ["always-ask"] },
-  essential: { seatCap: 3, semanticReviewCallsPerMonth: 200, autonomyTiers: ["always-ask"] },
-  pro: { seatCap: 10, semanticReviewCallsPerMonth: 1000, autonomyTiers: ["always-ask", "auto-if-clean"] },
-  unlimited: { seatCap: Infinity, semanticReviewCallsPerMonth: Infinity, autonomyTiers: ["always-ask", "auto-if-clean", "auto-always"] },
-  student: { seatCap: 10, semanticReviewCallsPerMonth: 1000, autonomyTiers: ["always-ask", "auto-if-clean"] }
+const ALL_AUTONOMY_TIERS: readonly AutonomyTier[] = ["always-ask", "auto-if-clean", "auto-always"];
+
+// Adoption-first ladder (BUILD_INSTRUCTIONS.md Phase 10). Two axes are deliberately NOT
+// walls:
+//
+// - Semantic review is unlimited on every plan including free. It runs on the member's
+//   own connected MCP agent and costs Crosscode nothing (see incrementSemanticReviewUsage
+//   below), so capping it would be arbitrary friction rather than cost recovery.
+// - Seats are generous below Team, because a workspace gets more valuable the more people
+//   are in it. Charging per head below the org tier taxes the one loop that grows usage.
+//
+// What is left as a wall: auto-always autonomy (the "I trust it now" moment) and
+// historyRetentionDays, which bounds the only table that grows without limit
+// (operation_files.payload). Team is differentiated by org controls -- SSO, audit export
+// -- not by seat count, which is why it shares Unlimited's caps. Student mirrors Pro's
+// limits at Essential's price (verification is enforced elsewhere, not by these caps).
+export const PLAN_LIMITS: Record<Plan, {
+  seatCap: number;
+  semanticReviewCallsPerMonth: number;
+  autonomyTiers: readonly AutonomyTier[];
+  historyRetentionDays: number;
+}> = {
+  free: { seatCap: 5, semanticReviewCallsPerMonth: Infinity, autonomyTiers: ["always-ask", "auto-if-clean"], historyRetentionDays: 7 },
+  essential: { seatCap: 10, semanticReviewCallsPerMonth: Infinity, autonomyTiers: ALL_AUTONOMY_TIERS, historyRetentionDays: 30 },
+  pro: { seatCap: 25, semanticReviewCallsPerMonth: Infinity, autonomyTiers: ALL_AUTONOMY_TIERS, historyRetentionDays: 90 },
+  unlimited: { seatCap: Infinity, semanticReviewCallsPerMonth: Infinity, autonomyTiers: ALL_AUTONOMY_TIERS, historyRetentionDays: 365 },
+  team: { seatCap: Infinity, semanticReviewCallsPerMonth: Infinity, autonomyTiers: ALL_AUTONOMY_TIERS, historyRetentionDays: 365 },
+  student: { seatCap: 25, semanticReviewCallsPerMonth: Infinity, autonomyTiers: ALL_AUTONOMY_TIERS, historyRetentionDays: 90 }
 };
 
 export function assertSeatCapAvailable(plan: Plan, currentMemberCount: number): void {
@@ -71,6 +90,7 @@ export type WorkspaceBillingStatus = {
   semanticReviewCallsPerMonth: number;
   semanticReviewCallsUsedThisMonth: number;
   autonomyTiers: readonly AutonomyTier[];
+  historyRetentionDays: number;
 };
 
 // Read-only summary for the CLI's `crosscode billing status`.
@@ -102,7 +122,8 @@ export async function getWorkspaceBillingStatus(store: PgStore, workspaceId: str
     currentMemberCount,
     semanticReviewCallsPerMonth: limits.semanticReviewCallsPerMonth,
     semanticReviewCallsUsedThisMonth,
-    autonomyTiers: limits.autonomyTiers
+    autonomyTiers: limits.autonomyTiers,
+    historyRetentionDays: limits.historyRetentionDays
   };
 }
 

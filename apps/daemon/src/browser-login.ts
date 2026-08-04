@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { platform } from "node:os";
 import { z } from "zod";
+import { DEFAULT_WEB_URL } from "./hosted.js";
 
 /** No callback within this window means the person never finished signing in. */
 export const LOGIN_CALLBACK_TIMEOUT_MS = 300_000;
@@ -131,19 +132,12 @@ export function cliSignInUrl(webUrl: string, port: number, state: string): strin
 }
 
 /**
- * Base URL of the crosscode website. There is no fixed hosted domain yet (see README), so
- * this stays explicit rather than guessing one: `--web`, then `CROSSCODE_WEB_URL`, then the
- * `CROSSCODE_DASHBOARD_URL` the MCP server already uses to name a deployed site.
+ * Base URL of the crosscode website: `--web`, then `CROSSCODE_WEB_URL`, then the
+ * `CROSSCODE_DASHBOARD_URL` the MCP server already uses to name a deployed site, then the
+ * hosted default. Self-hosters override with any of the first three.
  */
 export function resolveWebUrl(explicit?: string): string {
-  const url = explicit ?? process.env.CROSSCODE_WEB_URL ?? process.env.CROSSCODE_DASHBOARD_URL;
-  if (!url) {
-    throw new BrowserLoginError(
-      "WEB_URL_REQUIRED",
-      "No crosscode website URL is configured, so there is nowhere to open the sign-in page",
-      "Pass `--web <url>` or set CROSSCODE_WEB_URL, or log in headlessly with `--email <email> --password <password>`."
-    );
-  }
+  const url = explicit ?? process.env.CROSSCODE_WEB_URL ?? process.env.CROSSCODE_DASHBOARD_URL ?? DEFAULT_WEB_URL;
   return url.replace(/\/+$/, "");
 }
 
