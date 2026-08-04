@@ -82,6 +82,38 @@ export type ServiceServerOptions = {
   onError?: (error: unknown) => void;
 };
 
+/**
+ * ServiceServerOptions plus the per-request hook that charges an authenticated caller's
+ * own quota. Set once per request in handleRequest and consumed by verifyToken() and
+ * authenticate(), which is why it is internal rather than part of the public options type.
+ */
+type RequestOptions = ServiceServerOptions & {
+  /** Throws 429 when this identity has exhausted its own per-minute budget for the route. */
+  chargeIdentity?: (identityKey: string) => void;
+};
+
+/**
+ * Rate limits are two-layered, because keying everything on the client IP is wrong in both
+ * directions at once: too loose against a single abusive account (which can rotate IPs, or
+ * simply push ~432k events/day from one), and far too tight for an office or CI fleet behind
+ * one NAT egress address, where ten legitimate daemons share a single bucket and throttle
+ * each other into looking like the service is broken.
+ *
+ * So: a coarse per-IP ceiling that runs before authentication (the only signal available
+ * that early, and a guard against unauthenticated floods), and the real quota charged
+ * per authenticated identity once one is known.
+ */
+const IP_RATE_PER_MINUTE = 3_000;
+const IDENTITY_RATE_PER_MINUTE = 600;
+/** Replica registration is once-per-checkout; nobody legitimately does it in volume. */
+const IDENTITY_REPLICA_RATE_PER_MINUTE = 30;
+/**
+ * Claiming is unauthenticated and single-use, so there is no identity to charge and per-IP
+ * throttling is the only thing standing between an attacker and brute-forcing the 40-bit
+ * code space (Contract A). Deliberately unchanged, and deliberately still per-IP.
+ */
+const UNAUTHENTICATED_IP_RATE_PER_MINUTE = 10;
+
 const JSON_TYPE = "application/json";
 
 // Supabase-issued access tokens only carry the auth.users id (sub) — they no longer
@@ -120,10 +152,11 @@ export function createServiceServer(options: ServiceServerOptions): Server {
 async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  options: ServiceServerOptions,
+  baseOptions: ServiceServerOptions,
   limiter: FixedWindowRateLimiter,
   gateway: ReturnType<typeof attachWebSocketGateway>
 ): Promise<void> {
+  const options: RequestOptions = baseOptions;
   response.setHeader("cache-control", "no-store");
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", "http://service.local");
@@ -137,14 +170,27 @@ async function handleRequest(
   }
   const route = rateLimitRoute(method, url.pathname);
   const remote = clientAddress(request, options.trustProxy);
-  // Claiming is unauthenticated and single-use, so per-IP throttling is the only thing
-  // standing between an attacker and brute-forcing the 40-bit code space (Contract A).
-  const rate = route === "POST /v1/replicas" || route === "POST /v1/pairing-codes/claim" ? 10 : 300;
-  if (!limiter.take(`${remote}:${route}`, rate)) {
+  // Layer one, pre-auth: per-IP. Tight only where there is no identity to charge instead.
+  const ipRate = route === "POST /v1/pairing-codes/claim"
+    ? UNAUTHENTICATED_IP_RATE_PER_MINUTE
+    : IP_RATE_PER_MINUTE;
+  if (!limiter.take(`ip:${remote}:${route}`, ipRate)) {
     response.setHeader("retry-after", "60");
     sendError(response, 429, "Rate limit exceeded");
     return;
   }
+  // Layer two, post-auth: the real quota, charged against whoever the caller turns out to
+  // be rather than the address they happen to share. verifyToken()/authenticate() call this
+  // as soon as an identity is established.
+  options.chargeIdentity = (identityKey: string): void => {
+    const identityRate = route === "POST /v1/replicas"
+      ? IDENTITY_REPLICA_RATE_PER_MINUTE
+      : IDENTITY_RATE_PER_MINUTE;
+    if (!limiter.take(`id:${identityKey}:${route}`, identityRate)) {
+      response.setHeader("retry-after", "60");
+      throw new HttpError(429, "Rate limit exceeded");
+    }
+  };
 
   if (method === "GET" && url.pathname === "/healthz") {
     send(response, 200, { status: "ok" });
@@ -556,18 +602,21 @@ function bearerToken(request: IncomingMessage): string {
 // for the self-serve routes (create workspace, redeem invite, list memberships) that a
 // brand-new Supabase user must be able to call before they belong to any workspace. These
 // routes act as the user, so a workspace token is refused outright rather than verified.
-async function verifyToken(request: IncomingMessage, options: ServiceServerOptions): Promise<{ userId: string; email: string | undefined }> {
+async function verifyToken(request: IncomingMessage, options: RequestOptions): Promise<{ userId: string; email: string | undefined }> {
   const token = bearerToken(request);
   if (token.startsWith(WORKSPACE_TOKEN_PREFIX)) throw new HttpError(403, "Workspace tokens cannot act on behalf of a user");
+  let claims;
   try {
-    const claims = await verifySupabaseAccessToken(token, options.jwks, options.supabaseUrl);
-    return { userId: claims.userId, email: claims.email };
+    claims = await verifySupabaseAccessToken(token, options.jwks, options.supabaseUrl);
   } catch {
     throw new HttpError(401, "Access token is invalid or expired");
   }
+  // Outside the try: a 429 from the quota must not be swallowed and reported as a bad token.
+  options.chargeIdentity?.(`user:${claims.userId}`);
+  return { userId: claims.userId, email: claims.email };
 }
 
-async function authenticate(request: IncomingMessage, options: ServiceServerOptions): Promise<Identity> {
+async function authenticate(request: IncomingMessage, options: RequestOptions): Promise<Identity> {
   const token = bearerToken(request);
   // A workspace token already names its workspace, so it does not need (and is not
   // trusted to supply) the workspace header; when one is sent it must agree.
@@ -584,19 +633,27 @@ async function authenticate(request: IncomingMessage, options: ServiceServerOpti
       throw new HttpError(403, "Workspace token is scoped to a different workspace");
     }
     const { replicaId: _replicaId, ...membership } = resolved;
+    // A paired checkout has no user, so its own token is the identity to charge.
+    options.chargeIdentity?.(`member:${membership.memberId}`);
     return { ...membership, credential: "workspace-token" };
   }
   const workspaceId = request.headers[WORKSPACE_HEADER];
   if (typeof workspaceId !== "string" || workspaceId.length === 0) {
     throw new HttpError(400, `${WORKSPACE_HEADER} header is required`);
   }
-  const { userId } = await verifyToken(request, options);
+  // Charge the membership below rather than the user here: one person driving several
+  // workspaces is doing several workspaces' worth of legitimate work, and double-charging
+  // the same request to both buckets would make the per-user budget the real ceiling.
+  const { userId } = await verifyToken(request, { ...options, chargeIdentity: undefined });
+  let identity: Identity;
   try {
-    return { ...await options.store.resolveMembership(userId, workspaceId), credential: "supabase" };
+    identity = { ...await options.store.resolveMembership(userId, workspaceId), credential: "supabase" };
   } catch (error) {
     if (error instanceof StoreUnauthorizedError) throw new HttpError(401, error.message);
     throw error;
   }
+  options.chargeIdentity?.(`member:${identity.memberId}`);
+  return identity;
 }
 
 async function readJson(request: IncomingMessage, maximumBytes: number): Promise<unknown> {

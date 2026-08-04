@@ -217,6 +217,21 @@ ever stop working.
 - Per-seat pricing mechanics for Team (the plan enforces Unlimited's caps today; the
   per-seat *charge* has no implementation because there is no billing provider).
 
+**Free-tier abuse guards (shipped alongside the generous free plan):**
+
+- `MAX_SELF_SERVE_WORKSPACES_PER_USER` (10) caps how many workspaces one account can create,
+  enforced inside `createWorkspace`'s transaction behind a per-user advisory lock so
+  concurrent creates cannot race past it. Plans are per-workspace, so without this an
+  account could farm unlimited free workspaces as free storage. The Contract C personal
+  workspace comes from `ensurePersonalWorkspace()` and is deliberately not counted.
+- Rate limiting is two-layered: a coarse pre-auth per-IP ceiling (3000/min) as a flood
+  guard, and the real quota charged per authenticated identity (600/min, 30/min for replica
+  registration) in `verifyToken`/`authenticate`. Per-IP alone was wrong in both directions —
+  too loose for one abusive account, and too tight for an office or CI fleet behind one NAT
+  address, where daemons throttled each other. `POST /v1/pairing-codes/claim` stays per-IP
+  at 10/min: it is unauthenticated, so there is no identity to charge, and that limit is the
+  brute-force defense for the 40-bit code space.
+
 `assertSemanticReviewCallAvailable` is deliberately left unwired rather than pending: semantic review is delegated to the member's own MCP agent and never reaches the service, so there is no per-call cost to meter, and wiring it would mean adding a network round-trip before every local review purely to bill for it (see the comment above `incrementSemanticReviewUsage` in `apps/service/src/billing.ts`). Every plan now carries an unlimited cap for it, so it can never fire.
 
 ### Phase 11 — Pairing a checkout to an account (backend v1 shipped)

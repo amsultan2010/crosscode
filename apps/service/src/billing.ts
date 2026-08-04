@@ -35,6 +35,29 @@ export const PLAN_LIMITS: Record<Plan, {
   student: { seatCap: 25, semanticReviewCallsPerMonth: Infinity, autonomyTiers: ALL_AUTONOMY_TIERS, historyRetentionDays: 90 }
 };
 
+/**
+ * How many workspaces one user may create for themselves.
+ *
+ * Plans are per-workspace, so without this an account can farm unlimited free workspaces --
+ * each with its own seats, its own retention window, and its own storage -- and use the
+ * hosted service as free unmetered storage. Set far above what a real person needs (a
+ * heavy user runs a handful of repos, and repos are unlimited *within* a workspace), so it
+ * is an abuse ceiling rather than a plan wall.
+ *
+ * The Contract C personal workspace is deliberately outside this count: it is provisioned
+ * by ensurePersonalWorkspace(), not createWorkspace(), so a user can never be locked out of
+ * the workspace their first authenticated request depends on.
+ */
+export const MAX_SELF_SERVE_WORKSPACES_PER_USER = 10;
+
+export function assertSelfServeWorkspaceAvailable(currentOwnedCount: number): void {
+  if (currentOwnedCount >= MAX_SELF_SERVE_WORKSPACES_PER_USER) {
+    throw new BillingLimitError(
+      `You already own ${MAX_SELF_SERVE_WORKSPACES_PER_USER} workspaces, which is the per-account limit`
+    );
+  }
+}
+
 export function assertSeatCapAvailable(plan: Plan, currentMemberCount: number): void {
   const { seatCap } = PLAN_LIMITS[plan];
   if (currentMemberCount >= seatCap) {

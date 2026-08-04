@@ -693,6 +693,60 @@ function storedOperation(event: TransactionCreatedEvent, projectId: string | nul
   };
 }
 
+describe("per-identity rate limiting", () => {
+  // Every daemon in an office or a CI fleet leaves through one NAT egress address. Keying
+  // the real quota on that address makes them throttle each other, which reads to the user
+  // as Crosscode being broken rather than as a limit.
+  it("does not throttle many distinct identities sharing one address", async () => {
+    const store = {
+      resolveMembership: async (userId: string, workspaceId: string) => ({
+        memberId: `member-${userId}`, userId, actorId: userId, workspaceId, role: "member" as const
+      }),
+      listPresence: async () => []
+    } as unknown as PgStore;
+    const base = await listen(store);
+
+    // Ten separate accounts, one shared source address, well past the old 300/min per-IP
+    // bucket they would all have shared.
+    for (let user = 0; user < 10; user += 1) {
+      const accessToken = await signToken(`user-${user}`);
+      for (let call = 0; call < 40; call += 1) {
+        const response = await fetch(`${base}/v1/presence`, {
+          headers: { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId }
+        });
+        expect(response.status).toBe(200);
+      }
+    }
+  });
+
+  it("throttles a single identity once it exhausts its own budget", async () => {
+    const store = {
+      resolveMembership: async (userId: string, workspaceId: string) => ({
+        memberId: `member-${userId}`, userId, actorId: userId, workspaceId, role: "member" as const
+      }),
+      listPresence: async () => []
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const accessToken = await signToken("noisy-user");
+    const call = () => fetch(`${base}/v1/presence`, {
+      headers: { authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membership.workspaceId }
+    });
+
+    let throttled = false;
+    for (let attempt = 0; attempt < 700 && !throttled; attempt += 1) {
+      throttled = (await call()).status === 429;
+    }
+    expect(throttled).toBe(true);
+
+    // ...and a different account from the same address is untouched by that exhaustion.
+    const otherToken = await signToken("quiet-user");
+    const other = await fetch(`${base}/v1/presence`, {
+      headers: { authorization: `Bearer ${otherToken}`, [WORKSPACE_HEADER]: membership.workspaceId }
+    });
+    expect(other.status).toBe(200);
+  });
+});
+
 describe("rate limiting behind a proxy", () => {
   // Every request from a load balancer shares one socket address, so without
   // trustProxy the whole deployment shares one bucket and runs into the 10/min
