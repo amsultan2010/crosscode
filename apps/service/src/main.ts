@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { createSupabaseJwks } from "./auth.js";
-import { assertSafeServiceBinding, createServiceServer } from "./http.js";
+import { assertSafeServiceBinding, createServiceServer, type BillingOptions } from "./http.js";
 import { DEFAULT_SWEEP_INTERVAL_MS, startRetentionSweep } from "./retention.js";
 import { PgStore } from "./store.js";
+import { StripeBillingProvider, parseStripePriceCatalog } from "./stripe.js";
 
 export async function main(environment: NodeJS.ProcessEnv = process.env): Promise<void> {
   // Supabase's pooled Postgres connection string is a standard `postgres://` URL, so
@@ -24,6 +25,7 @@ export async function main(environment: NodeJS.ProcessEnv = process.env): Promis
   const trustProxyTls = environment.CROSSCODE_TRUST_PROXY_TLS === "true";
   assertSafeServiceBinding(host, Boolean(tls) || trustProxyTls);
   const allowedOrigins = parseAllowedOrigins(environment.CROSSCODE_ALLOWED_ORIGINS);
+  const billing = loadBilling(environment);
   const store = new PgStore(databaseUrl);
   let server: ReturnType<typeof createServiceServer>;
   try {
@@ -31,7 +33,7 @@ export async function main(environment: NodeJS.ProcessEnv = process.env): Promis
     // trustProxy rides the same flag: it is the operator asserting there is a real
     // reverse proxy in front, which is exactly the condition under which
     // x-forwarded-for is trustworthy and the socket address is not.
-    server = createServiceServer({ store, jwks, supabaseUrl, tls, allowedOrigins, trustProxy: trustProxyTls });
+    server = createServiceServer({ store, jwks, supabaseUrl, tls, allowedOrigins, billing, trustProxy: trustProxyTls });
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(port, host, () => {
@@ -97,6 +99,36 @@ function parseSweepIntervalMs(value: string | undefined): number {
   if (value === undefined) return DEFAULT_SWEEP_INTERVAL_MS;
   if (!/^\d+$/.test(value) || Number(value) < 1) throw new Error("CROSSCODE_RETENTION_SWEEP_MINUTES must be a positive integer");
   return Number(value) * 60_000;
+}
+
+/**
+ * Builds the Stripe provider, or returns undefined for a deployment that sells nothing --
+ * a self-hoster, or local development. Undefined is not a degraded mode: the checkout
+ * routes answer 503 and the webhook route does not exist, which is the correct surface for
+ * a service with no payment provider behind it.
+ *
+ * CROSSCODE_STRIPE_WEBHOOK_SECRET is required alongside the key rather than optional. A
+ * deployment that can take money but cannot verify what Stripe tells it about that money
+ * would silently never grant anything, and would be the exact configuration in which an
+ * unauthenticated route is worth attacking.
+ */
+function loadBilling(environment: NodeJS.ProcessEnv): BillingOptions | undefined {
+  const secretKey = environment.CROSSCODE_STRIPE_SECRET_KEY;
+  if (!secretKey) return undefined;
+  const webhookSecret = required(environment.CROSSCODE_STRIPE_WEBHOOK_SECRET, "CROSSCODE_STRIPE_WEBHOOK_SECRET");
+  const prices = parseStripePriceCatalog(required(environment.CROSSCODE_STRIPE_PRICES, "CROSSCODE_STRIPE_PRICES"));
+  // Both are pages on the marketing site; neither is a dashboard. Checkout itself is
+  // Stripe-hosted, so all the site has to do is say "you're done, back to your terminal".
+  const successUrl = required(environment.CROSSCODE_STRIPE_SUCCESS_URL, "CROSSCODE_STRIPE_SUCCESS_URL");
+  const cancelUrl = environment.CROSSCODE_STRIPE_CANCEL_URL ?? successUrl;
+  return {
+    provider: new StripeBillingProvider({
+      secretKey, prices, successUrl, cancelUrl,
+      portalReturnUrl: environment.CROSSCODE_STRIPE_PORTAL_RETURN_URL,
+      apiVersion: environment.CROSSCODE_STRIPE_API_VERSION
+    }),
+    webhookSecret
+  };
 }
 
 async function loadTls(environment: NodeJS.ProcessEnv) {

@@ -109,14 +109,20 @@ What did **not** change, deliberately: the coordination service and every migrat
 **Verification baseline (re-measured 2026-08-04).** Treat the numbers below as a dated observation, not a spec — run the commands rather than trusting the transcription. This paragraph sat at "25 files / 231 tests" for two days after the real figures moved, which is exactly the failure mode of hand-copied counts.
 
 - `pnpm build` — `tsc --noEmit` under `strict`, then `scripts/build.mjs` bundles the three entrypoints to `dist/`. Passes.
-- `pnpm test` — **29 files passed, 6 skipped (35); 301 tests passed, 19 skipped (320)**. The skips are the PostgreSQL-gated suites, which deliberately get no `CROSSCODE_TEST_DATABASE_URL` here.
-- `pnpm test:postgres` — **6 files, 19 tests, none skipped.** Suites are discovered by the gate they read, and the run fails if a selected test reports as skipped rather than passed.
+- `pnpm test` — **30 files passed, 8 skipped (38); 352 tests passed, 39 skipped (391)**. The skips are the PostgreSQL-gated suites, which deliberately get no `CROSSCODE_TEST_DATABASE_URL` here.
+- `pnpm test:postgres` — **8 files, 39 tests, none skipped.** Suites are discovered by the gate they read, and the run fails if a selected test reports as skipped rather than passed.
 - `pnpm docs:build` — passes; emits the landing page, four auth pages, and eight docs pages.
 - `docker build -f apps/service/Dockerfile -t crosscode-service .` — passes, and the container refuses to start without `DATABASE_URL`, as intended.
 
 Node 24 is required (`engines.node`); the repo pins it and CI runs it.
 
 **Phases 8/9/10 v1 — implemented (2026-08-02).** Invite-by-code/link, self-serve workspace creation, the autonomy slider, and a billing placeholder all landed together against the same hosted Supabase project this repo already used for dev. Detail and remaining gaps are under each phase below — none is fully "done" against its original exit criteria yet, but each has a working v1.
+
+**Billing v2 — implemented (2026-08-04).** Phase 10's placeholder became a real Stripe
+implementation: monthly/annual prices with annual as the default, `crosscode billing
+upgrade|cancel|portal`, a signature-verified webhook, and a defined subscription lifecycle
+whose governing rule is *never destroy, never hard-block*. See Phase 10 below for the
+decisions and what is still outstanding (chiefly: the Stripe account itself).
 
 ## The plan
 
@@ -158,9 +164,12 @@ Three initiatives, in this order. Each is a precondition for the next in practic
 
 **Shipped (v1):** `workspaces.autonomy_tier` (0/1/2), `GET/PUT /v1/workspace/autonomy` (owner-only to set), `crosscode workspace autonomy get|set` plus matching MCP tools, and the daemon's existing local `autoApplyRisk` mechanism extended to also honor the workspace's synced tier — refreshed on each sync cycle, no daemon restart required. Every auto-apply attempt still routes through the same unchanged `accept()` → `assertApplicable`/`assertChangeApplicable` gate, which is the sole enforcement point for Fundamental Rule 4; a dedicated regression test proves a critical-risk proposal is never auto-applied at tier 2. One known gap: tier ≥1 requiring semantic review enabled is currently enforced client-side in the daemon (against the committed `.crosscode/config.yaml`), not server-side in the `PUT` handler, because the service has no visibility into that git-committed file — worth revisiting once review policy has a service-side home.
 
-### Phase 10 — Tiered pricing & billing (placeholder v1 shipped)
+### Phase 10 — Tiered pricing & billing (Stripe implemented; account setup pending)
 
-**Billing provider:** Stripe (account setup pending — not yet created).
+**Billing provider:** Stripe. `StripeBillingProvider` (`apps/service/src/stripe.ts`) implements
+the `BillingProvider` interface against Stripe's REST API; `StubBillingProvider` remains the
+default for deployments with no key. A live Stripe account and its price ids are the only
+things left before real money moves.
 
 **Objective:** maximize user count, free and paid. Revenue only has to keep hosting from
 running at a loss; it is not the optimization target.
@@ -187,38 +196,179 @@ The axes actually used:
 
 **Tiers:**
 
-| Tier | Price | Seats | History | Autonomy | Org controls |
-| --- | --- | --- | --- | --- | --- |
-| Free | $0 | 5 | 7 days | always-ask, auto-if-clean | — |
-| Essential | $2.50/mo | 10 | 30 days | all | — |
-| Pro | $5.00/mo | 25 | 90 days | all | — |
-| Unlimited | $7.50/mo | unlimited | 365 days | all | — |
-| Team | per-seat | unlimited | 365 days | all | SSO, audit export, SLA |
-| Student | Essential price | Pro-level | Pro-level | all | — |
+| Tier | Monthly | Annual | Seats | History | Autonomy | Org controls |
+| --- | --- | --- | --- | --- | --- | --- |
+| Free | $0 | $0 | 5 | 7 days | always-ask, auto-if-clean | — |
+| Essential | $2.50/mo | $25/yr | 10 | 30 days | all | — |
+| Pro | $5.00/mo | $50/yr | 25 | 90 days | all | — |
+| Unlimited | $7.50/mo | $75/yr | unlimited | 365 days | all | — |
+| Team | $5.00/seat/mo | $50/seat/yr | unlimited | 365 days | all | SSO, audit export, SLA |
+| Student | $2.50/mo | $25/yr | 25 (Pro-level) | 90 days (Pro-level) | all | — |
 
-Semantic review is unlimited on every row, so it is not a column.
+Annual is twelve months for the price of ten on every row. Semantic review is unlimited on
+every row, so it is not a column. Limits live in `PLAN_LIMITS` and prices in `PLAN_PRICING`,
+both in `apps/service/src/billing.ts`; the Stripe Price ids that back them are deployment
+configuration (`CROSSCODE_STRIPE_PRICES`), never committed.
 
-Student tier requires real verification (e.g. SheerID or `.edu`-gated flow) to avoid resale abuse.
+Student tier requires real verification (e.g. SheerID or `.edu`-gated flow) to avoid resale
+abuse, which does not exist yet — so `POST /v1/workspace/billing/checkout` **refuses
+`student` outright** (403) rather than selling Pro's limits at Essential's price to anyone
+who asks. It stays an out-of-band grant until the verification flow lands.
 
-**Deliberate tradeoff:** Unlimited ($7.50) has unlimited seats, so it undercuts Team on
-price. That is intended under a user-count objective — Team is differentiated by org
-controls, not seat count. Revisit by changing numbers in `PLAN_LIMITS` if the economics
-ever stop working.
+**Deliberate tradeoff:** Unlimited ($7.50) has unlimited seats, so it undercuts Team from
+two seats up. That is intended under a user-count objective — Team is differentiated by org
+controls, not seat count. Revisit by changing numbers in `PLAN_PRICING`/`PLAN_LIMITS` if the
+economics ever stop working.
 
 **Billing note:** at $2.50/mo Stripe takes $0.30 + 2.9% ≈ 15% of revenue; at $25/yr it is
-~4%. Annual billing is not a nice-to-have at these price points.
+~4%. Annual billing is not a nice-to-have at these price points, and it is not treated as
+one: `DEFAULT_BILLING_INTERVAL` is `year`, `startCheckoutRequestSchema.interval` defaults to
+`year`, and the CLI's opt-out flag is `--monthly` rather than an opt-in `--annual`. A caller
+that says nothing buys the annual plan.
+
+#### Where upgrading happens
+
+In the CLI, per the CLI-first product-surface decision above: the website stays landing,
+auth, and docs, and gains no billing UI. What the browser is used for is Stripe's own hosted
+Checkout and Billing Portal pages, which is where a card can safely be typed.
+
+| Command | Endpoint | Behavior |
+| --- | --- | --- |
+| `crosscode billing status` | `GET /v1/workspace/billing` | Plan, limits, subscription state, grace deadline, who pays. |
+| `crosscode billing upgrade --plan <p> [--monthly] [--seats n]` | `POST /v1/workspace/billing/checkout` | No subscription yet → a Stripe Checkout URL, opened in a browser (`--no-browser` prints it). An existing subscription → moved in place with proration, in **either** direction, because Checkout can only *create* subscriptions and sending someone back through it would leave the workspace paying twice. |
+| `crosscode billing cancel` | `POST /v1/workspace/billing/cancel` | `cancel_at_period_end`, never an immediate delete. |
+| `crosscode billing portal` | `POST /v1/workspace/billing/portal` | Stripe-hosted card/invoice management. |
+
+All four are owner-only and Supabase-session-only: a `ccw_` workspace token reaches the
+daemon ingest/read surface and can never spend money.
+
+#### The webhook (`POST /v1/webhooks/stripe`)
+
+The one unauthenticated write route in a service that authenticates everything else, and
+the only one that is not also single-use (unlike the pairing claim). Stripe holds no
+Crosscode credential, so the request signature *is* the credential. Four independent
+defenses, each covered by a test in `apps/service/src/stripe.test.ts` and `http.test.ts`:
+
+1. **The route does not exist without a signing secret.** No `CROSSCODE_STRIPE_WEBHOOK_SECRET`
+   → 404, not a weakened check. `main.ts` requires the secret whenever a Stripe key is set.
+2. **Signature verified over the raw bytes, before parsing.** `verifyStripeSignature()`
+   recomputes HMAC-SHA256 over `<timestamp>.<body>` and compares constant-time against every
+   `v1=` entry (there are several during a secret rotation). A malformed header — no `t`, no
+   `v1` — is a refusal, not a fall-through. An unsigned body never reaches `JSON.parse`, let
+   alone a write.
+3. **Replay is bounded to five minutes** by the signed timestamp's tolerance, checked in both
+   directions, and then to *once* by `billing_events`, which records Stripe's event id.
+   `processed_at` is set only after the handler succeeds, so a delivery that died halfway is
+   retried rather than swallowed.
+4. **The event is a signal, not a fact.** The handler takes the subscription id out of the
+   body and re-reads that subscription's authoritative state from Stripe before writing.
+   Out-of-order delivery, redelivery, and replay therefore all converge on the same write —
+   a stale "upgraded to pro" event that arrives after a cancellation cannot resurrect the
+   plan. The workspace is resolved from the database's own customer/subscription mapping;
+   `client_reference_id`/`metadata` are consulted only when no mapping exists yet, and only
+   if they parse as a workspace id. A workspace that cancelled and bought again has a dead
+   subscription still emitting for a while, so `applySubscriptionState` additionally refuses
+   any event about a subscription that is not the workspace's current one while that current
+   one is live — otherwise a delayed final invoice for the old subscription would take the
+   plan the user just paid for straight back off them.
+
+#### Lifecycle decisions
+
+Previously undefined; the only stated requirement was that downgrade and cancellation must
+not destroy workspace data. The rule underneath all of them is **never destroy, never
+hard-block** — a plan change costs a capability, never access or history.
+
+`workspaces.plan` is the *effective* plan and the single thing every limit is enforced
+against. `workspaces.billing_plan` is what is being paid for. They differ only during a
+grace period. `applySubscriptionState()` in `store.ts` is the sole write path for both, and
+`EFFECTIVE_PLAN_SQL` applies a lapsed grace deadline at read time, so enforcement never
+waits on a sweep.
+
+- **Downgrade below the current seat count** → existing members keep working; the *next*
+  seat is refused with 402. Nothing counts, disables, or evicts anybody: the cap is checked
+  only inside the transaction that would add a member (`assertSeatAvailable`).
+- **Downgrade shrinking retention** → each operation carries `operations.retention_days`,
+  stamped from the plan in effect *when the row was written*, and
+  `pruneWorkspaceOperations` measures each row against its own window instead of the
+  workspace's current plan. Shrinking the window stops history being *extended*; it never
+  retroactively deletes what was already promised.
+
+  This is where this workstream met the retention one (#35), which shipped first and swept
+  against the current plan — so a Pro→Essential downgrade would have deleted 60 days of
+  history the workspace had been promised. Reconciling the two needed more than swapping the
+  column in, because #35's cursor watermark depends on deletion removing a *prefix* of the
+  sequence, and per-row windows let an expired row sit above a live one. The cutoff is
+  therefore the sequence just below the **oldest still-live** row rather than the newest
+  expired one: identical whenever one window applies to everything, and strictly more
+  conservative the moment two do. A leftover NULL `retention_days` COALESCEs to the current
+  plan's window, which is exactly #35's behavior, so nothing can outlive what it would have.
+- **Payment failure** → a 14-day grace period during which every paid limit is retained
+  (`PAYMENT_GRACE_PERIOD_DAYS`; chosen to outlast Stripe's first dunning retries, so a
+  replaced card costs nobody anything). The deadline is set once by the first failure and is
+  never pushed out by repeated failure events. When it lapses the workspace falls to Free's
+  *limits*; members, history, replicas, tokens and settings all survive. A later successful
+  payment clears the deadline and restores everything.
+- **Auto-always on downgrade** → clamped to auto-if-clean, never an error. Clamped on the
+  write path (`autonomy_tier = LEAST(autonomy_tier, …)`) and again on the read path
+  (`getWorkspaceAutonomyTier`), which is what the daemon syncs its policy from — so a grace
+  period that lapses between sweeps cannot leave a workspace auto-applying on a plan that no
+  longer unlocks it. This closed a real hole: before, a downgrade left `autonomy_tier = 2`
+  set and only *new writes* were gated.
+- **Who pays** → the workspace, not the person. The Stripe customer is keyed by workspace id
+  and the subscription belongs to the workspace; `billing_owner_member_id` is a label for
+  receipts and display. When that member leaves, `disableMember` reassigns it to the
+  longest-tenured remaining active owner and audits the change — the subscription is not
+  touched, and a workspace can never lose its last owner anyway.
+- **Team per-seat proration** → the subscription quantity tracks the active member count.
+  `reconcileSeatQuantity` runs after an invite redemption or a member removal and lets Stripe
+  compute the mid-cycle credit or charge (`proration_behavior: create_prorations`); there is
+  deliberately no arithmetic on our side. It never throws — nobody should be unable to remove
+  a member because Stripe is unreachable — and a missed call self-corrects on the next
+  membership or plan change.
+
+`pnpm service:billing-sweep` (`apps/service/src/billing-sweep.ts`) writes lapsed grace
+periods down durably and audits them. Run it daily. It is not load-bearing for enforcement,
+only for making the stored plan agree with what is already being enforced.
+
+**Configuration** (all secrets, supplied by the host): `CROSSCODE_STRIPE_SECRET_KEY`,
+`CROSSCODE_STRIPE_WEBHOOK_SECRET`, `CROSSCODE_STRIPE_PRICES` (one JSON object mapping each
+plan/interval to its Stripe Price id — one secret rather than ten variables, because ten is
+what makes an operator get one wrong and only find out at checkout),
+`CROSSCODE_STRIPE_SUCCESS_URL`, and optionally `CROSSCODE_STRIPE_CANCEL_URL`,
+`CROSSCODE_STRIPE_PORTAL_RETURN_URL`, `CROSSCODE_STRIPE_API_VERSION`. Setting none of them
+leaves the service with no billing surface at all, which is the right shape for a
+self-hoster.
 
 **Design intent:** the free tier should comfortably fit a real small team (see the product-scope decision above) rather than tease them into upgrading — 5 seats is a whole team, not a trial. The first real friction point should be growing past that team, wanting a longer history to look back through, or wanting conflicts to auto-resolve, never an artificial cap.
 
 **Exit criteria:** Stripe account exists and is wired to workspace creation/upgrade; each tier's caps are enforced server-side (not just UI-hidden); student verification flow works; downgrade/cancellation doesn't destroy workspace data.
 
-**Shipped (v1, placeholder):** `workspaces.plan` (free/essential/pro/unlimited/team/student) plus unused-until-real-key `stripe_customer_id`/`stripe_subscription_id` columns, a `usage_counters` table metering semantic review calls/month, a `BillingProvider` interface with a `StubBillingProvider` (no real Stripe account exists yet, so no `stripe` package dependency was added), and `assertSeatCapAvailable`/`assertSemanticReviewCallAvailable`/`assertPlanAllowsAutonomyTier` enforcement helpers plus a read-only `crosscode billing status` that reports the plan's `historyRetentionDays`. `assertPlanAllowsAutonomyTier` and `assertSeatCapAvailable` are enforced end-to-end in `apps/service/src/store.ts` — the former on the autonomy-tier write path, the latter inside the transaction that adds a member — and both answer `402`.
+**Shipped (v1, placeholder — 2026-08-02):** `workspaces.plan` (free/essential/pro/unlimited/team/student) plus then-unused `stripe_customer_id`/`stripe_subscription_id` columns, a `usage_counters` table metering semantic review calls/month, a `BillingProvider` interface with a `StubBillingProvider`, and `assertSeatCapAvailable`/`assertSemanticReviewCallAvailable`/`assertPlanAllowsAutonomyTier` enforcement helpers plus a read-only `crosscode billing status` that reports the plan's `historyRetentionDays`. `assertPlanAllowsAutonomyTier` and `assertSeatCapAvailable` are enforced end-to-end in `apps/service/src/store.ts` — the former on the autonomy-tier write path, the latter inside the transaction that adds a member — and both answer `402`.
+
+**Shipped (v2, real provider — 2026-08-04):** `StripeBillingProvider` against the existing
+`BillingProvider` seam, with monthly and annual prices and annual as the default everywhere;
+`crosscode billing upgrade|cancel|portal` over three owner-only service routes; the
+signature-verified, idempotent, replay-safe webhook described above; and the full lifecycle
+above, backed by migration `012_billing_lifecycle.sql` (grace-period and subscription state
+on `workspaces`, a `billing_events` replay ledger, `operations.retention_days`) plus
+`apps/service/src/billing-lifecycle.integration.test.ts`, which exercises each decision
+against real PostgreSQL — including that the members, history, and settings are all still
+there afterwards.
+
+Stripe is reached with `fetch` and `node:crypto` rather than the official SDK. The provider
+is six calls, and taking `fetchImpl` as an option makes every one testable offline against
+an exact expected request body; the alternative was no coverage at all until someone pointed
+it at a live account. The cost is that `verifyStripeSignature()` reimplements Stripe's
+signature scheme, which is why it is small, constant-time, and has a test for each way it
+must refuse.
 
 **Not yet done:**
 
-- The Stripe account itself, and therefore any real checkout.
-- Per-seat pricing mechanics for Team (the plan enforces Unlimited's caps today; the
-  per-seat *charge* has no implementation because there is no billing provider).
+- The Stripe account itself: the code path is complete and tested, but no live account,
+  Price ids, or webhook endpoint exist yet, so no real card has moved a workspace between
+  plans. Standing one up is configuration (`CROSSCODE_STRIPE_*`), not code.
+- **Student verification.** Self-serve checkout refuses `student` (403) until a real
+  verification flow exists; the tier's limits are implemented and can be granted out of band.
 
 **Free-tier abuse guards (shipped alongside the generous free plan):**
 

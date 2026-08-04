@@ -98,6 +98,46 @@ Both server-side revocations are refused to a `ccw_` token
 leaked terminal-side credential cannot revoke its peers or remove the owner who would
 revoke it. Both are audited (`member.removed`, `workspace_token.revoked`).
 
+## The billing webhook
+
+`POST /v1/webhooks/stripe` is the only unauthenticated write route in a service that
+authenticates everything else, and unlike `POST /v1/pairing-codes/claim` it is not
+single-use either. Stripe holds no Crosscode credential, so the request signature is the
+credential. Four independent defenses:
+
+1. **The route does not exist without a signing secret.** No `CROSSCODE_STRIPE_WEBHOOK_SECRET`
+   configured means 404, rather than a weaker check. A deployment that could take money but
+   not verify what it is told about that money would be exactly the configuration in which
+   this endpoint is worth attacking, so `apps/service/src/main.ts` requires the secret
+   whenever a Stripe key is present.
+2. **The signature is verified over the raw bytes, before parsing.**
+   `verifyStripeSignature` (`apps/service/src/stripe.ts`) recomputes HMAC-SHA256 over
+   `<timestamp>.<body>` and compares it constant-time (`timingSafeEqual`) against every
+   `v1=` entry in the header — there is more than one during a secret rotation. The
+   signature is attacker-supplied and the secret is not, so a byte-at-a-time comparison
+   would leak the expected digest under enough attempts. A header with no timestamp or no
+   `v1` entry is refused rather than falling through to "nothing to compare, so pass", which
+   is the classic way this check is written wrong. An unsigned body never reaches
+   `JSON.parse`, let alone a write.
+3. **Replay is bounded twice.** The signed timestamp must be within five minutes, checked in
+   both directions (a future timestamp is as much a sign of forgery as a stale one), which
+   bounds how long a captured-off-the-wire *valid* delivery stays useful. Inside that window
+   the `billing_events` table records Stripe's event id, so a redelivery is a no-op.
+   `processed_at` is set only after the handler succeeds, so a delivery that died halfway is
+   retried rather than silently swallowed.
+4. **The event is a signal, not a fact.** The handler
+   (`apps/service/src/billing-webhook.ts`) takes the subscription id out of the body and
+   re-reads that subscription's authoritative state from Stripe before writing anything.
+   Out-of-order delivery, redelivery, and replay therefore all converge on the same write, so
+   a stale event cannot roll a plan backwards. Which workspace an event applies to comes
+   from the service's own customer/subscription mapping in Postgres;
+   `client_reference_id`/`metadata` in the body are consulted only when no mapping exists
+   yet, and only when they parse as a workspace id.
+
+The routes that spend money (`/v1/workspace/billing/checkout|cancel|portal`) are the mirror
+image: owner-only and Supabase-session-only, so a leaked `ccw_` workspace token reaches the
+daemon ingest/read surface and can never start, change, or cancel a subscription.
+
 ## Provisioning and replica self-registration
 
 Workspace and member provisioning is still an administrator-side operation

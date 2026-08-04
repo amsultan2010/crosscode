@@ -32,6 +32,10 @@ import {
   serviceIngestReceiptSchema,
   serviceIngestRequestSchema,
   setWorkspaceAutonomyRequestSchema,
+  billingPortalResponseSchema,
+  cancelSubscriptionResponseSchema,
+  startCheckoutRequestSchema,
+  startCheckoutResponseSchema,
   workspaceBillingResponseSchema,
   listMembershipsResponseSchema,
   taskIngestRequestSchema,
@@ -50,7 +54,12 @@ import type { JWTVerifyGetKey } from "jose";
 import { verifySupabaseAccessToken } from "./auth.js";
 import { PgStore, StoreConflictError, StoreGoneError, StoreUnauthorizedError, type Membership, type StoredOperation } from "./store.js";
 import { attachWebSocketGateway, type WebSocketGateway } from "./ws.js";
-import { BillingLimitError, getWorkspaceBillingStatus } from "./billing.js";
+import {
+  BillingLimitError, getWorkspaceBillingStatus, priceCentsFor, reconcileSeatQuantity, seatQuantityFor,
+  type BillingProvider
+} from "./billing.js";
+import { applyStripeWebhookEvent } from "./billing-webhook.js";
+import { StripeSignatureError, stripeWebhookEventSchema, verifyStripeSignature } from "./stripe.js";
 
 export type ServiceServerOptions = {
   store: PgStore;
@@ -88,6 +97,13 @@ export type ServiceServerOptions = {
    * on the affected routes, which is why it is opt-in rather than always on.
    */
   durableRateLimits?: boolean;
+  /**
+   * Present only when this deployment has a payment provider configured. Absent -- the
+   * self-hosted case -- means the checkout routes answer 503 and the webhook route does not
+   * exist at all, rather than the service growing an unauthenticated endpoint it cannot
+   * verify anything about.
+   */
+  billing?: BillingOptions;
   /** Where unexpected (500-class) failures are reported. Defaults to stderr. */
   onError?: (error: unknown) => void;
 };
@@ -123,6 +139,16 @@ const IDENTITY_REPLICA_RATE_PER_MINUTE = 30;
  * code space (Contract A). Deliberately unchanged, and deliberately still per-IP.
  */
 const UNAUTHENTICATED_IP_RATE_PER_MINUTE = 10;
+
+export type BillingOptions = {
+  provider: BillingProvider;
+  /**
+   * The endpoint signing secret. Without it there is no way to tell Stripe's bytes from
+   * anyone else's, so its absence removes the route rather than weakening the check.
+   */
+  webhookSecret?: string;
+};
+
 
 const JSON_TYPE = "application/json";
 
@@ -261,6 +287,7 @@ async function handleRequest(
   if (redeemMatch) {
     const { userId, email } = await verifyToken(request, options);
     const redeemed = await options.store.redeemInvite({ code: decodeURIComponent(redeemMatch[1]!), userId, actorId: email ?? userId });
+    await syncSeats(options, redeemed.workspaceId);
     send(response, 200, redeemInviteResponseSchema.parse(redeemed));
     return;
   }
@@ -283,6 +310,46 @@ async function handleRequest(
       repoRoot: body.repoRoot, repoRemote: body.repoRemote
     });
     send(response, 200, claimPairingCodeResponseSchema.parse({ ...claimed, projectId }));
+    return;
+  }
+
+  // Unauthenticated by design, and the only route in this service that is unauthenticated
+  // without also being single-use: the payment provider has no Crosscode credential, so the
+  // request signature is the credential. Four things stand between this route and an
+  // attacker who can reach it:
+  //
+  // 1. The route does not exist unless a signing secret is configured.
+  // 2. The signature is verified over the raw bytes, constant-time, before the body is
+  //    parsed -- so an unsigned body never reaches a JSON parser, let alone a write.
+  // 3. The signature covers a timestamp with a five-minute tolerance, which bounds how long
+  //    a captured-and-replayed *valid* delivery stays useful.
+  // 4. The event id is claimed in billing_events, so a redelivery inside that window is a
+  //    no-op, and the handler itself re-reads authoritative state from the provider rather
+  //    than trusting the body, so even a replay that got through cannot roll state back.
+  if (method === "POST" && url.pathname === "/v1/webhooks/stripe") {
+    const secret = options.billing?.webhookSecret;
+    const provider = options.billing?.provider;
+    if (!secret || !provider) throw new HttpError(404, "Route not found");
+    const raw = await readRawBody(request, Math.min(options.bodyLimitBytes ?? 1_048_576, 1_048_576));
+    try {
+      verifyStripeSignature(raw, headerValue(request, "stripe-signature"), secret);
+    } catch (error) {
+      if (error instanceof StripeSignatureError) throw new HttpError(400, error.message);
+      throw error;
+    }
+    let event;
+    try {
+      event = stripeWebhookEventSchema.parse(JSON.parse(raw));
+    } catch {
+      throw new HttpError(400, "Webhook body is not a recognizable event");
+    }
+    if (!await options.store.claimBillingEvent(event.id, event.type)) {
+      send(response, 200, { received: true, duplicate: true });
+      return;
+    }
+    const outcome = await applyStripeWebhookEvent(options.store, provider, event);
+    await options.store.completeBillingEvent(event.id, outcome.workspaceId);
+    send(response, 200, { received: true, duplicate: false, applied: outcome.applied });
     return;
   }
 
@@ -388,6 +455,7 @@ async function handleRequest(
     const memberId = decodeURIComponent(removeMemberMatch[1]!);
     if (!UUID_PATTERN.test(memberId)) throw new HttpError(400, "memberId must be a UUID");
     const removed = await options.store.disableMember(identity, memberId);
+    await syncSeats(options, identity.workspaceId);
     send(response, 200, memberSummarySchema.parse(removed));
     return;
   }
@@ -641,6 +709,91 @@ async function handleRequest(
     return;
   }
 
+  // Upgrading, downgrading, and cancelling all act as the paying user and all move money,
+  // so they are Supabase-only (never a `ccw_` terminal token) and owner-only.
+  if (method === "POST" && url.pathname === "/v1/workspace/billing/checkout") {
+    const provider = assertBillingOwner(identity, options);
+    const body = startCheckoutRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
+    // Student is Pro's limits at Essential's price, so selling it self-serve would just be
+    // a discount anyone could take. It stays an out-of-band grant until the verification
+    // flow in BUILD_INSTRUCTIONS.md Phase 10 exists.
+    if (body.plan === "student") {
+      throw new HttpError(403, "Student pricing requires verification and cannot be purchased self-serve");
+    }
+    const record = await options.store.getWorkspaceBilling(identity.workspaceId);
+    // seatQuantityFor collapses to 1 on every flat-priced plan, so a client asking for
+    // `--seats 10` on Pro cannot turn a $5 subscription into a $50 one -- the quantity is
+    // a Stripe line-item quantity, and only Team's price is per seat.
+    const activeMembers = await options.store.countActiveMembers(identity.workspaceId);
+    const seats = seatQuantityFor(body.plan, Math.max(activeMembers, body.seats ?? 1));
+    const priceCents = priceCentsFor(body.plan, body.interval, seats);
+    const monthlyEquivalentCents = priceCentsFor(body.plan, "month", seats);
+
+    // An existing subscription is moved in place rather than replaced: Checkout can only
+    // create subscriptions, so sending someone back through it would leave the workspace
+    // paying twice. Stripe prorates the mid-cycle difference, in both directions.
+    if (record.stripeSubscriptionId && record.billingPlan) {
+      await provider.changeSubscription({
+        subscriptionId: record.stripeSubscriptionId, plan: body.plan, interval: body.interval, seats
+      });
+      // Applied here as well as by the webhook, from the same re-read of authoritative
+      // state, so the caller sees the new plan immediately and the webhook that follows is
+      // a no-op rather than a second, divergent write.
+      await options.store.applySubscriptionState({
+        workspaceId: identity.workspaceId,
+        state: await provider.getSubscriptionState(record.stripeSubscriptionId)
+      });
+      send(response, 200, startCheckoutResponseSchema.parse({
+        mode: "updated", plan: body.plan, interval: body.interval, seats, url: null, priceCents, monthlyEquivalentCents
+      }));
+      return;
+    }
+
+    const customerId = record.stripeCustomerId
+      ?? (await provider.createCustomer(identity.workspaceId, identity.actorId)).customerId;
+    // Linked before the redirect, so a checkout the user abandons still leaves the customer
+    // attached to the workspace and the next attempt reuses it.
+    await options.store.linkStripeCustomer(identity.workspaceId, customerId, identity.memberId);
+    const session = await provider.createCheckoutSession(identity.workspaceId, body.plan, {
+      interval: body.interval, seats, customerId, email: identity.actorId
+    });
+    send(response, 200, startCheckoutResponseSchema.parse({
+      mode: "checkout", plan: body.plan, interval: body.interval, seats, url: session.url, priceCents, monthlyEquivalentCents
+    }));
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/v1/workspace/billing/cancel") {
+    const provider = assertBillingOwner(identity, options);
+    const record = await options.store.getWorkspaceBilling(identity.workspaceId);
+    // billingPlan as well as the id: a subscription that already ended leaves its id behind
+    // for the audit trail, and asking Stripe to cancel it again is an error, not a no-op.
+    if (!record.stripeSubscriptionId || !record.billingPlan) throw new HttpError(409, "This workspace has no active subscription to cancel");
+    // Cancels at period end, so the workspace keeps the limits it paid for until they run
+    // out and then falls back to free's -- it never loses anything mid-period, and no
+    // workspace data is touched in either case.
+    await provider.cancelSubscription(record.stripeSubscriptionId);
+    const applied = await options.store.applySubscriptionState({
+      workspaceId: identity.workspaceId,
+      state: await provider.getSubscriptionState(record.stripeSubscriptionId)
+    });
+    send(response, 200, cancelSubscriptionResponseSchema.parse({
+      plan: applied.plan, cancelAtPeriodEnd: applied.cancelAtPeriodEnd, currentPeriodEnd: applied.currentPeriodEnd
+    }));
+    return;
+  }
+
+  // A provider-hosted page for cards, invoices and receipts. Not a Crosscode web UI: it is
+  // Stripe's own surface, which is why it does not contradict the CLI-first decision.
+  if (method === "POST" && url.pathname === "/v1/workspace/billing/portal") {
+    const provider = assertBillingOwner(identity, options);
+    const record = await options.store.getWorkspaceBilling(identity.workspaceId);
+    if (!record.stripeCustomerId) throw new HttpError(409, "This workspace has no billing account yet");
+    const session = await provider.createPortalSession(record.stripeCustomerId);
+    send(response, 200, billingPortalResponseSchema.parse({ url: session.url }));
+    return;
+  }
+
   if (method === "GET" && url.pathname === "/v1/presence") {
     const sessions = await options.store.listPresence(identity.workspaceId);
     send(response, 200, { sessions });
@@ -657,6 +810,67 @@ type Identity = Membership & { credential: "supabase" | "workspace-token" };
 
 function assertSupabaseCredential(identity: Identity, surface: string): void {
   if (identity.credential !== "supabase") throw new HttpError(403, `Workspace tokens cannot access ${surface}`);
+}
+
+/**
+ * The three gates every money-moving route shares: a real user session (not a terminal
+ * token), the owner role, and a configured provider. Returns the provider so the route
+ * body reads as one statement instead of four.
+ */
+function assertBillingOwner(identity: Identity, options: ServiceServerOptions): BillingProvider {
+  assertSupabaseCredential(identity, "/v1/workspace/billing");
+  if (identity.role !== "owner") throw new HttpError(403, "Only workspace owners can change the plan");
+  if (!options.billing) throw new HttpError(503, "Billing is not configured on this deployment");
+  return options.billing.provider;
+}
+
+/**
+ * Keeps Team's per-seat subscription quantity in step with the workspace's active member
+ * count when membership changes mid-cycle; Stripe prorates the difference itself. A no-op
+ * on every other plan, and on deployments with no provider.
+ *
+ * Awaited rather than fired and forgotten -- an unhandled rejection here would be invisible
+ * -- but it can never fail the request it rides on: nobody should be unable to remove a
+ * member because Stripe is having an afternoon. A missed call self-corrects on the next
+ * membership or plan change.
+ */
+async function syncSeats(options: ServiceServerOptions, workspaceId: string): Promise<void> {
+  if (!options.billing) return;
+  await reconcileSeatQuantity(options.store, options.billing.provider, workspaceId, (error) => reportBillingError(options, error));
+}
+
+function reportBillingError(options: ServiceServerOptions, error: unknown): void {
+  if (options.onError) {
+    options.onError(error);
+    return;
+  }
+  process.stderr.write(`Crosscode seat reconciliation failed: ${error instanceof Error ? error.message : String(error)}\n`);
+}
+
+function headerValue(request: IncomingMessage, name: string): string | undefined {
+  const value = request.headers[name];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+/**
+ * The request body as raw text. Webhook signatures cover the exact bytes sent, so the body
+ * cannot be round-tripped through JSON.parse/stringify before it is verified -- key order
+ * and number formatting would not survive.
+ */
+async function readRawBody(request: IncomingMessage, maximumBytes: number): Promise<string> {
+  const declaredLength = request.headers["content-length"];
+  if (declaredLength && (!/^\d+$/.test(declaredLength) || Number(declaredLength) > maximumBytes)) {
+    throw new HttpError(413, "Request body is too large");
+  }
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += buffer.length;
+    if (bytes > maximumBytes) throw new HttpError(413, "Request body is too large");
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function bearerToken(request: IncomingMessage): string {
@@ -873,6 +1087,10 @@ function rateLimitRoute(method: string, pathname: string): string {
     "GET /v1/validations",
     "GET /v1/presence",
     "GET /v1/workspace/billing",
+    "POST /v1/workspace/billing/checkout",
+    "POST /v1/workspace/billing/cancel",
+    "POST /v1/workspace/billing/portal",
+    "POST /v1/webhooks/stripe",
     "GET /v1/memberships",
     "GET /v1/projects",
     "POST /v1/projects",
