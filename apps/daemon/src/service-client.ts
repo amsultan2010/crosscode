@@ -3,11 +3,12 @@ import { hostname } from "node:os";
 import {
   claimIngestReceiptSchema,
   claimCursorResponseSchema,
-  cursorResponseSchema,
   handoffCursorResponseSchema,
   handoffIngestReceiptSchema,
   intentCursorResponseSchema,
   intentIngestReceiptSchema,
+  operationsResponseSchema,
+  OPERATIONS_PROTOCOL_VERSION,
   registerReplicaRequestSchema,
   registerReplicaResponseSchema,
   remoteOperationSchema,
@@ -28,7 +29,7 @@ import {
 } from "@crosscode/protocol";
 import type { LocalOperation } from "./types.js";
 import type { ClaimOutboundRecord, HandoffOutboundRecord, IntentOutboundRecord, OutboundRecord, TaskOutboundRecord, ValidationOutboundRecord } from "./state.js";
-import type { RemoteSyncTransport } from "./index.js";
+import type { RemoteCursorTooOld, RemoteSyncTransport } from "./index.js";
 import { getSupabaseClient, toStoredSession, type StoredSession } from "./supabase-client.js";
 
 type Envelope<T> = { ok: true; data: T } | { ok: false; error: string };
@@ -125,8 +126,17 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
     };
   }
 
-  async list(after: number): Promise<{ operations: LocalOperation[]; nextCursor: number }> {
-    const data = cursorResponseSchema.parse(await this.authorizedRequest(`/v1/operations?afterSequence=${after}`, "GET"));
+  /**
+   * `protocolVersion` tells the service this client understands the cursor-too-old status.
+   * Without it the service answers an unservable cursor with 410 rather than a body an
+   * older daemon could misread, so sending it is what opts this daemon into resynchronizing
+   * instead of failing.
+   */
+  async list(after: number): Promise<{ operations: LocalOperation[]; nextCursor: number } | RemoteCursorTooOld> {
+    const data = operationsResponseSchema.parse(
+      await this.authorizedRequest(`/v1/operations?afterSequence=${after}&protocolVersion=${OPERATIONS_PROTOCOL_VERSION}`, "GET")
+    );
+    if ("status" in data) return { status: data.status, resyncFrom: data.resyncFrom, retentionDays: data.retentionDays };
     return {
       nextCursor: data.nextCursor,
       operations: data.operations.map((operation) => {

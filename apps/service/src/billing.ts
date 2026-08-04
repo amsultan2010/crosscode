@@ -18,7 +18,9 @@ const ALL_AUTONOMY_TIERS: readonly AutonomyTier[] = ["always-ask", "auto-if-clea
 //
 // What is left as a wall: auto-always autonomy (the "I trust it now" moment) and
 // historyRetentionDays, which bounds the only table that grows without limit
-// (operation_files.payload). Team is differentiated by org controls -- SSO, audit export
+// (operations, whose event column holds every proposed file body). It is enforced by
+// PgStore.pruneOperationsByRetention(), swept on a schedule by retention.ts.
+// Team is differentiated by org controls -- SSO, audit export
 // -- not by seat count, which is why it shares Unlimited's caps. Student mirrors Pro's
 // limits at Essential's price (verification is enforced elsewhere, not by these caps).
 export const PLAN_LIMITS: Record<Plan, {

@@ -217,7 +217,10 @@ Trust boundaries:
 - **Service ↔ PostgreSQL:** the runtime connects with a least-privilege role
   (`CROSSCODE_RUNTIME_DB_ROLE`) that cannot update/delete immutable `operations`
   or `audit_events` rows, and the service refuses to start with a role that can.
-  The runtime never executes DDL. Row Level Security policies
+  The runtime never executes DDL. History retention is the one thing that deletes
+  `operations`, and it is deliberately kept outside that role: the scheduled sweep
+  opens a second connection with `CROSSCODE_RETENTION_DATABASE_URL`, so no
+  request-handling code path can reach a connection able to erase history. Row Level Security policies
   (`004_supabase_auth.sql`) are defense-in-depth on top of this — the service
   itself still connects with a privileged role rather than through PostgREST,
   so application-level authorization in `resolveMembership` remains the primary

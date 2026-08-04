@@ -223,7 +223,7 @@ Set on the host: `DATABASE_URL`, `SUPABASE_URL`, and — when a proxy in front t
 product, which means no browser origin may call the API cross-origin; it exists for anyone
 building their own browser client against the service.
 
-Run `pnpm service:migrate` with a migration-owner connection before starting a new service version. `CROSSCODE_RUNTIME_DB_ROLE` applies the required least-privilege grants, and service startup refuses a role that can update/delete immutable operations or audit rows. The runtime never executes DDL. Non-loopback PostgreSQL URLs must specify exactly one `sslmode=verify-full` and cannot use host/SSL query overrides. For local-only testing against a plain (non-Supabase) Postgres instance, `infra/docker-compose.yml` still starts one on `127.0.0.1:5432`; it is not used in production, where `DATABASE_URL` points at Supabase.
+Run `pnpm service:migrate` with a migration-owner connection before starting a new service version. Set `CROSSCODE_RETENTION_DATABASE_URL` (optionally `CROSSCODE_RETENTION_SWEEP_MINUTES`, default 60) to that same privileged connection to enable the scheduled history-retention sweep; the least-privilege runtime role cannot delete operations, so without it retention only runs when an admin invokes `pnpm service:prune`. `CROSSCODE_RUNTIME_DB_ROLE` applies the required least-privilege grants, and service startup refuses a role that can update/delete immutable operations or audit rows. The runtime never executes DDL. Non-loopback PostgreSQL URLs must specify exactly one `sslmode=verify-full` and cannot use host/SSL query overrides. For local-only testing against a plain (non-Supabase) Postgres instance, `infra/docker-compose.yml` still starts one on `127.0.0.1:5432`; it is not used in production, where `DATABASE_URL` points at Supabase.
 
 ## Workspaces, members, and invites (CLI and API only)
 
@@ -433,7 +433,7 @@ For the implementation plan and current milestone ledger, see [BUILD_INSTRUCTION
 
 ## Current limitations
 
-- Production PostgreSQL role grants still need environment-specific deployment hardening. Retention is opt-in and admin-only: `pnpm service:prune -- --older-than-days <n>` deletes old audit events and ended sessions; cursor-reconnect-dependent tables are deliberately never pruned.
+- Production PostgreSQL role grants still need environment-specific deployment hardening. Operation history is pruned to the workspace plan's `historyRetentionDays` — on a service-side schedule when `CROSSCODE_RETENTION_DATABASE_URL` names a role that may delete, and on demand via `pnpm service:prune`, which also deletes audit events and ended sessions older than `--older-than-days <n>`. A replica whose cursor falls outside the retained window is told to resynchronize explicitly; the other cursor-reconnect tables (tasks, claims, handoffs, intents, validations) are still never pruned.
 - Supabase refresh tokens are stored in the OS keychain when available (macOS `security`, Linux `secret-tool`); otherwise, including on Windows, the mode-`0600` Git-directory configuration fallback is used.
 - Binary files are shared base64-encoded with byte-exact materialization; any conflict involving a binary file requires human approval, since deterministic hunk/merge analysis is text-only.
 - Renames are tracked as first-class rename changes (old path, new path, content); a rename conflicting with pending work on either path, moving into or out of a critical path, or whose source has diverged locally always requires approval.

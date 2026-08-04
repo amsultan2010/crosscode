@@ -428,6 +428,38 @@ export const cursorResponseSchema = z.object({
 }).strict();
 export type CursorResponse = z.infer<typeof cursorResponseSchema>;
 
+/**
+ * Version of the `GET /v1/operations` read surface the client understands, sent as a
+ * `protocolVersion` query parameter. Distinct from the envelope's `schemaVersion`, which
+ * versions event shapes rather than this endpoint's answers.
+ *
+ * 1 -> 2 added the cursor-too-old status below. A daemon that predates it sends nothing
+ * (so the service reads version 1) and is refused with `410 Gone` instead: it would parse
+ * the status body with cursorResponseSchema, which is `.strict()` and has no `status` key,
+ * so it cannot mistake it for a page -- but a hard HTTP failure it already surfaces as a
+ * sync error is a much clearer answer than a validation crash.
+ */
+export const OPERATIONS_PROTOCOL_VERSION = 2;
+
+/**
+ * Retention has deleted the operations this cursor asks for, so no page can answer it
+ * honestly. `resyncFrom` is the oldest cursor the service can still serve completely; a
+ * replica adopts it and continues from there, accepting that proposals inside the deleted
+ * range are gone. That is safe because Git, not this history, is the source of truth --
+ * what is lost is unreviewed proposals, never committed or working-tree work.
+ */
+export const cursorTooOldResponseSchema = z.object({
+  status: z.literal("cursor-too-old"),
+  protocolVersion: z.literal(OPERATIONS_PROTOCOL_VERSION),
+  resyncFrom: z.number().int().nonnegative(),
+  retentionDays: z.number().int().positive()
+}).strict();
+export type CursorTooOldResponse = z.infer<typeof cursorTooOldResponseSchema>;
+
+/** What `GET /v1/operations` answers a `protocolVersion=2` client: a page, or a resync order. */
+export const operationsResponseSchema = z.union([cursorResponseSchema, cursorTooOldResponseSchema]);
+export type OperationsResponse = z.infer<typeof operationsResponseSchema>;
+
 export const validationSchema = z.object({ id: z.string(), profile: z.string(), command: z.string(), exitCode: z.number().int(), durationMs: z.number().nonnegative(), tree: z.string().optional(), output: z.string(), runnerId: z.string(), createdAt: z.string().datetime() });
 export type Validation = z.infer<typeof validationSchema>;
 
