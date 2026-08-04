@@ -271,8 +271,8 @@ async function handleRequest(
     }
   };
 
-  if (method === "GET" && url.pathname === "/healthz") {
-    send(response, 200, { status: "ok" });
+  if (method === "GET" && (url.pathname === "/health" || url.pathname === "/healthz")) {
+    sendHealth(response);
     return;
   }
 
@@ -1071,6 +1071,20 @@ function applyCorsHeaders(request: IncomingMessage, response: ServerResponse, al
   response.setHeader("access-control-allow-methods", "GET, POST, PUT, DELETE, OPTIONS");
   response.setHeader("access-control-allow-headers", `authorization, content-type, ${WORKSPACE_HEADER}`);
   response.setHeader("access-control-max-age", "600");
+}
+
+/**
+ * Liveness only. No auth and no store call, so it answers whenever the process (or the
+ * serverless instance) can run code at all, which is what makes it a usable probe for "the
+ * function was importable" as opposed to "the database is reachable". The `service` field is
+ * what a caller checks: a request that misses the API and falls through to the static site
+ * also returns 200, and only the body tells the two apart.
+ *
+ * Exported because the serverless adapter answers the probe before it has read any
+ * configuration, and one spelling of the response is better than two.
+ */
+export function sendHealth(response: ServerResponse): void {
+  send(response, 200, { status: "ok", service: "crosscode-service" });
 }
 
 function send(response: ServerResponse, status: number, data: unknown): void {

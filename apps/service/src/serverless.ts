@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createSupabaseJwks } from "./auth.js";
-import { createRequestHandler } from "./http.js";
+import { createRequestHandler, sendHealth } from "./http.js";
 import { createObservability, observeRequest } from "./observability.js";
 import { PgStore } from "./store.js";
 import type { WebSocketGateway } from "./ws.js";
@@ -57,8 +57,25 @@ export type ServerlessHandler = (request: IncomingMessage, response: ServerRespo
  */
 let cached: { handler: ServerlessHandler; store: PgStore } | undefined;
 
+/**
+ * The health probe is answered here, before any configuration is read, and every other
+ * request builds (or reuses) the real handler. A deployment missing DATABASE_URL must still
+ * be able to say "the function loaded and is running code", because that is a different
+ * fault from "the function could not be imported" and the two get fixed in different places.
+ * Routes that need the database still fail, which is what keeps the probe from being a lie.
+ */
 export function createServerlessHandler(environment: NodeJS.ProcessEnv = process.env): ServerlessHandler {
-  if (cached) return cached.handler;
+  return async (request, response) => {
+    if (isHealthProbe(request)) {
+      sendHealth(response);
+      return;
+    }
+    const instance = (cached ??= buildHandler(environment));
+    await instance.handler(request, response);
+  };
+}
+
+function buildHandler(environment: NodeJS.ProcessEnv): { handler: ServerlessHandler; store: PgStore } {
   const databaseUrl = required(environment.DATABASE_URL, "DATABASE_URL");
   const supabaseUrl = required(environment.SUPABASE_URL, "SUPABASE_URL");
   const store = new PgStore(databaseUrl);
@@ -101,8 +118,14 @@ export function createServerlessHandler(environment: NodeJS.ProcessEnv = process
       await reporter.flush();
     }
   };
-  cached = { handler: guarded, store };
-  return guarded;
+  return { handler: guarded, store };
+}
+
+/** Matches the two liveness spellings the router answers, ignoring any query string. */
+function isHealthProbe(request: IncomingMessage): boolean {
+  if (request.method !== "GET") return false;
+  const pathname = (request.url ?? "/").split("?")[0];
+  return pathname === "/health" || pathname === "/healthz";
 }
 
 function required(value: string | undefined, name: string): string {
