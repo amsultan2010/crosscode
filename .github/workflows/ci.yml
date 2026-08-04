@@ -35,6 +35,13 @@ jobs:
       # let unrelated suites interleave session and presence rows and fail sporadically.
       # They get their own serialized step below, which is what `test:postgres` is for.
       - run: pnpm test
+      # `test:postgres` must cover every database-gated file, or a suite runs in no job at
+      # all — which is how three tests once went unexecuted behind a hand-written file list
+      # in package.json. scripts/postgres-tests.mjs keeps the selection honest without a
+      # list: it selects every *.test.ts that reads CROSSCODE_TEST_DATABASE_URL (the same
+      # read that makes a suite skip itself), so a new gated suite is picked up with nothing
+      # to remember to edit, and it fails this step if any selected test reports as skipped
+      # rather than passed. Note that vitest alone exits 0 on a fully skipped suite.
       - name: PostgreSQL integration suites
         run: pnpm test:postgres
         env:

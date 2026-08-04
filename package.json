@@ -22,7 +22,7 @@
     "build": "tsc --noEmit && node scripts/build.mjs",
     "prepublishOnly": "pnpm build",
     "test": "vitest run --coverage",
-    "test:postgres": "node -e \"if (!process.env.CROSSCODE_TEST_DATABASE_URL) { console.error('CROSSCODE_TEST_DATABASE_URL is required'); process.exit(1) }\" && vitest run --no-file-parallelism apps/service/src/store.integration.test.ts apps/service/src/pairing.integration.test.ts apps/daemon/src/reconnect.integration.test.ts apps/daemon/src/live-coordination.integration.test.ts",
+    "test:postgres": "node scripts/postgres-tests.mjs",
     "test:watch": "vitest",
     "crosscode": "tsx apps/cli/src/index.ts",
     "daemon": "tsx apps/daemon/src/main.ts",
