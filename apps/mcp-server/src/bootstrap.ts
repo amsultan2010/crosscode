@@ -1,14 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openInBrowser } from "../../daemon/src/browser-login.js";
 import { readDaemonConfig, writeDaemonConfig } from "../../daemon/src/runtime.js";
 import { DaemonClient } from "../../daemon/src/client.js";
-
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-const tsxBin = join(repoRoot, "node_modules", ".bin", "tsx");
-const daemonMain = join(repoRoot, "apps", "daemon", "src", "main.ts");
 
 const LOGIN_HINT = "No Crosscode session found for this directory; run `crosscode login` first, then retry.";
 
@@ -43,12 +40,50 @@ async function ensureIdentity(directory: string): Promise<void> {
   });
 }
 
-function spawnDaemon(directory: string): void {
-  const child = spawn(tsxBin, [daemonMain, "--directory", directory], { detached: true, stdio: "ignore" });
-  child.unref();
+/**
+ * Works out how to launch the daemon for however this server was installed, and says so
+ * explicitly rather than guessing at a monorepo layout that only exists in a clone.
+ *
+ * Installed from npm, this module is `dist/mcp.js` and the bundled daemon is `dist/daemon.js`
+ * beside it, run by the same Node binary that is running us. In a clone the daemon is still
+ * TypeScript source that only tsx can execute, so `pnpm mcp` keeps working. Both candidates
+ * are checked for existence, so a layout that does not match produces a message naming the
+ * paths that were tried instead of an ENOENT from a path nobody ever verified.
+ */
+export function resolveDaemonLaunch(moduleDirectory = dirname(fileURLToPath(import.meta.url))): { command: string; args: string[] } {
+  const bundled = join(moduleDirectory, "daemon.js");
+  if (existsSync(bundled)) return { command: process.execPath, args: [bundled] };
+
+  const repoRoot = resolve(moduleDirectory, "../../..");
+  const daemonSource = join(repoRoot, "apps", "daemon", "src", "main.ts");
+  const tsxBin = join(repoRoot, "node_modules", ".bin", "tsx");
+  if (existsSync(daemonSource) && existsSync(tsxBin)) return { command: tsxBin, args: [daemonSource] };
+
+  throw new Error(`Cannot locate the Crosscode daemon: no bundled daemon at ${bundled}, and no ${daemonSource} runnable by ${tsxBin}`);
 }
 
-async function waitForDaemon(directory: string, timeoutMs = 10_000): Promise<DaemonClient> {
+/**
+ * Starts the daemon detached and returns a getter for whatever went wrong, if anything.
+ * `detached` + `stdio: "ignore"` is what keeps the daemon alive past this process, but it
+ * also means a failed exec is completely silent -- the MCP client would otherwise see
+ * `DAEMON_UNAVAILABLE` forever with no thread to pull on.
+ */
+function spawnDaemon(directory: string): () => string | undefined {
+  const { command, args } = resolveDaemonLaunch();
+  let failure: string | undefined;
+  const child = spawn(command, [...args, "--directory", directory], { detached: true, stdio: "ignore" });
+  child.once("error", (error) => {
+    failure = `could not run \`${command}\`: ${error.message}`;
+  });
+  child.once("exit", (code, signal) => {
+    if (code) failure = `\`${command}\` exited with code ${code}`;
+    else if (signal) failure = `\`${command}\` was killed by ${signal}`;
+  });
+  child.unref();
+  return () => failure;
+}
+
+async function waitForDaemon(directory: string, spawnFailure: () => string | undefined, timeoutMs = 10_000): Promise<DaemonClient> {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
   while (Date.now() < deadline) {
@@ -56,10 +91,14 @@ async function waitForDaemon(directory: string, timeoutMs = 10_000): Promise<Dae
       return await DaemonClient.connect(directory);
     } catch (error) {
       lastError = error;
+      // An exec that failed outright is never going to succeed on the next poll; report it
+      // now instead of making the caller wait out the full timeout for a worse message.
+      if (spawnFailure()) break;
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
     }
   }
-  throw new Error(`Crosscode daemon did not become ready in time: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+  const reason = spawnFailure() ?? (lastError instanceof Error ? lastError.message : String(lastError));
+  throw new Error(`Crosscode daemon did not become ready: ${reason}`);
 }
 
 /**
@@ -75,7 +114,6 @@ export async function ensureDaemonRunning(directory: string): Promise<DaemonClie
     return await DaemonClient.connect(directory);
   } catch {
     await ensureIdentity(directory);
-    spawnDaemon(directory);
-    return waitForDaemon(directory);
+    return waitForDaemon(directory, spawnDaemon(directory));
   }
 }

@@ -2,7 +2,6 @@
   "name": "@crosscode/mcp-server",
   "private": true,
   "type": "module",
-  "bin": { "crosscode-mcp": "./src/main.ts" },
   "scripts": {
     "generate:docs": "tsx src/generate-tool-docs.ts"
   },
