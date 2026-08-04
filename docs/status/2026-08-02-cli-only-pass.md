@@ -143,6 +143,15 @@ deployment to run it against. First real integration test once a domain exists.
 - **Billing enforcement.** The `assertSeatCapAvailable` / `assertSemanticReviewCallAvailable` /
   `assertPlanAllowsAutonomyTier` helpers still are not wired into their call sites — a
   pre-existing Phase 10 gap, not something this pass touched.
+
+  **Correction (2026-08-04):** no longer true of two of the three, and it was already untrue
+  when this file said it. `assertPlanAllowsAutonomyTier` is enforced on the autonomy-tier
+  write path and `assertSeatCapAvailable` inside the transaction that adds a member (both in
+  `apps/service/src/store.ts`), answering `402`. `assertSemanticReviewCallAvailable` remains
+  deliberately unwired: semantic review is delegated to the member's own MCP agent and never
+  reaches the service, so there is no per-call cost to meter and no request to hang a counter
+  on — see the comment above `incrementSemanticReviewUsage` in `apps/service/src/billing.ts`.
+  Corrected in place rather than rewritten, since this file is a snapshot of one merge.
 - **`expires_at` is required** by the callback schema. Supabase populates it on a signed-in
   session, so this is fine in practice, but a session without it fails as
   `LOGIN_CALLBACK_INVALID` rather than degrading.

@@ -148,8 +148,10 @@ renegotiate it.
   on an ephemeral port with the route `/callback`, and generates a 32-character random
   `state`.
 - It opens the browser at `${WEB_URL}/auth/cli.html?port=<port>&state=<state>`, where
-  `WEB_URL` comes from `--web <url>`, else `CROSSCODE_WEB_URL`, else the production
-  default.
+  `WEB_URL` comes from `--web <url>`, else `CROSSCODE_WEB_URL`, else the deprecated
+  `CROSSCODE_DASHBOARD_URL` (still read for setups that predate the dashboard's removal;
+  it warns on stderr). There is no production default — no site is deployed yet, so with
+  none of the three set this fails with `WEB_URL_REQUIRED` rather than guessing a domain.
 - `/auth/cli.html` is a page on the marketing site. If the visitor is not signed in it
   renders the normal sign-in form. After a successful Supabase sign-in it POSTs JSON to
   `http://127.0.0.1:<port>/callback`:
