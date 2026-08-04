@@ -9,10 +9,12 @@ the marketing site's "Install" button copies to the clipboard — keep both in s
 ## The prompt
 
 ````text
-Set up Crosscode for this project. Crosscode is a local-first safety daemon that
-watches Git and filesystem activity and exposes itself to me as an MCP server, so
-you (my coding agent) can coordinate safely with other people and agents working in
-other checkouts of this same repository. Do the following:
+Set up Crosscode for this project. Crosscode keeps everyone working on this
+codebase in sync: a local daemon watches Git and filesystem activity and exposes
+itself to you (my coding agent) as an MCP server, so you can see what my teammates
+and their agents are doing in their own checkouts, and they can see what we do here
+— within seconds, instead of at pull-request time. Their work arrives as proposals
+we review, never as writes into our files. Do the following:
 
 1. Check whether `~/.crosscode` already exists.
    - If it does not exist: run `git clone https://github.com/amsultan2010/crosscode.git ~/.crosscode`.

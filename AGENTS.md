@@ -5,14 +5,19 @@ working in a Crosscode-managed checkout.
 
 ## What Crosscode is
 
-Crosscode is a local-first coordination layer for developers and coding agents
-working in separate checkouts of the same Git repository. A per-worktree daemon
-watches filesystem and Git activity, records settled edits as durable
-transactions, and exchanges them with a coordination service. Remote work
-arrives as a proposal and is never written into your checkout until you (or
-the agent acting for you) explicitly accept it. Git remains the durable
-history and publishing layer — Crosscode does not replace commits, branches,
-or your remote.
+Crosscode makes a shared codebase feel closer to a shared document. Normally
+each teammate works on their own copy and nobody sees anyone else's work until
+a pull request lands; Crosscode closes that gap to seconds. A per-worktree
+daemon watches filesystem and Git activity, records settled edits as durable
+transactions, and exchanges them with a coordination service, so a teammate's
+work reaches everyone else as soon as it settles.
+
+It stops one deliberate step short of a shared document: remote work arrives as
+a *proposal* and is never written into a checkout until you (or the agent acting
+for you) explicitly accept it. Live typing into someone else's working tree is
+the one thing you do not want in code, so that decision always stays with the
+person whose tree it is. Git remains the durable history and publishing layer —
+Crosscode does not replace commits, branches, or your remote.
 
 ## CLI and MCP first: how agents use Crosscode
 
