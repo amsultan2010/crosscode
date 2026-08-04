@@ -395,12 +395,31 @@ Crosscode never stages, unstages, commits, pushes, force-pushes, resets, rebases
 ## Development and verification
 
 ```bash
-pnpm build                 # tsc --noEmit, strict
+pnpm build                 # tsc --noEmit under strict, then esbuild-bundles dist/
 pnpm test                  # unit + local-daemon suites
 pnpm test:postgres         # PostgreSQL suites, serialized; needs CROSSCODE_TEST_DATABASE_URL
 pnpm docs:build            # regenerates the docs site from docs/*.md
 pnpm audit --audit-level high
 ```
+
+### Packaging
+
+`pnpm build` bundles three entrypoints into `dist/` with esbuild — `cli.js` (the
+`crosscode` bin), `mcp.js` (the `crosscode-mcp` bin), and `daemon.js`, which is not a bin
+but is spawned by the MCP server's bootstrap from wherever it was installed. The
+`@crosscode/*` workspace packages are inlined; the ten real npm dependencies stay external
+and are declared on the root manifest. `scripts/build.mjs` fails the build if anything from
+`node_modules` gets inlined, which is what keeps that list honest.
+
+The root package is the published one. To check the tarball before publishing:
+
+```bash
+npm pack                                    # inspect contents; dist/ + README + LICENSE only
+npm i -g ./crosscode-*.tgz                  # or --prefix <dir> to keep it out of your global bin
+cd $(mktemp -d) && git init -q . && crosscode init --json && crosscode status --json
+```
+
+`apps/service` is deliberately not part of this package: it deploys as a container.
 
 `pnpm test` skips the PostgreSQL suites unless `CROSSCODE_TEST_DATABASE_URL` is set, and
 they should be run through `pnpm test:postgres` rather than by setting that variable for
@@ -425,7 +444,7 @@ For the implementation plan and current milestone ledger, see [BUILD_INSTRUCTION
 - Billing has no payment provider behind it yet (see BUILD_INSTRUCTIONS.md Phase 10). The limits themselves are enforced: seat caps are checked inside the transaction that adds a member, and the autonomy tier a plan unlocks is checked on the write path, both answering `402` rather than `403` so a client can tell "out of seats" from "not allowed". The semantic-review call counter is deliberately not metered — review is delegated to your own already-connected MCP agent and never leaves your machine, so there is no per-call cost to bill and `GET /v1/workspace/billing` correctly reports zero calls used.
 - `pnpm test` skips the PostgreSQL integration suites unless `CROSSCODE_TEST_DATABASE_URL` is set, so a local run leaves the service's store, pairing, and reconnect paths unexercised. CI sets it; to run them locally use `pnpm test:postgres`.
 - There is no linter or formatter configured. `pnpm build` (`tsc --noEmit`) under `strict` is the only static gate.
-- Deliberately not published to npm or any editor marketplace — the supported surface is the daemon + MCP server, run from a cloned checkout via `pnpm install` and `tsx` (see `docs/install-prompt.md`).
+- Not on npm yet. The `crosscode` package builds, packs, and installs — `npm pack` produces a tarball whose `crosscode` and `crosscode-mcp` binaries work outside this repo on nothing but Node 24 — but it has never been published, so the documented install path is still a cloned checkout run via `pnpm install` and `tsx` (see `docs/install-prompt.md`). Publishing is one `npm publish` away; `docs/install-prompt.md`, `docs/mcp-clients.md`, and the marketing site's install snippet all need updating to the npm path at the same time. There is no editor marketplace extension.
 
 ## Contributing
 

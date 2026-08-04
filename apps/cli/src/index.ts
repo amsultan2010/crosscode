@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
@@ -464,7 +465,7 @@ function formatError(error: unknown): { error: { code: string; message: string; 
   // Same shape: a stable code plus a hint naming the two variables to set.
   if (error instanceof SupabaseConfigError) return { error: { code: error.code, message: error.message, hint: error.hint } };
   if (error instanceof DaemonUnavailableError) {
-    return { error: { code: error.code, message: error.message, hint: "Run `crosscode init` if this checkout has no configuration, then start the daemon with `pnpm daemon` (or make one MCP tool call, which starts it for you)." } };
+    return { error: { code: error.code, message: error.message, hint: "Run `crosscode init` if this checkout has no configuration, then start the daemon by making one MCP tool call, which starts it for you." } };
   }
   const message = error instanceof Error ? error.message : "Command failed";
   if (message === "Unknown command") return { error: { code: "UNKNOWN_COMMAND", message, hint: "Run `crosscode commands --json` to see available commands." } };
@@ -488,4 +489,17 @@ async function main(): Promise<void> {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main();
+// realpath, not argv[1] as given: npm installs a `bin` as a symlink into its bin directory,
+// so argv[1] is that symlink while import.meta.url is the resolved module. Comparing them
+// raw makes the installed `crosscode` binary exit silently having done nothing.
+function isMainModule(): boolean {
+  const invoked = process.argv[1];
+  if (!invoked) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(invoked)).href;
+  } catch {
+    return import.meta.url === pathToFileURL(invoked).href;
+  }
+}
+
+if (isMainModule()) void main();
