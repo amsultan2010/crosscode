@@ -52,7 +52,7 @@ This assumes the coordination service is already running and you know its URL (`
    crosscode login --web <site-url> --service <service-url>
    ```
 
-   In a real terminal this opens the sign-in page in your browser and the CLI picks up the session on a loopback callback; tokens are never printed. `--web` (or the `CROSSCODE_WEB_URL` environment variable) is **required** — there is no default website URL yet, so bare `crosscode login` fails with `WEB_URL_REQUIRED`. Add `--no-browser` to print the URL instead of opening it.
+   In a real terminal this opens the sign-in page in your browser and the CLI picks up the session on a loopback callback; tokens are never printed. Both flags are optional: `--service` defaults to the hosted coordination service and `--web` to the hosted website (`apps/daemon/src/hosted.ts`), so bare `crosscode login` works. Self-hosters override with the flags or with `CROSSCODE_SERVICE_URL` / `CROSSCODE_WEB_URL`. Add `--no-browser` to print the URL instead of opening it.
 
    Agents, CI, and anything without a browser should use the headless path instead, which needs no `--web` at all:
 
@@ -415,7 +415,7 @@ The root package is the published one. To check the tarball before publishing:
 
 ```bash
 npm pack                                    # inspect contents; dist/ + README + LICENSE only
-npm i -g ./crosscode-*.tgz                  # or --prefix <dir> to keep it out of your global bin
+npm i -g ./crosscode-cli-*.tgz             # or --prefix <dir> to keep it out of your global bin
 cd $(mktemp -d) && git init -q . && crosscode init --json && crosscode status --json
 ```
 
@@ -444,7 +444,7 @@ For the implementation plan and current milestone ledger, see [BUILD_INSTRUCTION
 - Billing has no payment provider behind it yet (see BUILD_INSTRUCTIONS.md Phase 10). The limits themselves are enforced: seat caps are checked inside the transaction that adds a member, and the autonomy tier a plan unlocks is checked on the write path, both answering `402` rather than `403` so a client can tell "out of seats" from "not allowed". The semantic-review call counter is deliberately not metered — review is delegated to your own already-connected MCP agent and never leaves your machine, so there is no per-call cost to bill and `GET /v1/workspace/billing` correctly reports zero calls used.
 - `pnpm test` skips the PostgreSQL integration suites unless `CROSSCODE_TEST_DATABASE_URL` is set, so a local run leaves the service's store, pairing, and reconnect paths unexercised. CI sets it; to run them locally use `pnpm test:postgres`.
 - There is no linter or formatter configured. `pnpm build` (`tsc --noEmit`) under `strict` is the only static gate.
-- Not on npm yet. The `crosscode` package builds, packs, and installs — `npm pack` produces a tarball whose `crosscode` and `crosscode-mcp` binaries work outside this repo on nothing but Node 24 — but it has never been published, so the documented install path is still a cloned checkout run via `pnpm install` and `tsx` (see `docs/install-prompt.md`). Publishing is one `npm publish` away; `docs/install-prompt.md`, `docs/mcp-clients.md`, and the marketing site's install snippet all need updating to the npm path at the same time. There is no editor marketplace extension.
+- Not on npm yet. The `@crosscode/cli` package builds, packs, and installs — `npm pack` produces a tarball whose `crosscode` and `crosscode-mcp` binaries work outside this repo on nothing but Node 24 — but it has never been published, so the documented install path is still a cloned checkout run via `pnpm install` and `tsx` (see `docs/install-prompt.md`). The unscoped name `crosscode` is owned by an unrelated project, which is why the package is published under the `@crosscode` scope while both binaries keep their short names. Publishing is one `npm publish` away; `docs/install-prompt.md`, `docs/mcp-clients.md`, and the marketing site's install snippet all need updating to the npm path at the same time. There is no editor marketplace extension.
 
 ## Contributing
 

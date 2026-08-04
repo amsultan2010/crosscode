@@ -1,5 +1,5 @@
 {
-  "name": "@crosscode/cli",
+  "name": "@crosscode/cli-src",
   "private": true,
   "type": "module",
   "dependencies": { "@crosscode/daemon": "workspace:*", "@crosscode/git": "workspace:*", "@crosscode/protocol": "workspace:*", "@crosscode/service": "workspace:*", "commander": "^15.0.0" }

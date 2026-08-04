@@ -171,6 +171,8 @@ export class PgStore {
       await client.query(pairingSql);
       const projectsSql = await readFile(new URL("../migrations/010_projects.sql", import.meta.url), "utf8");
       await client.query(projectsSql);
+      const teamPlanSql = await readFile(new URL("../migrations/011_team_plan.sql", import.meta.url), "utf8");
+      await client.query(teamPlanSql);
     } finally {
       await client.query("SELECT pg_advisory_unlock(hashtext('crosscode_migrate'))");
       client.release();

@@ -21,10 +21,10 @@
   <header class="site-header">
     <nav>
       <a class="brand" href="/">Crosscode</a>
-      <a href="#use-cases">Use cases</a>
-      <a href="#benefits">Why Crosscode</a>
+      <a href="#compare">Why Crosscode</a>
       <a href="#how-it-works">How it works</a>
-      <a href="#terminal-vs-site">Terminal vs. this site</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#use-cases">Use cases</a>
       <a href="#safety">Safety model</a>
       <a href="/docs/index.html">Docs</a>
       <a href="/auth/signin.html">Sign in</a>
@@ -41,20 +41,20 @@
       <div class="inner hero-grid">
         <div class="hero-copy reveal">
           <span class="eyebrow">Pre-1.0 &middot; Open source &middot; MCP-native</span>
-          <h1>Let your coding agents share a repo without stepping on each other.</h1>
+          <h1>Your coding agents are overwriting each other. Crosscode stops that.</h1>
           <p class="subtitle">
-            Everyone works in their own normal Git checkout. Crosscode runs quietly
-            in the background, notices each edit once it has settled, and shares it
-            with everyone else. Their changes never get written to your files behind
-            your back &mdash; each one shows up as a proposal you look at and accept
-            or reject, like a pull request that takes seconds instead of a round trip
-            through your Git host.
+            Run Claude in one worktree and Codex in another and they will quietly
+            clobber each other's edits. Crosscode gives each checkout a small
+            background daemon that notices every edit once it has settled and shares
+            it with the others. Nothing is ever written to your files behind your back
+            &mdash; each change arrives as a proposal you accept or reject, like a pull
+            request that takes seconds instead of a round trip through your Git host.
           </p>
           <div class="cta-row">
             <a class="cta" href="#install">Set it up with one prompt</a>
-            <a class="cta secondary" href="/docs/index.html">Browse the docs</a>
+            <a class="cta secondary" href="#pricing">See pricing</a>
           </div>
-          <p class="hero-microcopy">Open source, pre-1.0, and self-hosted today. Paste one prompt into any MCP-capable agent and it wires itself up.</p>
+          <p class="hero-microcopy"><strong>You don't need a team.</strong> One person running two agents is already two editors on one repo &mdash; that's the case Crosscode was built for. Free forever for that, and free forever if you self-host.</p>
         </div>
 
         <div class="hero-visual reveal">
@@ -76,6 +76,53 @@
 <span class="muted">&gt; </span><span class="cursor">▌</span></code></pre>
           </div>
         </div>
+      </div>
+    </section>
+
+    <section id="compare" class="alt">
+      <div class="inner">
+        <div class="section-heading reveal">
+          <h2>What you're probably doing now &mdash; and what it costs you</h2>
+          <p>Everyone running more than one agent has already invented a workaround. Here's how each one actually plays out.</p>
+        </div>
+
+        <div class="compare-table reveal">
+          <div class="compare-row compare-head">
+            <div>Your current approach</div>
+            <div>Where it breaks</div>
+            <div>With Crosscode</div>
+          </div>
+          <div class="compare-row">
+            <div class="compare-now">Point both agents at one checkout</div>
+            <div class="compare-pain">Whoever writes last wins. You find out when the tests fail, or later.</div>
+            <div class="compare-fix">An edit is never applied on top of a newer local change. Stale writes are refused, not merged.</div>
+          </div>
+          <div class="compare-row">
+            <div class="compare-now">Separate worktrees, merge by hand</div>
+            <div class="compare-pain">You're the merge queue. Conflicts surface hours later, far from the context that caused them.</div>
+            <div class="compare-fix">Conflicts are classified the moment an edit settles, while you still remember what each agent was doing.</div>
+          </div>
+          <div class="compare-row">
+            <div class="compare-now">A branch and a PR per agent</div>
+            <div class="compare-pain">Minutes of round trip through your Git host for a change that took four seconds to make.</div>
+            <div class="compare-fix">Review happens locally, in your terminal or through your agent, in seconds. Publish to a real branch when you're ready.</div>
+          </div>
+          <div class="compare-row">
+            <div class="compare-now">Tell the agents which files to avoid</div>
+            <div class="compare-pain">Works until one of them ignores you, which they do.</div>
+            <div class="compare-fix">Claims and live presence make it a fact the other agent can query, not an instruction it might drop.</div>
+          </div>
+          <div class="compare-row">
+            <div class="compare-now">Let an AI merge tool resolve it</div>
+            <div class="compare-pain">Now something you didn't read has rewritten your working tree.</div>
+            <div class="compare-fix">The AI reviewer only ever advises, runs on your own agent, and can't apply anything without you.</div>
+          </div>
+        </div>
+
+        <p class="install-steps" style="text-align:center; margin-top:1.75rem;">
+          The common thread: Crosscode doesn't replace your editor, your agent, your branches, or your Git host.
+          Turn it off and your repository is exactly what it was.
+        </p>
       </div>
     </section>
 
@@ -227,7 +274,121 @@
       </div>
     </section>
 
-    <section id="install">
+    <section id="pricing">
+      <div class="inner">
+        <div class="section-heading reveal">
+          <h2>Pricing</h2>
+          <p>
+            The free plan is meant to be the one most people never leave. Unlimited AI review,
+            unlimited repos, auto-apply, and up to 5 people &mdash; and if you host it yourself,
+            everything is free forever with no limits at all.
+          </p>
+        </div>
+
+        <div class="billing-toggle reveal" role="group" aria-label="Billing period">
+          <button type="button" class="billing-option is-active" data-billing="monthly">Monthly</button>
+          <button type="button" class="billing-option" data-billing="annual">Annual <span class="billing-save">2 months free</span></button>
+        </div>
+
+        <div class="pricing-grid stagger">
+          <div class="pricing-card pricing-card--featured reveal">
+            <div class="pricing-name">Free <span class="badge live">Forever</span></div>
+            <div class="pricing-price"><span class="pricing-amount">$0</span></div>
+            <p class="pricing-note">No card. No trial timer.</p>
+            <ul class="pricing-features">
+              <li>Up to <strong>5 people or agents</strong></li>
+              <li>Unlimited repos and workspaces</li>
+              <li><strong>Unlimited AI conflict review</strong></li>
+              <li>Auto-apply when a change is clean</li>
+              <li>7 days of proposal history</li>
+              <li>Every safety feature, nothing held back</li>
+            </ul>
+            <a class="cta pricing-cta" href="#install">Start free</a>
+          </div>
+
+          <div class="pricing-card reveal">
+            <div class="pricing-name">Essential</div>
+            <div class="pricing-price">
+              <span class="pricing-amount" data-monthly="$2.50" data-annual="$2.08">$2.50</span>
+              <span class="pricing-period">/mo</span>
+            </div>
+            <p class="pricing-note"><span data-monthly="billed monthly" data-annual="$25 billed annually">billed monthly</span></p>
+            <ul class="pricing-features">
+              <li>Up to <strong>10 people or agents</strong></li>
+              <li>30 days of proposal history</li>
+              <li>Auto-apply always, unlocked</li>
+              <li>Everything in Free</li>
+            </ul>
+            <a class="cta secondary pricing-cta" href="/auth/signup.html">Create an account</a>
+          </div>
+
+          <div class="pricing-card reveal">
+            <div class="pricing-name">Pro</div>
+            <div class="pricing-price">
+              <span class="pricing-amount" data-monthly="$5.00" data-annual="$4.17">$5.00</span>
+              <span class="pricing-period">/mo</span>
+            </div>
+            <p class="pricing-note"><span data-monthly="billed monthly" data-annual="$50 billed annually">billed monthly</span></p>
+            <ul class="pricing-features">
+              <li>Up to <strong>25 people or agents</strong></li>
+              <li>90 days of proposal history</li>
+              <li>Priority support</li>
+              <li>Everything in Essential</li>
+            </ul>
+            <a class="cta secondary pricing-cta" href="/auth/signup.html">Create an account</a>
+          </div>
+
+          <div class="pricing-card reveal">
+            <div class="pricing-name">Unlimited</div>
+            <div class="pricing-price">
+              <span class="pricing-amount" data-monthly="$7.50" data-annual="$6.25">$7.50</span>
+              <span class="pricing-period">/mo</span>
+            </div>
+            <p class="pricing-note"><span data-monthly="billed monthly" data-annual="$75 billed annually">billed monthly</span></p>
+            <ul class="pricing-features">
+              <li><strong>Unlimited</strong> people and agents</li>
+              <li>1 year of proposal history</li>
+              <li>Everything in Pro</li>
+            </ul>
+            <a class="cta secondary pricing-cta" href="/auth/signup.html">Create an account</a>
+          </div>
+        </div>
+
+        <div class="pricing-team reveal">
+          <div>
+            <h3>Team</h3>
+            <p>
+              For organisations that need SSO, exportable audit logs, and an SLA. Priced per seat.
+              Everything in Unlimited, plus the controls your security review will ask about.
+            </p>
+          </div>
+          <a class="cta secondary" href="https://github.com/amsultan2010/crosscode/issues" rel="noopener">Get in touch</a>
+        </div>
+
+        <div class="pricing-strip reveal">
+          <div>
+            <h4>Self-hosting is free forever</h4>
+            <p>MIT-licensed, no seat limits, no history limits, no feature gates. Paid plans exist so you don't have to run it.</p>
+          </div>
+          <div>
+            <h4>Students and public repos are free</h4>
+            <p>Verified students get Pro-level limits. Work on a public repository is free the same way.</p>
+          </div>
+          <div>
+            <h4>Your code stays yours</h4>
+            <p>AI review runs on the agent already connected to your machine. Nothing is sent to a third-party model provider.</p>
+          </div>
+        </div>
+
+        <p class="install-steps" style="text-align:center;">
+          <strong>Heads up:</strong> the hosted coordination service is still being deployed, so paid plans
+          aren't chargeable yet. Self-hosting works today &mdash; see the
+          <a href="/docs/install.html">install &amp; quickstart guide</a>.
+        </p>
+      </div>
+    </section>
+
+    <section id="install" class="alt">
       <div class="inner">
         <div class="section-heading reveal">
           <h2>Set up in one paste</h2>
@@ -306,7 +467,7 @@ other checkouts of this same repository. Do the following:
       </div>
     </section>
 
-    <section id="how-it-works" class="alt">
+    <section id="how-it-works">
       <div class="inner">
         <div class="section-heading reveal">
           <h2>How it works</h2>
@@ -421,10 +582,10 @@ other checkouts of this same repository. Do the following:
           <div class="today-card reveal">
             <h3>Not there yet <span class="badge soon">Honest gaps</span></h3>
             <ul>
-              <li>No hosted coordination service. Someone on your team runs it, backed by a Supabase project you create. That's the main setup cost today.</li>
-              <li>No production website deployed, so <code>crosscode login</code> needs <code>--web &lt;url&gt;</code> (or the headless <code>--email</code>/<code>--password</code> path, which doesn't).</li>
-              <li>Billing is a placeholder: the plan and usage model exists, but there's no payment provider behind it, so nothing is charged or enforced.</li>
-              <li>Not on npm or any editor marketplace &mdash; you run it from a cloned checkout, by design.</li>
+              <li>The hosted coordination service isn't deployed yet. Until it is, someone on your team runs it, backed by a Supabase project you create. That's the main setup cost today.</li>
+              <li>No payment provider is wired up, so no paid plan is chargeable yet. Plan limits themselves are enforced server-side.</li>
+              <li>Not on npm or any editor marketplace yet &mdash; you run it from a cloned checkout.</li>
+              <li>No editor extension, and there won't be one: MCP is the single integration contract.</li>
             </ul>
           </div>
         </div>
@@ -445,7 +606,7 @@ other checkouts of this same repository. Do the following:
           </details>
           <details class="faq-item reveal">
             <summary>What does it cost?</summary>
-            <p>Nothing. It's MIT-licensed and you're running it on your own infrastructure. There's a plan and usage model in the code for a future hosted version, but no payment provider behind it, so nothing is charged or limited today.</p>
+            <p>Self-hosting is free forever with no limits &mdash; it's MIT-licensed and runs on your own infrastructure. The hosted plans (from $2.50/mo) exist so you don't have to run it yourself; see <a href="#pricing">pricing</a>. The hosted service is still being deployed, so nothing is chargeable yet.</p>
           </details>
           <details class="faq-item reveal">
             <summary>Which coding agents does this work with?</summary>
@@ -462,6 +623,14 @@ other checkouts of this same repository. Do the following:
           <details class="faq-item reveal">
             <summary>Does it work without any coding agent, just for people?</summary>
             <p>Yes. The CLI works for human-only teams too, though the proposal-review workflow matters most once agents are in the mix.</p>
+          </details>
+          <details class="faq-item reveal">
+            <summary>Do I need a team to get anything out of this?</summary>
+            <p>No, and this is the most common misread. One person running two agents in two worktrees is already two editors on one repo, which is exactly the problem Crosscode solves. Everything works with a single account and no one to invite. Teammates are something you add later, not a prerequisite.</p>
+          </details>
+          <details class="faq-item reveal">
+            <summary>Does my source code get sent to an AI provider?</summary>
+            <p>No. The AI reviewer for ambiguous conflicts runs on the coding agent already connected to your own machine, so it never leaves your machine and there is no third-party model provider in the loop. That's also why AI review is unlimited on every plan, including free &mdash; it costs us nothing.</p>
           </details>
         </div>
       </div>

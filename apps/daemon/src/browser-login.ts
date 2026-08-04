@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { platform } from "node:os";
 import { z } from "zod";
+import { DEFAULT_WEB_URL } from "./hosted.js";
 
 /** No callback within this window means the person never finished signing in. */
 export const LOGIN_CALLBACK_TIMEOUT_MS = 300_000;
@@ -163,18 +164,13 @@ export function configuredWebUrl(environment: NodeJS.ProcessEnv = process.env): 
 }
 
 /**
- * Base URL of the crosscode website. There is no fixed hosted domain yet (see README), so
- * this stays explicit rather than guessing one: `--web`, then the environment.
+ * Base URL of the crosscode website: `--web`, then the environment (via configuredWebUrl,
+ * which owns that precedence chain), then the hosted default in hosted.ts. Because there is
+ * now a default, this no longer throws `WEB_URL_REQUIRED` -- bare `crosscode login` targets
+ * the hosted site, and self-hosters override with the flag or the environment.
  */
 export function resolveWebUrl(explicit?: string): string {
-  const url = explicit ?? configuredWebUrl();
-  if (!url) {
-    throw new BrowserLoginError(
-      "WEB_URL_REQUIRED",
-      "No crosscode website URL is configured, so there is nowhere to open the sign-in page",
-      "Pass `--web <url>` or set CROSSCODE_WEB_URL, or log in headlessly with `--email <email> --password <password>`."
-    );
-  }
+  const url = explicit ?? configuredWebUrl() ?? DEFAULT_WEB_URL;
   return url.replace(/\/+$/, "");
 }
 

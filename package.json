@@ -1,8 +1,9 @@
 {
-  "name": "crosscode",
+  "name": "@crosscode/cli",
   "version": "0.1.0",
   "description": "Local-first coordination layer that lets several people and coding agents work in the same repository at once, reviewing each other's edits as proposals instead of overwriting them",
   "license": "MIT",
+  "publishConfig": { "access": "public" },
   "repository": { "type": "git", "url": "git+https://github.com/amsultan2010/crosscode.git" },
   "homepage": "https://github.com/amsultan2010/crosscode#readme",
   "bugs": { "url": "https://github.com/amsultan2010/crosscode/issues" },

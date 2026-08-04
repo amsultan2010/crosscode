@@ -54,7 +54,7 @@ The website sits beside this, not inside it: it originates accounts (sign-up/sig
 This is a frozen contract. The CLI side and the site side are implemented against it independently and neither may renegotiate it.
 
 - `crosscode login` with no flags and a TTY present starts a loopback HTTP server on `127.0.0.1` on an ephemeral port with the route `/callback`, and generates a 32-character random `state`.
-- It opens the browser at `${WEB_URL}/auth/cli.html?port=<port>&state=<state>`, where `WEB_URL` comes from `--web <url>`, else `CROSSCODE_WEB_URL`, else the deprecated `CROSSCODE_DASHBOARD_URL` (still read so setups predating the dashboard's removal keep working; it prints a one-time notice on **stderr**, never stdout, so `--json` output stays a single parseable line). Both the CLI and the MCP server resolve it through `configuredWebUrl()` in `apps/daemon/src/browser-login.ts` — the precedence chain lives in one place. There is no hosted default yet: with none of the three set, `crosscode login` fails fast with `WEB_URL_REQUIRED` rather than guessing a domain. Once a production domain exists, that default belongs in `resolveWebUrl` (`apps/daemon/src/browser-login.ts`) and this line should change with it.
+- It opens the browser at `${WEB_URL}/auth/cli.html?port=<port>&state=<state>`, where `WEB_URL` comes from `--web <url>`, else `CROSSCODE_WEB_URL`, else the deprecated `CROSSCODE_DASHBOARD_URL` (still read so setups predating the dashboard's removal keep working; it prints a one-time notice on **stderr**, never stdout, so `--json` output stays a single parseable line), else the hosted default `DEFAULT_WEB_URL` in `apps/daemon/src/hosted.ts`. Both the CLI and the MCP server resolve the environment half through `configuredWebUrl()` in `apps/daemon/src/browser-login.ts` — the precedence chain lives in one place. Now that a hosted default exists, `WEB_URL_REQUIRED` is no longer reachable: bare `crosscode login` targets the hosted site.
 - `/auth/cli.html` is a page on the marketing site. If the visitor is not signed in it renders the normal sign-in form. After a successful Supabase sign-in it POSTs JSON to `http://127.0.0.1:<port>/callback`:
 
   ```jsonc
@@ -151,29 +151,73 @@ Three initiatives, in this order. Each is a precondition for the next in practic
 
 **Billing provider:** Stripe (account setup pending — not yet created).
 
-**Metering axes** (chosen to track cost and value together, not project count — a solo user with many small projects isn't costing more or getting more value than one with one project):
+**Objective:** maximize user count, free and paid. Revenue only has to keep hosting from
+running at a loss; it is not the optimization target.
 
-- **Semantic review calls/month** — direct cost driver (LLM usage via the workspace member's connected agent).
-- **Seats / active workspace members** — the axis that makes it a team tool.
-- **Autonomy tier availability** — tier 2/3 auto-apply (Phase 9) gated to paid plans, since it depends on semantic review anyway.
+**Metering axes.** Two candidate axes were considered and rejected as walls:
 
-**Tiers (draft, subject to real usage data once Phase 8 ships):**
+- **Semantic review calls/month** — *rejected.* It reads like the direct cost driver, but
+  review is delegated to the workspace member's own already-connected MCP agent and never
+  leaves their machine, so it costs Crosscode nothing. Metering it would mean adding a
+  network round-trip before every local review purely to bill for it. Uncapped on every
+  plan, free included — and marketable: unlimited AI conflict review, on your own agent,
+  code never leaves your machine.
+- **Seats** — *rejected below Team.* A workspace gets more valuable the more people are in
+  it, and the invite/pairing flow is the growth loop. Charging per head below the org tier
+  taxes exactly the behaviour we want. Seat caps stay only as abuse guards.
 
-| Tier | Price | Semantic review | Autonomy | Seats |
-| --- | --- | --- | --- | --- |
-| Free | $0 | Off | Always-ask only | Small team cap |
-| Essential | $5/mo | On, capped calls/mo | Always-ask only | Small cap (e.g. 3) |
-| Pro | $10/mo | Higher cap | Auto-apply-if-clean unlocked | Higher cap |
-| Unlimited | $15/mo | Unlimited | All tiers unlocked | Unlimited |
-| Student | Essential price | Pro-level features | Pro-level | Pro-level |
+The axes actually used:
+
+- **History retention** — bounds `operation_files.payload`, the only table that grows
+  without limit. This is the real cost governor.
+- **Autonomy tier availability** — auto-always (Phase 9) is the "I trust it now" moment,
+  which is the honest point to ask for money.
+- **Org controls** — SSO, audit export, SLA. What organizations actually buy.
+
+**Tiers:**
+
+| Tier | Price | Seats | History | Autonomy | Org controls |
+| --- | --- | --- | --- | --- | --- |
+| Free | $0 | 5 | 7 days | always-ask, auto-if-clean | — |
+| Essential | $2.50/mo | 10 | 30 days | all | — |
+| Pro | $5.00/mo | 25 | 90 days | all | — |
+| Unlimited | $7.50/mo | unlimited | 365 days | all | — |
+| Team | per-seat | unlimited | 365 days | all | SSO, audit export, SLA |
+| Student | Essential price | Pro-level | Pro-level | all | — |
+
+Semantic review is unlimited on every row, so it is not a column.
 
 Student tier requires real verification (e.g. SheerID or `.edu`-gated flow) to avoid resale abuse.
+
+**Deliberate tradeoff:** Unlimited ($7.50) has unlimited seats, so it undercuts Team on
+price. That is intended under a user-count objective — Team is differentiated by org
+controls, not seat count. Revisit by changing numbers in `PLAN_LIMITS` if the economics
+ever stop working.
+
+**Billing note:** at $2.50/mo Stripe takes $0.30 + 2.9% ≈ 15% of revenue; at $25/yr it is
+~4%. Annual billing is not a nice-to-have at these price points.
 
 **Design intent:** the free→paid wall should be hit naturally through wanting to collaborate — free tier should be good enough that a solo multi-agent user (see the solo-use decision above) likes it, and the first real friction point is inviting teammate #2 or wanting a conflict to auto-resolve, not an artificial cap.
 
 **Exit criteria:** Stripe account exists and is wired to workspace creation/upgrade; each tier's caps are enforced server-side (not just UI-hidden); student verification flow works; downgrade/cancellation doesn't destroy workspace data.
 
-**Shipped (v1, placeholder):** `workspaces.plan` (free/essential/pro/unlimited/student) plus unused-until-real-key `stripe_customer_id`/`stripe_subscription_id` columns, a `usage_counters` table metering semantic review calls/month, a `BillingProvider` interface with a `StubBillingProvider` (no real Stripe account exists yet, so no `stripe` package dependency was added), and `assertSeatCapAvailable`/`assertSemanticReviewCallAvailable`/`assertPlanAllowsAutonomyTier` enforcement helpers plus a read-only `crosscode billing status`. `assertPlanAllowsAutonomyTier` and `assertSeatCapAvailable` are enforced end-to-end in `apps/service/src/store.ts` — the former on the autonomy-tier write path, the latter inside the transaction that adds a member — and both answer `402`. **Not yet done:** the Stripe account itself. `assertSemanticReviewCallAvailable` is deliberately left unwired rather than pending: semantic review is delegated to the member's own MCP agent and never reaches the service, so there is no per-call cost to meter, and wiring it would mean adding a network round-trip before every local review purely to bill for it (see the comment above `incrementSemanticReviewUsage` in `apps/service/src/billing.ts`).
+**Shipped (v1, placeholder):** `workspaces.plan` (free/essential/pro/unlimited/team/student) plus unused-until-real-key `stripe_customer_id`/`stripe_subscription_id` columns, a `usage_counters` table metering semantic review calls/month, a `BillingProvider` interface with a `StubBillingProvider` (no real Stripe account exists yet, so no `stripe` package dependency was added), and `assertSeatCapAvailable`/`assertSemanticReviewCallAvailable`/`assertPlanAllowsAutonomyTier` enforcement helpers plus a read-only `crosscode billing status` that reports the plan's `historyRetentionDays`. `assertPlanAllowsAutonomyTier` and `assertSeatCapAvailable` are enforced end-to-end in `apps/service/src/store.ts` — the former on the autonomy-tier write path, the latter inside the transaction that adds a member — and both answer `402`.
+
+**Not yet done:**
+
+- The Stripe account itself, and therefore any real checkout.
+- **Retention is declared but not enforced.** `PLAN_LIMITS[plan].historyRetentionDays` is
+  surfaced to users and is the intended cost governor, but nothing prunes against it yet.
+  This is not a small wiring job: `apps/service/src/prune.ts` deliberately refuses to touch
+  `operations` because cursor-based reconnect lets a long-offline replica download
+  everything after its last-known cursor, and age-pruning would silently break that
+  guarantee. A safe implementation needs either (a) pruning only below the minimum cursor
+  across live replicas, or (b) a defined "cursor too old, resync from Git" protocol
+  response. Until one of those exists, storage is unbounded on every plan.
+- Per-seat pricing mechanics for Team (the plan enforces Unlimited's caps today; the
+  per-seat *charge* has no implementation because there is no billing provider).
+
+`assertSemanticReviewCallAvailable` is deliberately left unwired rather than pending: semantic review is delegated to the member's own MCP agent and never reaches the service, so there is no per-call cost to meter, and wiring it would mean adding a network round-trip before every local review purely to bill for it (see the comment above `incrementSemanticReviewUsage` in `apps/service/src/billing.ts`). Every plan now carries an unlimited cap for it, so it can never fire.
 
 ### Phase 11 — Pairing a checkout to an account (backend v1 shipped)
 

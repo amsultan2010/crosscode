@@ -247,18 +247,20 @@ describe.skipIf(!databaseUrl)("PostgreSQL plan limits", () => {
     try {
       await store.migrate();
       const owner = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId: randomUUID(), actorId: `owner-${randomUUID()}@example.com` });
-      // The default plan is `free`, whose seat cap is 3. The owner is seat one.
+      // The default plan is `free`, whose seat cap is 5. The owner is seat one.
       const second = await store.addMember({ workspaceId: owner.workspaceId, userId: randomUUID(), actorId: `b-${randomUUID()}@example.com` });
-      await store.addMember({ workspaceId: owner.workspaceId, userId: randomUUID(), actorId: `c-${randomUUID()}@example.com` });
+      for (const label of ["c", "d", "e"]) {
+        await store.addMember({ workspaceId: owner.workspaceId, userId: randomUUID(), actorId: `${label}-${randomUUID()}@example.com` });
+      }
 
-      await expect(store.addMember({ workspaceId: owner.workspaceId, userId: randomUUID(), actorId: `d-${randomUUID()}@example.com` }))
+      await expect(store.addMember({ workspaceId: owner.workspaceId, userId: randomUUID(), actorId: `f-${randomUUID()}@example.com` }))
         .rejects.toThrow(/seat cap/);
 
       // Removing someone frees their seat, because the count filters on disabled_at.
       const identity: Membership = { memberId: owner.memberId, userId: "", actorId: "", workspaceId: owner.workspaceId, role: "owner" };
-      expect(await store.countActiveMembers(owner.workspaceId)).toBe(3);
+      expect(await store.countActiveMembers(owner.workspaceId)).toBe(5);
       await store.disableMember(identity, second.memberId);
-      expect(await store.countActiveMembers(owner.workspaceId)).toBe(2);
+      expect(await store.countActiveMembers(owner.workspaceId)).toBe(4);
       await expect(store.addMember({ workspaceId: owner.workspaceId, userId: randomUUID(), actorId: `e-${randomUUID()}@example.com` })).resolves.toBeDefined();
     } finally {
       await store.close();
@@ -272,11 +274,11 @@ describe.skipIf(!databaseUrl)("PostgreSQL plan limits", () => {
       const owner = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId: randomUUID(), actorId: `owner-${randomUUID()}@example.com` });
       const identity: Membership = { memberId: owner.memberId, userId: "", actorId: "", workspaceId: owner.workspaceId, role: "owner" };
 
-      // `free` unlocks always-ask only.
+      // `free` unlocks always-ask and auto-if-clean, but not auto-always.
       await expect(store.setWorkspaceAutonomyTier(identity, 0)).resolves.toBe(0);
-      await expect(store.setWorkspaceAutonomyTier(identity, 1)).rejects.toThrow(/auto-if-clean/);
+      await expect(store.setWorkspaceAutonomyTier(identity, 1)).resolves.toBe(1);
       await expect(store.setWorkspaceAutonomyTier(identity, 2)).rejects.toThrow(/auto-always/);
-      expect(await store.getWorkspaceAutonomyTier(owner.workspaceId)).toBe(0);
+      expect(await store.getWorkspaceAutonomyTier(owner.workspaceId)).toBe(1);
 
       await store.pool.query("UPDATE workspaces SET plan = 'unlimited' WHERE id = $1", [owner.workspaceId]);
       await expect(store.setWorkspaceAutonomyTier(identity, 2)).resolves.toBe(2);

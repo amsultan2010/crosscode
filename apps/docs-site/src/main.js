@@ -48,3 +48,22 @@ if (prefersReducedMotion) {
 
   revealEls.forEach((el) => revealObserver.observe(el));
 }
+
+// Pricing: monthly/annual toggle. Every price and caption carries both values as
+// data-monthly/data-annual, so switching is a text swap with no layout shift.
+const billingOptions = document.querySelectorAll("[data-billing]");
+
+if (billingOptions.length > 0) {
+  const priceEls = document.querySelectorAll("[data-monthly][data-annual]");
+
+  billingOptions.forEach((option) => {
+    option.addEventListener("click", () => {
+      const period = option.dataset.billing;
+      billingOptions.forEach((other) => other.classList.toggle("is-active", other === option));
+      priceEls.forEach((el) => {
+        const next = el.dataset[period];
+        if (next) el.textContent = next;
+      });
+    });
+  });
+}
