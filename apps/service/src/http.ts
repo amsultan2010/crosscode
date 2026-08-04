@@ -47,7 +47,7 @@ import { ZodError } from "zod";
 import type { JWTVerifyGetKey } from "jose";
 import { verifySupabaseAccessToken } from "./auth.js";
 import { PgStore, StoreConflictError, StoreGoneError, StoreUnauthorizedError, type Membership, type StoredOperation } from "./store.js";
-import { attachWebSocketGateway } from "./ws.js";
+import { attachWebSocketGateway, type WebSocketGateway } from "./ws.js";
 import { BillingLimitError, getWorkspaceBillingStatus } from "./billing.js";
 
 export type ServiceServerOptions = {
@@ -130,6 +130,35 @@ export function assertSafeServiceBinding(host: string, tlsEnabled: boolean): voi
   if (!isLoopback(host) && !tlsEnabled) {
     throw new Error(`Refusing non-loopback HTTP binding for ${host}; configure TLS`);
   }
+}
+
+/**
+ * The route handler on its own, without a Node server wrapped around it.
+ *
+ * Exists so a serverless platform -- which hands you the same (IncomingMessage,
+ * ServerResponse) pair and owns the listener itself -- can run the identical routing and
+ * auth logic rather than a forked copy of it. The caller supplies the broadcast gateway,
+ * because a platform with no persistent process has nowhere to broadcast to and passes a
+ * no-op (see apps/service/src/serverless.ts).
+ *
+ * Note the rate limiter is per-handler, and therefore per-instance. In a persistent
+ * process that is the whole service; on a function platform each instance counts
+ * separately, so any limit that is a security control rather than a courtesy has to be
+ * backed by the database instead.
+ */
+export function createRequestHandler(
+  options: ServiceServerOptions & { gateway: WebSocketGateway }
+): (request: IncomingMessage, response: ServerResponse) => Promise<void> {
+  const limiter = new FixedWindowRateLimiter();
+  return async (request, response) => {
+    try {
+      await handleRequest(request, response, options, limiter, options.gateway);
+    } catch (error: unknown) {
+      const status = statusFor(error);
+      if (status >= 500) reportError(options, request, error);
+      sendError(response, status, messageFor(error));
+    }
+  };
 }
 
 export function createServiceServer(options: ServiceServerOptions): Server {
