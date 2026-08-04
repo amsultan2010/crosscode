@@ -18,7 +18,6 @@ Which part of Crosscode is affected? (delete the ones that don't apply)
 - CLI (`apps/cli`, `pnpm crosscode -- ...`)
 - MCP server (`apps/mcp-server`)
 - Coordination service (`apps/service`)
-- VS Code/Cursor extension (`apps/vscode-extension` — note: frozen/unsupported, see BUILD_INSTRUCTIONS.md)
 - Docs site (`apps/docs-site`)
 - Other / not sure
 
@@ -53,4 +52,4 @@ What actually happened. Include exact error messages if any.
 
 ## Additional context
 
-Anything else that might help — screenshots, logs, related issues.
+Anything else that might help: screenshots, logs, related issues.
