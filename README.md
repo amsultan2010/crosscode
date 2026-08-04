@@ -37,6 +37,15 @@ This assumes the coordination service is already running and you know its URL (`
 
    This creates the account, logs you in, and gives you a personal workspace, so there is nothing else to join. You can also sign up on the website if one is deployed, then log in below.
 
+   Accounts live in a Supabase project. Crosscode ships with the hosted Crosscode project compiled in — its `anon` public key, the same one the website serves to browsers — so this step needs no environment setup. **If the coordination service you are pointing at is self-hosted, it verifies tokens against its own Supabase project, so you must sign in against that same project:**
+
+   ```bash
+   export SUPABASE_URL="https://<project-ref>.supabase.co"   # the project the service uses
+   export SUPABASE_ANON_KEY="<anon public key>"
+   ```
+
+   Set both or neither; setting one alone fails with `SUPABASE_CONFIG_MISSING`. Whoever runs the service has these two values — see [Set up Supabase and run the coordination service](#set-up-supabase-and-run-the-coordination-service).
+
 3. **Or log in, if the account already exists.**
 
    ```bash
@@ -155,7 +164,7 @@ pnpm test
 Crosscode's coordination service verifies Supabase-issued JWTs and stores workspace/operation state in Supabase-hosted PostgreSQL. Create a Supabase project (or use an existing one), then from its dashboard collect:
 
 - **Project URL** (Project Settings → API) → `SUPABASE_URL`
-- **`anon` public key** (Project Settings → API) → `SUPABASE_ANON_KEY`, used by every member's `crosscode login`
+- **`anon` public key** (Project Settings → API) → `SUPABASE_ANON_KEY`, used by every member's `crosscode login`. Members of a self-hosted deployment must set this and `SUPABASE_URL` in their own environment, because the CLI otherwise signs in against the hosted Crosscode project it has compiled in, and this service would reject those tokens as having the wrong issuer.
 - **`service_role` key** (Project Settings → API) → `SUPABASE_SERVICE_ROLE_KEY`, used only by the admin-side `service:provision` command — never distribute this key to members
 - **Connection string** (Project Settings → Database) → `DATABASE_URL` (Supabase's pooled `postgres://` connection string works as-is)
 
@@ -262,7 +271,7 @@ pnpm crosscode login --email alice@example.com --password <her password> --servi
 pnpm daemon
 ```
 
-`crosscode login` needs `SUPABASE_URL` and `SUPABASE_ANON_KEY` set in its own environment (the anon key collected above) to reach Supabase Auth. There is no separate replica-enrollment step: the daemon self-registers a replica for the authenticated member the first time it starts with a logged-in session and no replica identity of its own yet.
+`crosscode login` reaches Supabase Auth through the hosted Crosscode project compiled into the CLI unless `SUPABASE_URL` and `SUPABASE_ANON_KEY` are set in its own environment (the project URL and anon key collected above) — which, for a self-hosted service, they must be, so that the tokens it mints carry the issuer this service verifies. Set both or neither; one alone fails with `SUPABASE_CONFIG_MISSING`. There is no separate replica-enrollment step: the daemon self-registers a replica for the authenticated member the first time it starts with a logged-in session and no replica identity of its own yet.
 
 Invite another member to the same workspace:
 
@@ -337,6 +346,7 @@ crosscode login --email "$EMAIL" --password "$PASSWORD" --json
 | `DAEMON_UNAVAILABLE` | No daemon for this worktree | Run `crosscode init`, then start the daemon (or make one MCP tool call, which bootstraps it) |
 | `LOGIN_STATE_MISMATCH` | Browser callback carried a wrong or missing `state` | Do not retry the browser flow unattended; use `--email`/`--password` |
 | `LOGIN_TIMEOUT` | No browser callback within 300s | Use `--email`/`--password`, or `--no-browser` and hand the URL to a human |
+| `SUPABASE_CONFIG_MISSING` | No Supabase project resolved, or only one of the two variables is set | Set both `SUPABASE_URL` and `SUPABASE_ANON_KEY`, or unset both to use the compiled-in hosted project |
 | `UNTRUSTED_VALIDATION_ARGS` | Tried to pass validation commands as arguments | Use `--profile <name>`; profiles come only from committed `.crosscode/config.yaml` |
 | `CONFIRMATION_REQUIRED` | `publish` needs confirmation and there is no TTY | Pass `--yes`, only if publishing was actually authorized |
 | `CANCELLED` | A confirmation was declined | Stop; do not retry |

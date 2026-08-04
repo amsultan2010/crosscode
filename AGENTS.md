@@ -59,9 +59,9 @@ those docs is also served as raw markdown plus `llms.txt`/`llms-full.txt`.
   propagates the wrapped command's own exit code instead.
 - **Error codes** worth branching on: `USAGE_ERROR`, `UNKNOWN_COMMAND`,
   `DAEMON_UNAVAILABLE`, `UNTRUSTED_VALIDATION_ARGS`, `CONFIRMATION_REQUIRED`,
-  `CANCELLED`, `LOGIN_STATE_MISMATCH`, `LOGIN_TIMEOUT`, `COMMAND_FAILED`. What
-  each means and what to do about it is tabulated in
-  [`README.md`](./README.md#for-coding-agents).
+  `CANCELLED`, `LOGIN_STATE_MISMATCH`, `LOGIN_TIMEOUT`,
+  `SUPABASE_CONFIG_MISSING`, `COMMAND_FAILED`. What each means and what to do
+  about it is tabulated in [`README.md`](./README.md#for-coding-agents).
 
 ## Signing in without a browser
 
