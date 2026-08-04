@@ -242,6 +242,61 @@ function makeEvent(membership: Membership, replicaId: string, id: string, client
   };
 }
 
+describe.skipIf(!databaseUrl)("PostgreSQL durable rate limiting", () => {
+  // The in-memory limiter gives every instance its own budget. On a function platform that
+  // turns the pairing-claim throttle -- the brute-force defence over a 40-bit code space --
+  // into N x 10/min for N warm instances. These counters are shared instead.
+  it("spends one budget across callers, and keeps buckets independent", async () => {
+    const store = new PgStore(databaseUrl!);
+    try {
+      await store.migrate();
+      const bucket = `ip:198.51.100.7:claim:${randomUUID()}`;
+
+      let allowed = 0;
+      for (let attempt = 0; attempt < 13; attempt += 1) {
+        if (await store.takeRateLimit(bucket, 10, 60)) allowed += 1;
+      }
+      expect(allowed).toBe(10);
+
+      // A different address is untouched by that exhaustion.
+      expect(await store.takeRateLimit(`ip:203.0.113.9:claim:${randomUUID()}`, 10, 60)).toBe(true);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("holds the limit when the same bucket is spent concurrently", async () => {
+    const store = new PgStore(databaseUrl!);
+    try {
+      await store.migrate();
+      const bucket = `ip:198.51.100.8:claim:${randomUUID()}`;
+      // Simultaneous, the way separate serverless instances would arrive. A read-then-write
+      // implementation lets these interleave and overshoot; one statement cannot.
+      const verdicts = await Promise.all(
+        Array.from({ length: 25 }, () => store.takeRateLimit(bucket, 10, 60))
+      );
+      expect(verdicts.filter(Boolean).length).toBe(10);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("starts a fresh window once the old one has elapsed, and prunes spent buckets", async () => {
+    const store = new PgStore(databaseUrl!);
+    try {
+      await store.migrate();
+      const bucket = `ip:198.51.100.9:claim:${randomUUID()}`;
+      expect(await store.takeRateLimit(bucket, 1, 60)).toBe(true);
+      expect(await store.takeRateLimit(bucket, 1, 60)).toBe(false);
+      // A zero-length window is always already over, which is the boundary the CASE arms turn on.
+      expect(await store.takeRateLimit(bucket, 1, 0)).toBe(true);
+      expect(await store.pruneRateLimits(0)).toBeGreaterThan(0);
+    } finally {
+      await store.close();
+    }
+  });
+});
+
 describe.skipIf(!databaseUrl)("PostgreSQL self-serve workspace cap", () => {
   it("stops one account farming free workspaces, without touching the personal one", async () => {
     const store = new PgStore(databaseUrl!);

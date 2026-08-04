@@ -9,7 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.58.0"
+    "@supabase/supabase-js": "^2.58.0",
+    "@crosscode/service": "workspace:*"
   },
   "devDependencies": {
     "markdown-it": "^14.1.0",

@@ -11,7 +11,7 @@ The important part: those incoming edits are **never written to your files autom
 
 Everything stays ordinary Git. Crosscode doesn't replace your editor, your agent, your Git host, your branches, your staging area, or your commits — and if you turn it off, your repository is unchanged.
 
-**Who it's for.** Anyone running more than one coding agent against one codebase, or a small team whose agents keep colliding on the same files. Human-only teams can use it too, but the review-before-it-lands workflow pays off most once agents are in the mix.
+**Who it's for.** Teams sharing one codebase where the people are all running coding agents. That is the case Crosscode is built for, and the one it is worth setting up for. It keeps working when you are the only person online that day — the project is still shared, and your teammates' agents will land work on it again — but a repository only you will ever touch has nothing to coordinate with, and plain Git is the better tool for it. Human-only teams can use it too, though the review-before-it-lands workflow pays off most once agents are in the mix.
 
 **There is no web app.** Everything you do day to day — signing in, claiming work, reviewing proposals, accepting, publishing — is a `crosscode` command or an MCP tool call your agent makes against your local daemon. The website is only a landing page, sign-up/sign-in, and these docs.
 

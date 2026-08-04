@@ -19,5 +19,10 @@
   "devDependencies": {
     "@types/pg": "^8.20.3",
     "@types/ws": "^8.18.1"
+  },
+  "exports": {
+    ".": "./src/http.ts",
+    "./serverless": "./src/serverless.ts",
+    "./store": "./src/store.ts"
   }
 }
