@@ -131,12 +131,43 @@ export function cliSignInUrl(webUrl: string, port: number, state: string): strin
 }
 
 /**
+ * Warns once per process that `CROSSCODE_DASHBOARD_URL` is deprecated.
+ *
+ * On stderr, never stdout: README and AGENTS both promise that with `--json` stdout is one
+ * line of JSON and nothing else, and an agent parsing that line would choke on a notice
+ * printed above it. A deprecation warning that breaks the output contract is a worse bug
+ * than the stale name it warns about.
+ */
+let dashboardUrlWarned = false;
+
+/**
+ * The configured website URL, or undefined when none is set.
+ *
+ * The precedence chain lives here alone because it used to be written out twice -- once
+ * here and once in the MCP server's bootstrap -- which is how the two could have drifted.
+ *
+ * `CROSSCODE_DASHBOARD_URL` is deprecated: it is still read so setups configured before the
+ * web dashboard was deleted keep working, but it names a site that no longer has a dashboard.
+ * The notice goes to stderr and never stdout, and only once per process. README and AGENTS
+ * both promise that with `--json` stdout is one line of JSON and nothing else, so a notice
+ * printed above that line would be a worse bug than the stale name it warns about.
+ */
+export function configuredWebUrl(environment: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (environment.CROSSCODE_WEB_URL) return environment.CROSSCODE_WEB_URL;
+  if (!environment.CROSSCODE_DASHBOARD_URL) return undefined;
+  if (!dashboardUrlWarned) {
+    dashboardUrlWarned = true;
+    process.stderr.write("crosscode: CROSSCODE_DASHBOARD_URL is deprecated and will be removed; set CROSSCODE_WEB_URL instead.\n");
+  }
+  return environment.CROSSCODE_DASHBOARD_URL;
+}
+
+/**
  * Base URL of the crosscode website. There is no fixed hosted domain yet (see README), so
- * this stays explicit rather than guessing one: `--web`, then `CROSSCODE_WEB_URL`, then the
- * `CROSSCODE_DASHBOARD_URL` the MCP server already uses to name a deployed site.
+ * this stays explicit rather than guessing one: `--web`, then the environment.
  */
 export function resolveWebUrl(explicit?: string): string {
-  const url = explicit ?? process.env.CROSSCODE_WEB_URL ?? process.env.CROSSCODE_DASHBOARD_URL;
+  const url = explicit ?? configuredWebUrl();
   if (!url) {
     throw new BrowserLoginError(
       "WEB_URL_REQUIRED",

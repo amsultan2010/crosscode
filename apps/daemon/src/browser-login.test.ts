@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { BrowserLoginError, cliSignInUrl, resolveWebUrl, startLoginCallbackServer, type LoginCallbackServer } from "./browser-login.js";
+import { describe, expect, it, vi } from "vitest";
+import { BrowserLoginError, cliSignInUrl, configuredWebUrl, resolveWebUrl, startLoginCallbackServer, type LoginCallbackServer } from "./browser-login.js";
 
 async function post(server: LoginCallbackServer, body: unknown): Promise<Response> {
   return fetch(`http://127.0.0.1:${server.port}/callback`, {
@@ -102,6 +102,36 @@ describe("sign-in URL resolution", () => {
       delete process.env.CROSSCODE_DASHBOARD_URL;
       expect(() => resolveWebUrl()).toThrow(BrowserLoginError);
     } finally {
+      if (previousWeb === undefined) delete process.env.CROSSCODE_WEB_URL; else process.env.CROSSCODE_WEB_URL = previousWeb;
+      if (previousDashboard === undefined) delete process.env.CROSSCODE_DASHBOARD_URL; else process.env.CROSSCODE_DASHBOARD_URL = previousDashboard;
+    }
+  });
+
+  // The legacy name still has to work -- someone set it before the dashboard was deleted --
+  // but the notice must never touch stdout, which `--json` promises is one line of JSON and
+  // nothing else. A warning printed there would break every agent parsing that line.
+  it("still honours the deprecated CROSSCODE_DASHBOARD_URL, warning on stderr and never stdout", () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    const previousWeb = process.env.CROSSCODE_WEB_URL;
+    const previousDashboard = process.env.CROSSCODE_DASHBOARD_URL;
+    try {
+      delete process.env.CROSSCODE_WEB_URL;
+      process.env.CROSSCODE_DASHBOARD_URL = "https://legacy.test/";
+      expect(configuredWebUrl()).toBe("https://legacy.test/");
+      expect(resolveWebUrl()).toBe("https://legacy.test");
+
+      expect(stdout).not.toHaveBeenCalled();
+      expect(stderr).toHaveBeenCalledTimes(1);
+      expect(stderr.mock.calls[0]![0]).toContain("CROSSCODE_DASHBOARD_URL is deprecated");
+
+      // CROSSCODE_WEB_URL wins when both are set, and that path warns about nothing.
+      process.env.CROSSCODE_WEB_URL = "https://current.test/";
+      expect(configuredWebUrl()).toBe("https://current.test/");
+      expect(stderr).toHaveBeenCalledTimes(1);
+    } finally {
+      stderr.mockRestore();
+      stdout.mockRestore();
       if (previousWeb === undefined) delete process.env.CROSSCODE_WEB_URL; else process.env.CROSSCODE_WEB_URL = previousWeb;
       if (previousDashboard === undefined) delete process.env.CROSSCODE_DASHBOARD_URL; else process.env.CROSSCODE_DASHBOARD_URL = previousDashboard;
     }
