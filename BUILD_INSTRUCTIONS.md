@@ -11,7 +11,16 @@ A local-first coordination layer for people and coding agents working in separat
 - **There is no web dashboard**, and no web UI for teams, invites, settings, onboarding, analytics, or a live feed. The multi-tenant backend is untouched: workspaces, memberships, invites, pairing codes, roles, RLS, presence, and billing all still exist in `apps/service` and in the SQL migrations. They are reached from the CLI and the HTTP API. "Deleted" applies to the browser UI, never to the service.
 - **There is no editor extension.** Editors and agents integrate through MCP, which is the one integration contract.
 
-**Product-scope decision (2026-08-01): Crosscode has no standalone solo use case.** The whole point is coordinating concurrent editors on a repo. One person running one agent alone has nothing to coordinate with, and shouldn't be the product's framing or free-tier target. The one legitimate non-team case is **one person running multiple concurrent agents** (e.g. Claude in one worktree, Codex in another, same repo) — that's still real multi-party coordination, just intra-person. Design free-tier/messaging around "coordinate concurrent editors, human or agent," not "useful even completely alone."
+**Product-scope decision (2026-08-01, reaffirmed and sharpened 2026-08-04): Crosscode is for shared projects whose team members all run coding agents.** That is the audience — not "anyone with agents."
+
+Two situations count, and only these two:
+
+1. **Several people on one project, all of them running agents.** The primary case, and what every feature is shaped for: invites, roles, seats, presence, claims, handoffs, per-workspace autonomy policy. This is why the product exists.
+2. **One person working alone *right now* on a project they share with others**, whose teammates simply aren't coding today. Still the same case — the repository is shared, their agents will land work on it again, and the proposals waiting on return are exactly what Crosscode makes safe.
+
+**Explicitly out of scope:** a repository only one person will ever touch. There is nothing to coordinate with, and plain Git is the better tool. Do not frame the product, the free tier, or the marketing site around solo use — "you don't need a team" is the wrong message, and was briefly live on the landing page in error (corrected 2026-08-04).
+
+One person running several of their *own* agents in parallel worktrees is a real coordination problem, but it is not the wedge and must not lead the messaging: it converts poorly into the team product and describes a user who can often get by without us. Design free tier and messaging around "your team's agents are colliding," not "useful even completely alone." 
 
 **Fundamental rules** (unchanged, non-negotiable):
 
@@ -197,7 +206,7 @@ ever stop working.
 **Billing note:** at $2.50/mo Stripe takes $0.30 + 2.9% ≈ 15% of revenue; at $25/yr it is
 ~4%. Annual billing is not a nice-to-have at these price points.
 
-**Design intent:** the free→paid wall should be hit naturally through wanting to collaborate — free tier should be good enough that a solo multi-agent user (see the solo-use decision above) likes it, and the first real friction point is inviting teammate #2 or wanting a conflict to auto-resolve, not an artificial cap.
+**Design intent:** the free tier should comfortably fit a real small team (see the product-scope decision above) rather than tease them into upgrading — 5 seats is a whole team, not a trial. The first real friction point should be growing past that team, wanting a longer history to look back through, or wanting conflicts to auto-resolve, never an artificial cap.
 
 **Exit criteria:** Stripe account exists and is wired to workspace creation/upgrade; each tier's caps are enforced server-side (not just UI-hidden); student verification flow works; downgrade/cancellation doesn't destroy workspace data.
 
@@ -208,6 +217,21 @@ ever stop working.
 - The Stripe account itself, and therefore any real checkout.
 - Per-seat pricing mechanics for Team (the plan enforces Unlimited's caps today; the
   per-seat *charge* has no implementation because there is no billing provider).
+
+**Free-tier abuse guards (shipped alongside the generous free plan):**
+
+- `MAX_SELF_SERVE_WORKSPACES_PER_USER` (10) caps how many workspaces one account can create,
+  enforced inside `createWorkspace`'s transaction behind a per-user advisory lock so
+  concurrent creates cannot race past it. Plans are per-workspace, so without this an
+  account could farm unlimited free workspaces as free storage. The Contract C personal
+  workspace comes from `ensurePersonalWorkspace()` and is deliberately not counted.
+- Rate limiting is two-layered: a coarse pre-auth per-IP ceiling (3000/min) as a flood
+  guard, and the real quota charged per authenticated identity (600/min, 30/min for replica
+  registration) in `verifyToken`/`authenticate`. Per-IP alone was wrong in both directions —
+  too loose for one abusive account, and too tight for an office or CI fleet behind one NAT
+  address, where daemons throttled each other. `POST /v1/pairing-codes/claim` stays per-IP
+  at 10/min: it is unauthenticated, so there is no identity to charge, and that limit is the
+  brute-force defense for the 40-bit code space.
 
 **Retention is enforced** (option (b) of the two designs sketched here previously).
 `PgStore.pruneOperationsByRetention()` deletes each workspace's operations outside

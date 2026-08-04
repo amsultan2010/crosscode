@@ -4,6 +4,7 @@ import { contentHash } from "@crosscode/core";
 import { describe, expect, it } from "vitest";
 import { toRemoteOperation } from "./http.js";
 import { StoreConflictError, StoreUnauthorizedError, PgStore, type Membership, type OperationPage, type StoredOperation } from "./store.js";
+import { BillingLimitError, MAX_SELF_SERVE_WORKSPACES_PER_USER } from "./billing.js";
 
 const databaseUrl = process.env.CROSSCODE_TEST_DATABASE_URL;
 
@@ -247,6 +248,121 @@ function makeEvent(membership: Membership, replicaId: string, id: string, client
     }
   };
 }
+
+describe.skipIf(!databaseUrl)("PostgreSQL durable rate limiting", () => {
+  // The in-memory limiter gives every instance its own budget. On a function platform that
+  // turns the pairing-claim throttle -- the brute-force defence over a 40-bit code space --
+  // into N x 10/min for N warm instances. These counters are shared instead.
+  it("spends one budget across callers, and keeps buckets independent", async () => {
+    const store = new PgStore(databaseUrl!);
+    try {
+      await store.migrate();
+      const bucket = `ip:198.51.100.7:claim:${randomUUID()}`;
+
+      let allowed = 0;
+      for (let attempt = 0; attempt < 13; attempt += 1) {
+        if (await store.takeRateLimit(bucket, 10, 60)) allowed += 1;
+      }
+      expect(allowed).toBe(10);
+
+      // A different address is untouched by that exhaustion.
+      expect(await store.takeRateLimit(`ip:203.0.113.9:claim:${randomUUID()}`, 10, 60)).toBe(true);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("holds the limit when the same bucket is spent concurrently", async () => {
+    const store = new PgStore(databaseUrl!);
+    try {
+      await store.migrate();
+      const bucket = `ip:198.51.100.8:claim:${randomUUID()}`;
+      // Simultaneous, the way separate serverless instances would arrive. A read-then-write
+      // implementation lets these interleave and overshoot; one statement cannot.
+      const verdicts = await Promise.all(
+        Array.from({ length: 25 }, () => store.takeRateLimit(bucket, 10, 60))
+      );
+      expect(verdicts.filter(Boolean).length).toBe(10);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("starts a fresh window once the old one has elapsed, and prunes spent buckets", async () => {
+    const store = new PgStore(databaseUrl!);
+    try {
+      await store.migrate();
+      const bucket = `ip:198.51.100.9:claim:${randomUUID()}`;
+      expect(await store.takeRateLimit(bucket, 1, 60)).toBe(true);
+      expect(await store.takeRateLimit(bucket, 1, 60)).toBe(false);
+      // A zero-length window is always already over, which is the boundary the CASE arms turn on.
+      expect(await store.takeRateLimit(bucket, 1, 0)).toBe(true);
+      expect(await store.pruneRateLimits(0)).toBeGreaterThan(0);
+    } finally {
+      await store.close();
+    }
+  });
+});
+
+describe.skipIf(!databaseUrl)("PostgreSQL self-serve workspace cap", () => {
+  it("stops one account farming free workspaces, without touching the personal one", async () => {
+    const store = new PgStore(databaseUrl!);
+    try {
+      await store.migrate();
+      const userId = randomUUID();
+      const actorId = `farmer-${randomUUID()}@example.com`;
+
+      // Contract C's personal workspace is provisioned separately and must never count
+      // against the cap, or a user could be locked out of the workspace their first
+      // authenticated request depends on.
+      const personal = await store.ensurePersonalWorkspace({ userId, actorId });
+      expect(personal.created).toBe(true);
+      expect(await store.countOwnedSelfServeWorkspaces(userId)).toBe(0);
+
+      for (let index = 0; index < MAX_SELF_SERVE_WORKSPACES_PER_USER; index += 1) {
+        await store.createWorkspace({ workspaceName: `farm-${index}-${randomUUID()}`, userId, actorId });
+      }
+      expect(await store.countOwnedSelfServeWorkspaces(userId)).toBe(MAX_SELF_SERVE_WORKSPACES_PER_USER);
+
+      await expect(store.createWorkspace({ workspaceName: `over-${randomUUID()}`, userId, actorId }))
+        .rejects.toBeInstanceOf(BillingLimitError);
+
+      // The personal workspace still resolves, so the account is not bricked by its own cap.
+      const stillThere = await store.ensurePersonalWorkspace({ userId, actorId });
+      expect(stillThere.created).toBe(false);
+      expect(stillThere.workspaceId).toBe(personal.workspaceId);
+
+      // A different account is unaffected.
+      const otherUser = randomUUID();
+      await expect(store.createWorkspace({ workspaceName: `other-${randomUUID()}`, userId: otherUser, actorId: `other-${randomUUID()}@example.com` }))
+        .resolves.toBeDefined();
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("holds the cap under concurrent creates from the same account", async () => {
+    const store = new PgStore(databaseUrl!);
+    try {
+      await store.migrate();
+      const userId = randomUUID();
+      const actorId = `racer-${randomUUID()}@example.com`;
+
+      // All at once: without the advisory lock these each read a count of 0 and every one
+      // of them inserts, blowing straight through the cap.
+      const attempts = await Promise.allSettled(
+        Array.from({ length: MAX_SELF_SERVE_WORKSPACES_PER_USER + 6 }, (_, index) =>
+          store.createWorkspace({ workspaceName: `race-${index}-${randomUUID()}`, userId, actorId })
+        )
+      );
+      const created = attempts.filter((attempt) => attempt.status === "fulfilled").length;
+      expect(created).toBe(MAX_SELF_SERVE_WORKSPACES_PER_USER);
+      expect(await store.countOwnedSelfServeWorkspaces(userId)).toBe(MAX_SELF_SERVE_WORKSPACES_PER_USER);
+    } finally {
+      await store.close();
+    }
+  });
+});
 
 describe.skipIf(!databaseUrl)("PostgreSQL plan limits", () => {
   it("refuses the seat a plan does not have, and counts only active members", async () => {
