@@ -5,8 +5,13 @@
 // package root an npm tarball is rooted at. esbuild resolves those at build time, so one
 // published package needs no import rewriting and no version lockstep across the nine
 // workspace packages -- none of which have external consumers.
-import { chmod, rm } from "node:fs/promises";
+import { chmod, readFile, rm } from "node:fs/promises";
 import { build } from "esbuild";
+
+// Substituted into apps/daemon/src/version.ts, which both bins read. Taking it from the
+// manifest rather than a second hand-maintained constant means `crosscode --version` cannot
+// disagree with the version npm actually published.
+const { version } = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 
 // Real npm packages the bundles require at runtime. These stay external and are declared
 // as `dependencies` of the published package; everything else (the @crosscode/* workspace
@@ -57,6 +62,7 @@ const result = await build({
   target: "node24",
   format: "esm",
   sourcemap: true,
+  define: { __CROSSCODE_VERSION__: JSON.stringify(version) },
   external: EXTERNAL,
   metafile: true,
   logLevel: "info"

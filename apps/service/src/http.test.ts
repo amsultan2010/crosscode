@@ -554,24 +554,27 @@ describe("service HTTP boundary", () => {
   });
 });
 
-// Without these, a browser on a different origin than the service -- which is every
-// hosted deployment of the dashboard -- cannot make a single authenticated call.
+// CROSSCODE_ALLOWED_ORIGINS is unset by default and should stay that way: the service's
+// clients are daemons and the CLI, never a browser, and the website talks only to Supabase
+// and to a loopback port. These cover the opt-in case -- an operator who does put a browser
+// app in front of the service -- because without the headers such an origin cannot make a
+// single authenticated call. The origin below is a stand-in for that, not a live deployment.
 describe("browser CORS", () => {
-  const dashboard = "https://crosscode-one.vercel.app";
+  const browserOrigin = "https://browser-client.example";
   const store = { resolveMembership: async () => membership } as unknown as PgStore;
 
-  it("answers preflight for an allowed origin with the headers the dashboard sends", async () => {
-    const base = await listen(store, undefined, [dashboard]);
+  it("answers preflight for an allowed origin with the headers a browser client sends", async () => {
+    const base = await listen(store, undefined, [browserOrigin]);
 
     const response = await fetch(`${base}/v1/memberships`, {
       method: "OPTIONS",
-      headers: { origin: dashboard, "access-control-request-method": "GET", "access-control-request-headers": "authorization" }
+      headers: { origin: browserOrigin, "access-control-request-method": "GET", "access-control-request-headers": "authorization" }
     });
 
     expect(response.status).toBe(204);
-    expect(response.headers.get("access-control-allow-origin")).toBe(dashboard);
+    expect(response.headers.get("access-control-allow-origin")).toBe(browserOrigin);
     const allowedHeaders = response.headers.get("access-control-allow-headers")!.toLowerCase();
-    // The dashboard cannot authenticate or name its workspace without both of these.
+    // A browser client cannot authenticate or name its workspace without both of these.
     expect(allowedHeaders).toContain("authorization");
     expect(allowedHeaders).toContain(WORKSPACE_HEADER);
     expect(response.headers.get("vary")!.toLowerCase()).toContain("origin");
@@ -583,19 +586,19 @@ describe("browser CORS", () => {
       ensurePersonalWorkspace: async () => {},
       listMembershipsForUser: async () => [{ workspaceId: membership.workspaceId, workspaceName: "Ada", role: "owner" }]
     } as unknown as PgStore;
-    const base = await listen(listStore, undefined, [dashboard]);
+    const base = await listen(listStore, undefined, [browserOrigin]);
     const accessToken = await signToken(membership.userId);
 
     const response = await fetch(`${base}/v1/memberships`, {
-      headers: { origin: dashboard, authorization: `Bearer ${accessToken}` }
+      headers: { origin: browserOrigin, authorization: `Bearer ${accessToken}` }
     });
 
     expect(response.status).toBe(200);
-    expect(response.headers.get("access-control-allow-origin")).toBe(dashboard);
+    expect(response.headers.get("access-control-allow-origin")).toBe(browserOrigin);
   });
 
   it("refuses an origin that is not on the allowlist", async () => {
-    const base = await listen(store, undefined, [dashboard]);
+    const base = await listen(store, undefined, [browserOrigin]);
 
     const preflight = await fetch(`${base}/v1/memberships`, {
       method: "OPTIONS",
@@ -609,7 +612,7 @@ describe("browser CORS", () => {
   it("stays closed to browsers when no allowlist is configured", async () => {
     const base = await listen(store);
 
-    const response = await fetch(`${base}/healthz`, { headers: { origin: dashboard } });
+    const response = await fetch(`${base}/healthz`, { headers: { origin: browserOrigin } });
 
     // Still serves the daemon and CLI, which are not subject to CORS -- it just never
     // hands a browser permission it was not explicitly given.

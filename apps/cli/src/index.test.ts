@@ -218,6 +218,43 @@ describe("--json output envelope", () => {
   });
 });
 
+describe("crosscode --version", () => {
+  // Registered but never wired: the parse loop already handled commander's `commander.version`
+  // error code, while `.version()` was never called -- so the published binary answered
+  // `--version` with USAGE_ERROR, on the one flag everyone tries first after installing.
+  it("reports a version for both --version and -V", async () => {
+    const root = await repo();
+    for (const flag of ["--version", "-V"]) {
+      const { stdout, exitCode } = await crosscode([flag], root);
+      expect(exitCode).toBe(0);
+      expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
+    }
+  });
+
+  it("honours --json like every other command", async () => {
+    const { stdout, exitCode } = await crosscode(["--version", "--json"], await repo());
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({ value: expect.stringMatching(/^\d+\.\d+\.\d+/) });
+  });
+
+  // The flag belongs to the root program, so a `-V` anywhere past the first bare word is
+  // somebody else's -- a child process's here -- and must reach it untouched rather than
+  // being answered as the CLI's own version.
+  it("does not intercept a -V bound for a child process", async () => {
+    const result = await runCli([
+      "run",
+      "--",
+      "node",
+      "-e",
+      "process.exit(process.argv[1] === '-V' && process.argv[2] === '--version' ? 0 : 1)",
+      "--",
+      "-V",
+      "--version"
+    ]);
+    expect(result.exitCode).toBe(0);
+  });
+});
+
 describe("DAEMON_UNAVAILABLE", () => {
   // README documents this as the code an agent branches on when there is no daemon for
   // the worktree. The common case -- no descriptor at all -- used to escape as a raw

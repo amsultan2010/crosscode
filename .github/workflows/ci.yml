@@ -49,4 +49,10 @@ jobs:
       # The docs site regenerates its pages from docs/*.md at build time, so a
       # broken markdown source or a renamed doc only surfaces here.
       - run: pnpm docs:build
+      # The service image is the documented deploy path and nothing built it: its manifest
+      # list still named apps/vscode-extension months after that directory was deleted, and
+      # COPY of a missing path is a hard error, so every build failed and no job noticed.
+      # Building it here is the only thing that keeps that honest.
+      - name: Coordination service image
+        run: docker build -f apps/service/Dockerfile -t crosscode-service:ci .
       - run: pnpm audit --audit-level high
