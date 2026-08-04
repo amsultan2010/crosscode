@@ -3,15 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Crosscode: coordinate a Git repo across people and agents</title>
-  <meta name="description" content="Crosscode lets several people and coding agents work on the same repository at once without overwriting each other. Everyone's changes arrive as proposals you review before they touch your files." />
+  <title>Crosscode: work on one codebase together, the way you work on one doc</title>
+  <meta name="description" content="Google Docs made writing together easy. Coding together is still everyone on a separate copy, merging at the end. Crosscode syncs your team's edits as they settle, so a teammate's work is one command away instead of one pull request away." />
   <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml" />
   <link rel="alternate icon" href="/brand/favicon-32.png" sizes="32x32" />
   <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="Crosscode" />
-  <meta property="og:title" content="Crosscode: coordinate a Git repo across people and agents" />
-  <meta property="og:description" content="A background program that watches each checkout and shares every settled edit with your teammates and agents. Their changes arrive as proposals you review — never as automatic writes." />
+  <meta property="og:title" content="Crosscode: work on one codebase together, the way you work on one doc" />
+  <meta property="og:description" content="Everyone on your team has their own checkout and their own agents, and nobody sees anyone else&#39;s work until a pull request lands. Crosscode closes that gap to seconds." />
   <meta property="og:image" content="/brand/logo-social.png" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:image" content="/brand/logo-social.png" />
@@ -41,20 +41,21 @@
       <div class="inner hero-grid">
         <div class="hero-copy reveal">
           <span class="eyebrow">Pre-1.0 &middot; Open source &middot; MCP-native</span>
-          <h1>Your team is all running coding agents on one repo. They are overwriting each other.</h1>
+          <h1>Coding together still works like emailing a <code class="h1-code">.docx</code> around.</h1>
           <p class="subtitle">
-            Once every person on a project has an agent editing code, the collisions
-            stop being occasional. Crosscode gives each teammate's checkout a small
-            background daemon that notices every edit as it settles and shares it with
-            everyone else. Nothing is ever written to your files behind your back
-            &mdash; each change arrives as a proposal you accept or reject, like a pull
-            request that takes seconds instead of a round trip through your Git host.
+            Google Docs fixed this for writing. Code is still everyone on their own
+            copy, working in the dark, stitching it together at the end. Crosscode
+            closes that gap: a small daemon in each teammate's checkout notices every
+            edit as it settles and puts it in front of everyone else within seconds,
+            one command away from being in their files. Not quite live typing &mdash;
+            you still decide what lands, which is the part you actually want in code
+            &mdash; but a lot closer than waiting on a pull request.
           </p>
           <div class="cta-row">
             <a class="cta" href="#install">Set it up with one prompt</a>
             <a class="cta secondary" href="#pricing">See pricing</a>
           </div>
-          <p class="hero-microcopy"><strong>Built for shared projects.</strong> It keeps working when you're the only one online &mdash; your teammates' agents are still going to land work on this repo, and Crosscode is what makes that safe when they do. Free for small teams, and free forever if you self-host.</p>
+          <p class="hero-microcopy"><strong>For teams shipping something together</strong> &mdash; a startup, a hackathon crew, any project moving faster than its pull requests. Free for small teams, and free forever if you self-host.</p>
         </div>
 
         <div class="hero-visual reveal">
@@ -82,39 +83,39 @@
     <section id="compare" class="alt">
       <div class="inner">
         <div class="section-heading reveal">
-          <h2>What your team is probably doing now &mdash; and what it costs you</h2>
-          <p>Every team whose agents collide has already invented a workaround. Here's how each one actually plays out.</p>
+          <h2>How your team works now &mdash; and what it costs you</h2>
+          <p>Every one of these is a way of coping with the same thing: you can't see what anyone else is doing until they're finished.</p>
         </div>
 
         <div class="compare-table reveal">
           <div class="compare-row compare-head">
             <div>Your current approach</div>
-            <div>Where it breaks</div>
+            <div>What that costs</div>
             <div>With Crosscode</div>
           </div>
           <div class="compare-row">
-            <div class="compare-now">Everyone points their agent at the same branch</div>
-            <div class="compare-pain">Whoever writes last wins. You find out when the tests fail, or later.</div>
-            <div class="compare-fix">An edit is never applied on top of a newer local change. Stale writes are refused, not merged.</div>
+            <div class="compare-now">Everyone on their own branch</div>
+            <div class="compare-pain">Nobody sees anyone else's work until a PR lands, hours later. Two people solve the same thing twice.</div>
+            <div class="compare-fix">Every settled edit reaches your teammates in seconds, so you find the overlap while it's still one line.</div>
           </div>
           <div class="compare-row">
-            <div class="compare-now">Separate worktrees, merge by hand</div>
-            <div class="compare-pain">You're the merge queue. Conflicts surface hours later, far from the context that caused them.</div>
-            <div class="compare-fix">Conflicts are classified the moment an edit settles, while you still remember what each agent was doing.</div>
+            <div class="compare-now">Merge it all at the end</div>
+            <div class="compare-pain">You're the merge queue, reconstructing what everyone meant hours after they meant it.</div>
+            <div class="compare-fix">Overlap surfaces the moment an edit settles, while everyone still remembers what they were doing.</div>
           </div>
           <div class="compare-row">
-            <div class="compare-now">A branch and a PR per agent</div>
+            <div class="compare-now">A pull request for every change</div>
             <div class="compare-pain">Minutes of round trip through your Git host for a change that took four seconds to make.</div>
-            <div class="compare-fix">Review happens locally, in your terminal or through your agent, in seconds. Publish to a real branch when you're ready.</div>
+            <div class="compare-fix">Take a teammate's work with one command, locally. Publish to a real branch when the work is actually done.</div>
           </div>
           <div class="compare-row">
-            <div class="compare-now">Tell everyone which files to stay out of</div>
-            <div class="compare-pain">Works until one of them ignores you, which they do.</div>
-            <div class="compare-fix">Claims and live presence make it a fact the other agent can query, not an instruction it might drop.</div>
+            <div class="compare-now">Coordinate in Slack</div>
+            <div class="compare-pain">Out of date the second an agent starts working, and no agent is reading it anyway.</div>
+            <div class="compare-fix">Claims and live presence are a fact every agent can query, not a message someone has to remember.</div>
           </div>
           <div class="compare-row">
-            <div class="compare-now">Let an AI merge tool resolve it</div>
-            <div class="compare-pain">Now something you didn't read has rewritten your working tree.</div>
+            <div class="compare-now">Let an AI merge tool sort it out</div>
+            <div class="compare-pain">Now something nobody read has rewritten your working tree.</div>
             <div class="compare-fix">The AI reviewer only ever advises, runs on your own agent, and can't apply anything without you.</div>
           </div>
         </div>
@@ -130,15 +131,15 @@
       <div class="inner">
         <div class="section-heading reveal">
           <h2>Use cases</h2>
-          <p>Real scenarios teams run into once more than one agent touches a repo.</p>
+          <p>Where a shared codebase stops feeling like separate copies.</p>
         </div>
 
         <div class="usecase-grid stagger">
           <div class="usecase-card usecase-card--featured reveal">
             <div class="usecase-card-main">
-              <h3>Everyone's agents on one repo, at the same time</h3>
+              <h3>A startup or hackathon team, all shipping at once</h3>
               <ul class="usecase-card-list">
-                <li>Your Claude Code and a teammate's Codex CLI can work the same branch without clobbering each other</li>
+                <li>Your Claude Code and a teammate's Codex CLI on the same codebase, each seeing the other's work land</li>
                 <li>Every settled change becomes a durable transaction the instant it lands</li>
                 <li>Ask "who else is working on this repo right now?" and get a real answer</li>
               </ul>
@@ -164,9 +165,9 @@
           </div>
 
           <div class="usecase-card reveal">
-            <h3>Review agent output like a pull request</h3>
+            <h3>Review without the pull-request round trip</h3>
             <ul class="usecase-card-list">
-              <li>Every remote change arrives as a proposal, never auto-applied</li>
+              <li>A teammate's change arrives as a proposal in seconds, not after a push and a CI run</li>
               <li>Diff, accept, or reject before it touches your branch</li>
             </ul>
           </div>
@@ -236,33 +237,34 @@
     <section id="benefits" class="alt">
       <div class="inner">
         <div class="section-heading reveal">
-          <h2>Why teams whose agents collide reach for Crosscode</h2>
-          <p>Once more than one person on a project has an agent editing code, coordination stops being optional.</p>
+          <h2>What changes when your team is actually in sync</h2>
+          <p>The difference between working near each other and working together.</p>
         </div>
 
         <div class="benefit-grid stagger">
           <div class="benefit reveal">
             <div class="benefit-num">01</div>
-            <h3>Stop losing work to collisions</h3>
+            <h3>See your teammates' work as it happens</h3>
             <p>
-              Two agents editing the same files in separate checkouts usually means
-              silent overwrites, or you diffing by hand to find out what happened.
-              Crosscode records each edit the moment it settles and refuses to apply
-              anything on top of a newer local change, so nothing gets clobbered.
+              The moment an edit settles in anyone's checkout, everyone else can see
+              it &mdash; what changed, which files, by whom. No waiting for a branch to
+              be pushed or a pull request to be opened before the rest of the team
+              finds out the shape of what you built.
             </p>
           </div>
           <div class="benefit reveal">
             <div class="benefit-num">02</div>
-            <h3>Never auto-apply someone else's diff</h3>
+            <h3>Take a change when you want it, not when Git says so</h3>
             <p>
-              Remote work, whether from a teammate or another agent, always
-              shows up as a reviewable proposal. Your working tree stays yours
-              until you explicitly accept a change.
+              A teammate's work arrives as a proposal you can read and pull in with
+              one command, in seconds. Your working tree stays yours until you say
+              otherwise &mdash; the one place code should not behave like a shared
+              document.
             </p>
           </div>
           <div class="benefit reveal">
             <div class="benefit-num">03</div>
-            <h3>Give your agent real situational awareness</h3>
+            <h3>Your agent knows what everyone else is doing</h3>
             <p>
               Your coding agent can ask "who else is working on this repo right
               now, and on what?" and get a real answer: live presence,
@@ -426,11 +428,12 @@
             <span>Paste into your coding agent</span>
             <button class="copy-btn" data-copy-target="install-prompt-text" type="button">Copy prompt</button>
           </div>
-          <pre><code id="install-prompt-text">Set up Crosscode for this project. Crosscode is a local-first coordination daemon
-for repositories that several people share while all of them run coding agents: it
-watches Git and filesystem activity and exposes itself to me as an MCP server, so
-you (my coding agent) can see and safely land work alongside the agents my
-teammates are running in their own checkouts. Do the following:
+          <pre><code id="install-prompt-text">Set up Crosscode for this project. Crosscode keeps everyone working on this
+codebase in sync: a local daemon watches Git and filesystem activity and exposes
+itself to you (my coding agent) as an MCP server, so you can see what my teammates
+and their agents are doing in their own checkouts, and they can see what we do here
+— within seconds, instead of at pull-request time. Their work arrives as proposals
+we review, never as writes into our files. Do the following:
 
 1. Check that Node 24 or newer is available (`node --version`). If it is not, stop
    and tell me — everything below needs it.

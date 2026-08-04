@@ -9,11 +9,12 @@ the marketing site's "Install" button copies to the clipboard — keep both in s
 ## The prompt
 
 ````text
-Set up Crosscode for this project. Crosscode is a local-first coordination daemon
-for repositories that several people share while all of them run coding agents: it
-watches Git and filesystem activity and exposes itself to me as an MCP server, so
-you (my coding agent) can see and safely land work alongside the agents my
-teammates are running in their own checkouts. Do the following:
+Set up Crosscode for this project. Crosscode keeps everyone working on this
+codebase in sync: a local daemon watches Git and filesystem activity and exposes
+itself to you (my coding agent) as an MCP server, so you can see what my teammates
+and their agents are doing in their own checkouts, and they can see what we do here
+— within seconds, instead of at pull-request time. Their work arrives as proposals
+we review, never as writes into our files. Do the following:
 
 1. Check that Node 24 or newer is available (`node --version`). If it is not, stop
    and tell me — everything below needs it.

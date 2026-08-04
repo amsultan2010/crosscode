@@ -24,6 +24,13 @@ import type { WebSocketGateway } from "./ws.js";
  *   in-memory rate limiter counts per instance rather than globally. Routes whose limit is
  *   a security control rather than a courtesy must be backed by the database instead; see
  *   the durable limiter wired in below.
+ * - **The history-retention sweep.** main.ts runs it on an interval, which needs a process
+ *   that stays alive; there is none here. It is deliberately not started per request --
+ *   that would put a delete of the largest table on a user's latency path. Until this
+ *   deployment has a scheduled invocation (a platform cron calling a guarded endpoint, or
+ *   `pnpm service:prune` from anywhere with CROSSCODE_RETENTION_DATABASE_URL), operation
+ *   history on the function platform grows unbounded regardless of plan. Reads stay
+ *   correct either way: nothing is deleted, so no cursor is ever refused.
  */
 
 /** Broadcasts have nowhere to go without a persistent process; dropping them is safe. */
@@ -69,8 +76,20 @@ export function createServerlessHandler(environment: NodeJS.ProcessEnv = process
     allowedOrigins: parseAllowedOrigins(environment.CROSSCODE_ALLOWED_ORIGINS),
     gateway: silentGateway
   });
-  cached = { handler, store };
-  return handler;
+  // main.ts refuses to start when the runtime role can update or delete immutable
+  // operations and audit rows. A function platform has no startup to refuse at, so the
+  // check runs once per cold instance and fails that instance's requests instead -- a
+  // misconfigured role must not quietly become an append-only log that isn't append-only.
+  // Deliberately not awaited inline: the check is one query, and blocking every first
+  // request behind it would add a round-trip to each cold start.
+  const privileged = store.assertRuntimePrivileges().then(() => undefined, (error: unknown) => error);
+  const guarded: ServerlessHandler = async (request, response) => {
+    const failure = await privileged;
+    if (failure) throw failure;
+    await handler(request, response);
+  };
+  cached = { handler: guarded, store };
+  return guarded;
 }
 
 function required(value: string | undefined, name: string): string {

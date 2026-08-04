@@ -53,6 +53,9 @@ ENV CROSSCODE_SERVICE_HOST=0.0.0.0
 ENV CROSSCODE_SERVICE_PORT=8080
 EXPOSE 8080
 
-# DATABASE_URL, SUPABASE_URL, CROSSCODE_ALLOWED_ORIGINS and CROSSCODE_TRUST_PROXY_TLS are
-# supplied by the host as secrets -- never baked into the image.
+# DATABASE_URL, SUPABASE_URL, CROSSCODE_ALLOWED_ORIGINS, CROSSCODE_TRUST_PROXY_TLS and the
+# CROSSCODE_STRIPE_* group (SECRET_KEY, WEBHOOK_SECRET, PRICES, SUCCESS_URL, and the optional
+# CANCEL_URL/PORTAL_RETURN_URL/API_VERSION) are supplied by the host as secrets -- never
+# baked into the image. Omitting the Stripe group leaves the service with no billing surface,
+# which is the right shape for a self-hosted deployment.
 CMD ["pnpm", "--filter", "@crosscode/service", "start"]

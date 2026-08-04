@@ -1,12 +1,29 @@
 import { describe, expect, it } from "vitest";
 import {
   BillingLimitError,
+  PAID_PLANS,
   PLAN_LIMITS,
+  PLAN_PRICING,
   StubBillingProvider,
   assertPlanAllowsAutonomyTier,
   assertSeatCapAvailable,
-  assertSemanticReviewCallAvailable
+  assertSemanticReviewCallAvailable,
+  clampAutonomyTierToPlan,
+  entitlementForSubscription,
+  maxAutonomyTierFor,
+  priceCentsFor,
+  seatQuantityFor,
+  type PaidPlan,
+  type SubscriptionState
 } from "./billing.js";
+
+function subscription(overrides: Partial<SubscriptionState> = {}): SubscriptionState {
+  return {
+    subscriptionId: "sub_1", customerId: "cus_1", status: "active", plan: "pro",
+    interval: "year", seats: 1, cancelAtPeriodEnd: false, currentPeriodEnd: null,
+    ...overrides
+  };
+}
 
 describe("assertSeatCapAvailable", () => {
   it("allows adding a member while under the plan's seat cap", () => {
@@ -88,6 +105,88 @@ describe("PLAN_LIMITS ladder", () => {
   });
 });
 
+describe("pricing ladder", () => {
+  it("prices a year at ten months on every paid plan", () => {
+    for (const plan of PAID_PLANS) {
+      expect(PLAN_PRICING[plan].annualCents).toBe(PLAN_PRICING[plan].monthlyCents * 10);
+    }
+  });
+
+  it("matches the published ladder, and gives student essential's price with pro's limits", () => {
+    expect(PLAN_PRICING.essential.monthlyCents).toBe(250);
+    expect(PLAN_PRICING.pro.monthlyCents).toBe(500);
+    expect(PLAN_PRICING.unlimited.monthlyCents).toBe(750);
+    expect(PLAN_PRICING.student.monthlyCents).toBe(PLAN_PRICING.essential.monthlyCents);
+    expect(PLAN_LIMITS.student.historyRetentionDays).toBe(PLAN_LIMITS.pro.historyRetentionDays);
+  });
+
+  it("charges team per seat and everything else flat", () => {
+    expect(seatQuantityFor("team", 7)).toBe(7);
+    expect(priceCentsFor("team", "month", 7)).toBe(7 * 500);
+    for (const plan of PAID_PLANS.filter((candidate) => candidate !== "team")) {
+      expect(seatQuantityFor(plan, 7)).toBe(1);
+      expect(priceCentsFor(plan, "month", 7)).toBe(PLAN_PRICING[plan].monthlyCents);
+    }
+  });
+
+  it("lets unlimited undercut team from two seats up, which is the documented tradeoff", () => {
+    expect(priceCentsFor("team", "month", 2)).toBeGreaterThan(priceCentsFor("unlimited", "month", 2));
+    expect(priceCentsFor("team", "month", 1)).toBeLessThan(priceCentsFor("unlimited", "month", 1));
+  });
+});
+
+describe("autonomy clamping on downgrade", () => {
+  it("caps free at auto-if-clean and every paid plan at auto-always", () => {
+    expect(maxAutonomyTierFor("free")).toBe(1);
+    for (const plan of PAID_PLANS) expect(maxAutonomyTierFor(plan)).toBe(2);
+  });
+
+  it("falls back rather than erroring when a downgrade removes the tier in use", () => {
+    // The paid wall costs the feature, not the workspace: a workspace on auto-always that
+    // loses its plan lands on auto-if-clean and keeps working.
+    expect(clampAutonomyTierToPlan(2, "free")).toBe(1);
+    expect(clampAutonomyTierToPlan(1, "free")).toBe(1);
+    expect(clampAutonomyTierToPlan(0, "free")).toBe(0);
+    expect(clampAutonomyTierToPlan(2, "pro")).toBe(2);
+  });
+});
+
+describe("entitlementForSubscription", () => {
+  it("grants the paid plan while the subscription is healthy", () => {
+    expect(entitlementForSubscription(subscription({ status: "active" }))).toEqual({ plan: "pro", inGrace: false });
+    expect(entitlementForSubscription(subscription({ status: "trialing" }))).toEqual({ plan: "pro", inGrace: false });
+  });
+
+  it("keeps every paid limit while a payment is failing, and opens a grace period", () => {
+    // A failed card must not cost anyone access mid-task; Stripe is still retrying.
+    for (const status of ["past_due", "incomplete", "unpaid"] as const) {
+      expect(entitlementForSubscription(subscription({ status }))).toEqual({ plan: "pro", inGrace: true });
+    }
+  });
+
+  it("falls back to free's limits once the subscription is terminal, never destroying anything", () => {
+    for (const status of ["canceled", "incomplete_expired", "paused"] as const) {
+      expect(entitlementForSubscription(subscription({ status }))).toEqual({ plan: "free", inGrace: false });
+    }
+  });
+
+  it("grants free when the subscription's price is not in this deployment's catalog", () => {
+    // Better no plan than a guessed one: an unrecognized price must not buy limits, and
+    // with nothing to protect a failing payment opens no grace period either.
+    expect(entitlementForSubscription(subscription({ plan: null }))).toEqual({ plan: "free", inGrace: false });
+    expect(entitlementForSubscription(subscription({ plan: null, status: "past_due" }))).toEqual({ plan: "free", inGrace: false });
+  });
+
+  it("never grants a plan outside PLAN_LIMITS, whatever the status", () => {
+    const statuses = ["active", "trialing", "past_due", "incomplete", "unpaid", "canceled", "incomplete_expired", "paused"] as const;
+    for (const status of statuses) {
+      for (const plan of [...PAID_PLANS, null] as Array<PaidPlan | null>) {
+        expect(PLAN_LIMITS[entitlementForSubscription(subscription({ status, plan })).plan]).toBeDefined();
+      }
+    }
+  });
+});
+
 describe("StubBillingProvider", () => {
   it("creates an in-memory customer without any network calls", async () => {
     const provider = new StubBillingProvider();
@@ -96,11 +195,15 @@ describe("StubBillingProvider", () => {
     expect(customer.customerId).toBeTruthy();
   });
 
-  it("returns a stub checkout session URL", async () => {
+  it("returns a stub checkout session URL, defaulting to annual", async () => {
     const provider = new StubBillingProvider();
     const session = await provider.createCheckoutSession("workspace-1", "pro");
     expect(session.url).toContain("workspace-1");
     expect(session.url).toContain("pro");
+    // Annual is the default everywhere the caller does not say, because at $2.50/month the
+    // processor's fixed fee is ~15% of the charge against ~4% on the annual one.
+    expect(session.url).toContain("year");
+    expect((await provider.createCheckoutSession("workspace-1", "pro", { interval: "month" })).url).toContain("month");
   });
 
   it("cancels a subscription as a no-op without throwing", async () => {

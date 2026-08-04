@@ -298,18 +298,80 @@ export const workspaceAutonomyResponseSchema = z.object({
 }).strict();
 export type WorkspaceAutonomyResponse = z.infer<typeof workspaceAutonomyResponseSchema>;
 
+export const planSchema = z.enum(["free", "essential", "pro", "unlimited", "team", "student"]);
+export type PlanName = z.infer<typeof planSchema>;
+
+/** Every plan a checkout can be started for. Free is reached by cancelling, not by buying. */
+export const paidPlanSchema = z.enum(["essential", "pro", "unlimited", "team", "student"]);
+export type PaidPlanName = z.infer<typeof paidPlanSchema>;
+
+export const billingIntervalSchema = z.enum(["month", "year"]);
+export type BillingIntervalName = z.infer<typeof billingIntervalSchema>;
+
 export const workspaceBillingResponseSchema = z.object({
   workspaceId: z.string().min(1),
-  plan: z.enum(["free", "essential", "pro", "unlimited", "team", "student"]),
+  // The plan whose limits are in force right now. During a payment grace period this is
+  // still the paid plan; once the grace period lapses it becomes "free" while billingPlan
+  // keeps naming what was being paid for.
+  plan: planSchema,
   // null means unlimited (the plan's cap is Infinity server-side; JSON has no Infinity).
   seatCap: z.number().nullable(),
   currentMemberCount: z.number(),
   semanticReviewCallsPerMonth: z.number().nullable(),
   semanticReviewCallsUsedThisMonth: z.number(),
   autonomyTiers: z.array(z.enum(["always-ask", "auto-if-clean", "auto-always"])),
-  historyRetentionDays: z.number()
+  historyRetentionDays: z.number(),
+  billingPlan: paidPlanSchema.nullable(),
+  billingInterval: billingIntervalSchema.nullable(),
+  /** The payment provider's subscription status verbatim, for diagnosis. */
+  billingStatus: z.string().nullable(),
+  billingSeats: z.number().nullable(),
+  /** Set only while a payment is failing: the deadline after which free's limits apply. */
+  gracePeriodEndsAt: z.string().datetime().nullable(),
+  cancelAtPeriodEnd: z.boolean(),
+  currentPeriodEnd: z.string().datetime().nullable(),
+  billingOwnerActorId: z.string().nullable(),
+  priceCents: z.number().nullable()
 }).strict();
 export type WorkspaceBillingResponse = z.infer<typeof workspaceBillingResponseSchema>;
+
+// Annual is the default when the caller does not say, because at these prices the payment
+// processor's fixed fee eats ~15% of a monthly charge against ~4% of an annual one.
+export const startCheckoutRequestSchema = z.object({
+  plan: paidPlanSchema,
+  interval: billingIntervalSchema.default("year"),
+  /** Team only; ignored on flat-priced plans, where the quantity is always 1. */
+  seats: z.number().int().positive().max(10_000).optional()
+}).strict();
+export type StartCheckoutRequest = z.infer<typeof startCheckoutRequestSchema>;
+
+export const startCheckoutResponseSchema = z.object({
+  // "checkout" means follow `url` to enter a card; "updated" means an existing
+  // subscription was moved in place and prorated, so there is nothing to open.
+  mode: z.enum(["checkout", "updated"]),
+  plan: paidPlanSchema,
+  interval: billingIntervalSchema,
+  seats: z.number().int().positive(),
+  url: z.string().url().nullable(),
+  priceCents: z.number().int().nonnegative(),
+  /** What the same plan would cost on the other interval, for the CLI's savings copy. */
+  monthlyEquivalentCents: z.number().int().nonnegative()
+}).strict();
+export type StartCheckoutResponse = z.infer<typeof startCheckoutResponseSchema>;
+
+export const cancelSubscriptionResponseSchema = z.object({
+  // The plan stays in force until the paid period ends; cancelling never takes effect
+  // immediately and never deletes workspace data.
+  plan: planSchema,
+  cancelAtPeriodEnd: z.boolean(),
+  currentPeriodEnd: z.string().datetime().nullable()
+}).strict();
+export type CancelSubscriptionResponse = z.infer<typeof cancelSubscriptionResponseSchema>;
+
+export const billingPortalResponseSchema = z.object({
+  url: z.string().url()
+}).strict();
+export type BillingPortalResponse = z.infer<typeof billingPortalResponseSchema>;
 
 export const listMembershipsResponseSchema = z.object({
   memberships: z.array(z.object({
@@ -432,6 +494,38 @@ export const cursorResponseSchema = z.object({
   nextCursor: z.number().int().nonnegative()
 }).strict();
 export type CursorResponse = z.infer<typeof cursorResponseSchema>;
+
+/**
+ * Version of the `GET /v1/operations` read surface the client understands, sent as a
+ * `protocolVersion` query parameter. Distinct from the envelope's `schemaVersion`, which
+ * versions event shapes rather than this endpoint's answers.
+ *
+ * 1 -> 2 added the cursor-too-old status below. A daemon that predates it sends nothing
+ * (so the service reads version 1) and is refused with `410 Gone` instead: it would parse
+ * the status body with cursorResponseSchema, which is `.strict()` and has no `status` key,
+ * so it cannot mistake it for a page -- but a hard HTTP failure it already surfaces as a
+ * sync error is a much clearer answer than a validation crash.
+ */
+export const OPERATIONS_PROTOCOL_VERSION = 2;
+
+/**
+ * Retention has deleted the operations this cursor asks for, so no page can answer it
+ * honestly. `resyncFrom` is the oldest cursor the service can still serve completely; a
+ * replica adopts it and continues from there, accepting that proposals inside the deleted
+ * range are gone. That is safe because Git, not this history, is the source of truth --
+ * what is lost is unreviewed proposals, never committed or working-tree work.
+ */
+export const cursorTooOldResponseSchema = z.object({
+  status: z.literal("cursor-too-old"),
+  protocolVersion: z.literal(OPERATIONS_PROTOCOL_VERSION),
+  resyncFrom: z.number().int().nonnegative(),
+  retentionDays: z.number().int().positive()
+}).strict();
+export type CursorTooOldResponse = z.infer<typeof cursorTooOldResponseSchema>;
+
+/** What `GET /v1/operations` answers a `protocolVersion=2` client: a page, or a resync order. */
+export const operationsResponseSchema = z.union([cursorResponseSchema, cursorTooOldResponseSchema]);
+export type OperationsResponse = z.infer<typeof operationsResponseSchema>;
 
 export const validationSchema = z.object({ id: z.string(), profile: z.string(), command: z.string(), exitCode: z.number().int(), durationMs: z.number().nonnegative(), tree: z.string().optional(), output: z.string(), runnerId: z.string(), createdAt: z.string().datetime() });
 export type Validation = z.infer<typeof validationSchema>;

@@ -10,6 +10,9 @@ import {
   pairingStatusResponseSchema,
   workspaceTokenSchema,
   cursorResponseSchema,
+  cursorTooOldResponseSchema,
+  operationsResponseSchema,
+  OPERATIONS_PROTOCOL_VERSION,
   daemonConfigSchema,
   daemonConnectionSchema,
   eventEnvelopeSchema,
@@ -157,6 +160,18 @@ describe("protocol schemas", () => {
     expect(cursorResponseSchema.parse({ operations: [operation], nextCursor: 1 }).nextCursor).toBe(1);
     expect(() => cursorQuerySchema.parse({ afterSequence: -1 })).toThrow();
     expect(() => serviceIngestReceiptSchema.parse({ eventId: transaction.id, operationId: transaction.id, serverSequence: 0 })).toThrow();
+
+    // The resync status and a page are two shapes with no overlap. cursorResponseSchema is
+    // what every daemon built before this status parses `GET /v1/operations` with, so the
+    // rejection below is the guarantee that such a daemon cannot read "your cursor fell out
+    // of retention" as "here is your (empty) page, you are caught up".
+    const tooOld = { status: "cursor-too-old" as const, protocolVersion: OPERATIONS_PROTOCOL_VERSION, resyncFrom: 12, retentionDays: 7 };
+    expect(cursorTooOldResponseSchema.parse(tooOld)).toEqual(tooOld);
+    expect(() => cursorResponseSchema.parse(tooOld)).toThrow();
+    expect(() => cursorTooOldResponseSchema.parse({ ...tooOld, protocolVersion: 1 })).toThrow();
+    expect(() => cursorTooOldResponseSchema.parse({ ...tooOld, retentionDays: 0 })).toThrow();
+    expect(operationsResponseSchema.parse(tooOld)).toEqual(tooOld);
+    expect(operationsResponseSchema.parse({ operations: [operation], nextCursor: 1 })).toEqual({ operations: [operation], nextCursor: 1 });
   });
 
   it("accepts secure or loopback daemon service configuration only", () => {
