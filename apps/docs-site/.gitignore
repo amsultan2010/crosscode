@@ -5,6 +5,7 @@ dist
 # `pnpm docs:dev` / `pnpm docs:build` every time.
 /docs/architecture.html
 /docs/safety.html
+/docs/privacy.html
 /docs/protocol.html
 /docs/mcp-clients.html
 /public/docs/

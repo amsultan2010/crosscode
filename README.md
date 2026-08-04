@@ -122,6 +122,7 @@ Paste the prompt in [`docs/install-prompt.md`](./docs/install-prompt.md) into an
 - Uploads are idempotent, and after a disconnect the daemon resumes from exactly where it left off
 - Live presence, tasks, claims, handoffs, and intents over WebSocket, falling back to polling when the socket drops. Paired installs (`crosscode join --pair`) subscribe with their workspace token and get the same live updates as a logged-in one
 - Text and binary files (binaries travel base64-encoded and are restored byte-for-byte), and renames tracked as real renames rather than a delete plus an add
+- **File payloads are end-to-end encrypted by default.** Contents, paths, diffs, and content hashes are sealed on your machine under a workspace key the coordination service never receives, so a hosted service stores code it cannot read. See [`docs/privacy.md`](./docs/privacy.md) for what stays visible, and [`docs/security.md`](./docs/security.md#end-to-end-encryption) for the design
 
 **Reviewing before anything lands**
 
@@ -148,12 +149,13 @@ See [BUILD_INSTRUCTIONS.md](./BUILD_INSTRUCTIONS.md) for the authoritative, mile
 
 ## Safety model
 
-Crosscode follows four rules:
+Crosscode follows five rules:
 
 1. **Your files win locally.** Whatever is on your disk is the truth for your own work.
 2. **Nothing from anyone else is written without your say-so.** Remote work arrives as a proposal; accepting it is an explicit act.
 3. **Every write is checked and backed up first.** Before applying a proposal, Crosscode re-checks that your files still match what the change was based on, and takes a checkpoint it can roll back to.
 4. **Some things are refused outright:** excluded paths, files that look like secrets, symlinks pointing outside the repository, and payloads that are malformed or whose content doesn't match its hash.
+5. **The coordination service cannot read your code.** File payloads are encrypted before they leave your machine; a receiving checkout verifies them against a key the service has never held, rather than trusting anything the service asserts about them.
 
 If Crosscode is stopped or removed, the repository remains an ordinary Git repository. Checkpoints live under `refs/crosscode/checkpoints/...` and do not pollute normal branch history.
 
@@ -413,6 +415,7 @@ Crosscode stores machine-local state under the repository's resolved Git directo
 
 ```text
 <git-dir>/crosscode/config.json   # replica identity, service URL, Supabase session (access + refresh token) (0600)
+<git-dir>/crosscode/keyring.json  # workspace encryption keys + this device's keypair (0600; encrypted under an OS-keychain key where available)
 <git-dir>/crosscode/daemon.json   # ephemeral loopback descriptor and secret (0600)
 <git-dir>/crosscode/state.sqlite  # events, projections, cursor, outbox (0600)
 <git-dir>/crosscode/daemon.lock   # one-daemon ownership

@@ -44,6 +44,11 @@ import {
   validationIngestRequestSchema,
   validationIngestReceiptSchema,
   workspaceAutonomyResponseSchema,
+  createWorkspaceKeyGrantsRequestSchema,
+  listWorkspaceKeyRecipientsResponseSchema,
+  registerDeviceKeyRequestSchema,
+  workspaceKeyStateResponseSchema,
+  isSealedTransaction,
   EPOCH_CURSOR,
   WORKSPACE_TOKEN_PREFIX,
   type RemoteOperation
@@ -300,7 +305,7 @@ async function handleRequest(
       await readJson(request, Math.min(options.bodyLimitBytes ?? 1_048_576, 16_384))
     );
     const claimed = await options.store.claimPairingCode({
-      code: body.code, actorId: body.actorId, replicaName: body.replicaName
+      code: body.code, actorId: body.actorId, replicaName: body.replicaName, devicePublicKey: body.devicePublicKey
     });
     // Attribute the freshly paired replica to the repository it is a checkout of, so the
     // CLI can group its activity by project from the very first pairing. Reported by
@@ -465,7 +470,7 @@ async function handleRequest(
       await readJson(request, Math.min(options.bodyLimitBytes ?? 1_048_576, 16_384))
     );
     const replica = await options.store.registerReplica(identity.userId, identity.workspaceId, body.name, {
-      repoRoot: body.repoRoot, repoRemote: body.repoRemote
+      repoRoot: body.repoRoot, repoRemote: body.repoRemote, devicePublicKey: body.devicePublicKey
     });
     send(response, 201, registerReplicaResponseSchema.parse(replica));
     return;
@@ -503,7 +508,13 @@ async function handleRequest(
     if (identity.role === "viewer") throw new HttpError(403, "Viewer membership is read-only");
     const body = serviceIngestRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
     if (body.event.serverSequence !== undefined) throw new HttpError(400, "Clients may not assign serverSequence");
-    if (new Set(body.event.payload.changes.map((change) => change.path)).size !== body.event.payload.changes.length) {
+    const transaction = body.event.payload;
+    // One key per changed file, whichever form the transaction takes: a path for a
+    // plaintext operation, an opaque per-operation token for a sealed one.
+    const fileKeys = isSealedTransaction(transaction)
+      ? transaction.changes.map((change) => change.pathToken)
+      : transaction.changes.map((change) => change.path);
+    if (new Set(fileKeys).size !== fileKeys.length) {
       throw new HttpError(400, "An operation may change each path only once");
     }
     if (
@@ -511,10 +522,30 @@ async function handleRequest(
       body.event.actorId !== identity.actorId
     ) throw new HttpError(403, "Event principal does not match authenticated membership");
     await options.store.assertReplicaOwnership(identity.workspaceId, identity.memberId, body.event.replicaId);
-    for (const change of body.event.payload.changes) {
-      if (redactPath(change.path)) throw new HttpError(400, "Sensitive paths cannot be synchronized");
-      if (change.kind !== "delete" && (change.afterContent === undefined || change.afterHash !== contentHash(change.afterContent))) {
-        throw new HttpError(400, "Transaction content hash is invalid");
+    // A sealed payload gets no content inspection here, because there is nothing to
+    // inspect: `afterHash === contentHash(afterContent)` needs plaintext, and the whole
+    // point is that this process no longer has any. Neither check is lost, both moved to
+    // where they were always the ones that mattered:
+    //
+    // - Integrity. The server-side hash comparison only ever caught a *client* that
+    //   miscomputed its own hash. It could never protect a receiver, because a service
+    //   able to rewrite `afterContent` could rewrite `afterHash` to match. The receiving
+    //   daemon already re-ran the same check itself (assertChangeIntegrity in
+    //   apps/daemon/src/index.ts) precisely because ours was not evidence. For a sealed
+    //   payload that receiver-side check is upgraded from a hash the service could forge
+    //   to an AES-GCM tag under a key the service has never held, with the workspace,
+    //   replica, sequence, and operation id bound in as additional authenticated data --
+    //   so a payload cannot be forged, replayed, or moved between operations either.
+    // - Secret paths. `redactPath` refused to relay `.env` and friends, which likewise
+    //   only ever caught a well-meaning client: a malicious one renames the file. The
+    //   check runs client-side before capture (eligiblePath) and again before sealing,
+    //   which is the only place it can see a real path anyway.
+    if (!isSealedTransaction(transaction)) {
+      for (const change of transaction.changes) {
+        if (redactPath(change.path)) throw new HttpError(400, "Sensitive paths cannot be synchronized");
+        if (change.kind !== "delete" && (change.afterContent === undefined || change.afterHash !== contentHash(change.afterContent))) {
+          throw new HttpError(400, "Transaction content hash is invalid");
+        }
       }
     }
     const operation = await options.store.appendOperation(identity, body.event);
@@ -709,6 +740,41 @@ async function handleRequest(
     return;
   }
 
+  // Workspace key distribution. Every body on these routes is ciphertext this process
+  // cannot open; see docs/security.md#end-to-end-encryption.
+  if (method === "GET" && url.pathname === "/v1/workspace-keys/state") {
+    const replicaId = await requireOwnedReplica(url, identity, options);
+    const state = await options.store.getWorkspaceKeyState(identity.workspaceId, replicaId);
+    send(response, 200, workspaceKeyStateResponseSchema.parse(state));
+    return;
+  }
+
+  if (method === "PUT" && url.pathname === "/v1/workspace-keys/device") {
+    const replicaId = await requireOwnedReplica(url, identity, options);
+    const body = registerDeviceKeyRequestSchema.parse(await readJson(request, Math.min(options.bodyLimitBytes ?? 1_048_576, 16_384)));
+    await options.store.registerDevicePublicKey(identity.workspaceId, replicaId, body.publicKey);
+    send(response, 200, { registered: true });
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v1/workspace-keys/recipients") {
+    if (identity.role === "viewer") throw new HttpError(403, "Viewer membership cannot distribute workspace keys");
+    const recipients = await options.store.listWorkspaceKeyRecipients(identity.workspaceId);
+    send(response, 200, listWorkspaceKeyRecipientsResponseSchema.parse({ recipients }));
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/v1/workspace-keys/grants") {
+    if (identity.role === "viewer") throw new HttpError(403, "Viewer membership cannot distribute workspace keys");
+    const replicaId = await requireOwnedReplica(url, identity, options);
+    const body = createWorkspaceKeyGrantsRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
+    // `first=1` asks the service to serialize this against every other attempt to
+    // establish the workspace's first key, and refuse (409) if one already exists.
+    const stored = await options.store.insertWorkspaceKeyGrants(identity, replicaId, body.grants, { requireFirst: url.searchParams.get("first") === "1" });
+    send(response, 200, stored);
+    return;
+  }
+
   // Upgrading, downgrading, and cancelling all act as the paying user and all move money,
   // so they are Supabase-only (never a `ccw_` terminal token) and owner-only.
   if (method === "POST" && url.pathname === "/v1/workspace/billing/checkout") {
@@ -810,6 +876,20 @@ type Identity = Membership & { credential: "supabase" | "workspace-token" };
 
 function assertSupabaseCredential(identity: Identity, surface: string): void {
   if (identity.credential !== "supabase") throw new HttpError(403, `Workspace tokens cannot access ${surface}`);
+}
+
+/**
+ * The `replicaId` query parameter, proven to belong to the authenticated member. The key
+ * routes are per-device rather than per-member -- a grant is wrapped to one device's
+ * public key -- and both credential kinds have to name their device the same way, so this
+ * runs the same ownership check the ingest endpoints do rather than trusting a `ccw_`
+ * token's embedded replica for one path and a header for the other.
+ */
+async function requireOwnedReplica(url: URL, identity: Identity, options: ServiceServerOptions): Promise<string> {
+  const replicaId = url.searchParams.get("replicaId");
+  if (!replicaId || !UUID_PATTERN.test(replicaId)) throw new HttpError(400, "replicaId must be a UUID");
+  await options.store.assertReplicaOwnership(identity.workspaceId, identity.memberId, replicaId);
+  return replicaId;
 }
 
 /**
@@ -1102,7 +1182,11 @@ function rateLimitRoute(method: string, pathname: string): string {
     "GET /v1/workspace/autonomy",
     "PUT /v1/workspace/autonomy",
     "GET /v1/workspace-tokens",
-    "GET /v1/members"
+    "GET /v1/members",
+    "PUT /v1/workspace-keys/device",
+    "GET /v1/workspace-keys/state",
+    "GET /v1/workspace-keys/recipients",
+    "POST /v1/workspace-keys/grants"
   ]).has(route) ? route : "unknown";
 }
 

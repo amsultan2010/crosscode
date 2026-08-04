@@ -6,7 +6,7 @@ import { createTempRepo, cleanupTempRepos, waitFor } from "@crosscode/test-fixtu
 import { createServiceServer, PgStore } from "../../service/src/index.js";
 import { writeDaemonConfig } from "./runtime.js";
 import { provisionTestPrincipal, testSupabaseJwks, TEST_SUPABASE_URL } from "./test-supabase-session.js";
-import { spawnDaemon, stopDaemon, stopAllDaemons } from "./test-helpers.js";
+import { shareTestKeyring, spawnDaemon, stopDaemon, stopAllDaemons } from "./test-helpers.js";
 
 const databaseUrl = process.env.CROSSCODE_TEST_DATABASE_URL;
 
@@ -36,6 +36,7 @@ describe.skipIf(!databaseUrl)("PostgreSQL live handoff and intent coordination",
       const rootB = await repository();
       await writeDaemonConfig(rootA, { workspaceId: enrollA.principal.workspaceId, replicaId: enrollA.principal.replicaId, actorId: enrollA.principal.actorId, service: { url, session: { accessToken: enrollA.accessToken, refreshToken: "test-unused", expiresAt: enrollA.expiresAt } } });
       await writeDaemonConfig(rootB, { workspaceId: enrollB.principal.workspaceId, replicaId: enrollB.principal.replicaId, actorId: enrollB.principal.actorId, service: { url, session: { accessToken: enrollB.accessToken, refreshToken: "test-unused", expiresAt: enrollB.expiresAt } } });
+      await shareTestKeyring(enrollA.principal.workspaceId, [rootA, rootB]);
 
       // A uploads quickly (short poll); B polls slowly so fast delivery to B can only have
       // arrived over the live WebSocket path, proving live fan-out rather than eventual poll consistency.

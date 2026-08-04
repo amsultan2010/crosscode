@@ -85,7 +85,7 @@ describe("managed daemon runtime", () => {
     const { base, close } = await stubService((body) => {
       if (body.code === "AAAA-BBBB") return { status: 410, payload: { ok: false, error: "Pairing code is no longer available" } };
       claimed = body;
-      return { status: 200, payload: { ok: true, data: { workspaceId: "workspace-1", replicaId: "replica-1", token: "ccw_opaque-token", projectId: null } } };
+      return { status: 200, payload: { ok: true, data: { workspaceId: "workspace-1", replicaId: "replica-1", token: "ccw_opaque-token", projectId: null, pairingId: "3f1d5f1e-1e2b-4a7c-9f3d-2b6c7d8e9f01" } } };
     });
     try {
       // No prior `crosscode init` and no Supabase session: the code is the credential.

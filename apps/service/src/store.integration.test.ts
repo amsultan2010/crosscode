@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { EPOCH_CURSOR, type HandoffRequestedEvent, type IntentPublishedEvent, type TransactionCreatedEvent } from "@crosscode/protocol";
+import { EPOCH_CURSOR, isSealedTransaction, type HandoffRequestedEvent, type IntentPublishedEvent, type SealedTransactionCreatedEvent, type TransactionCreatedEvent } from "@crosscode/protocol";
 import { contentHash } from "@crosscode/core";
 import { describe, expect, it } from "vitest";
 import { toRemoteOperation } from "./http.js";
@@ -611,6 +611,10 @@ describe.skipIf(!databaseUrl)("PostgreSQL operation content storage", () => {
       // And the same for the object appendOperation returns, which is what the WebSocket
       // fan-out broadcasts immediately after ingest.
       expect(JSON.stringify(toRemoteOperation(stored))).toBe(JSON.stringify(toRemoteOperation(listed)));
+      // `transaction` is the sealed/plaintext union now. This test ingests a plaintext
+      // operation deliberately, so narrowing here is an assertion about that, not a cast
+      // that would quietly pass if the shape changed.
+      if (isSealedTransaction(listed.transaction)) throw new Error("Expected a plaintext operation");
       expect(listed.transaction.changes[0]?.afterContent).toBe(body);
     } finally {
       if (workspaceId) {
@@ -621,3 +625,146 @@ describe.skipIf(!databaseUrl)("PostgreSQL operation content storage", () => {
     }
   });
 });
+
+describe.skipIf(!databaseUrl)("PostgreSQL end-to-end encryption", () => {
+  it("stores a sealed operation as ciphertext, latches the workspace, and never sees a path", async () => {
+    const store = new PgStore(databaseUrl!);
+    const userId = randomUUID();
+    try {
+      await store.migrate();
+      const provisioned = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId, actorId: `owner-${randomUUID()}@example.com` });
+      const membership = await store.resolveMembership(userId, provisioned.workspaceId);
+      const replica = await store.registerReplica(userId, provisioned.workspaceId, `replica-${randomUUID()}`);
+
+      const sealedId = randomUUID();
+      const sealed = makeSealedEvent(membership, replica.replicaId, sealedId, 1);
+      const stored = await store.appendOperation(membership, sealed);
+      expect(stored.id).toBe(sealedId);
+      // Idempotent retry, the same as the plaintext path.
+      expect((await store.appendOperation(membership, sealed)).serverSequence).toBe(stored.serverSequence);
+
+      // operation_files is the per-path index into the operation; for a sealed one it
+      // holds the opaque token instead of a path, and no hash of anything.
+      const files = await store.pool.query<{ path: string; before_hash: string | null; after_hash: string | null }>(
+        "SELECT path, before_hash, after_hash FROM operation_files WHERE workspace_id = $1 AND operation_id = $2",
+        [provisioned.workspaceId, sealedId]
+      );
+      expect(files.rows).toEqual([{ path: "a".repeat(64), before_hash: null, after_hash: null }]);
+
+      // operations.event is the single home of content since migration 013, so it is the
+      // one row that has to be ciphertext for the claim on the privacy page to hold.
+      const rows = await store.pool.query<{ sealed: boolean; key_epoch: number; event: unknown }>(
+        "SELECT sealed, key_epoch, event FROM operations WHERE workspace_id = $1 AND id = $2",
+        [provisioned.workspaceId, sealedId]
+      );
+      expect(rows.rows[0]).toMatchObject({ sealed: true, key_epoch: 4 });
+      expect(JSON.stringify(rows.rows[0]!.event)).not.toContain("secret-plan.md");
+
+      // The latch: this workspace has sent ciphertext, so plaintext is refused from here
+      // on -- there is no code path back, deliberately.
+      await expect(store.appendOperation(membership, makeEvent(membership, replica.replicaId, randomUUID(), 2)))
+        .rejects.toBeInstanceOf(StoreConflictError);
+      const state = await store.getWorkspaceKeyState(provisioned.workspaceId, replica.replicaId);
+      expect(state.encrypted).toBe(true);
+    } finally {
+      await store.pool.query("DELETE FROM audit_events WHERE workspace_id IN (SELECT workspace_id FROM members WHERE user_id = $1)", [userId]);
+      await store.pool.query("DELETE FROM workspaces WHERE id IN (SELECT workspace_id FROM members WHERE user_id = $1)", [userId]);
+      await store.close();
+    }
+  });
+
+  it("relays key grants between devices, serializes the first key, and drops a removed member's devices", async () => {
+    const store = new PgStore(databaseUrl!);
+    const ownerUser = randomUUID();
+    const memberUser = randomUUID();
+    try {
+      await store.migrate();
+      const provisioned = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId: ownerUser, actorId: `owner-${randomUUID()}@example.com` });
+      const owner = await store.resolveMembership(ownerUser, provisioned.workspaceId);
+      const added = await store.addMember({ workspaceId: provisioned.workspaceId, userId: memberUser, actorId: `member-${randomUUID()}@example.com` });
+      const teammate = await store.resolveMembership(memberUser, provisioned.workspaceId);
+
+      const ownerKey = "A".repeat(43);
+      const teammateKey = "B".repeat(43);
+      const ownerReplica = await store.registerReplica(ownerUser, provisioned.workspaceId, `owner-${randomUUID()}`, { devicePublicKey: ownerKey });
+      const teammateReplica = await store.registerReplica(memberUser, provisioned.workspaceId, `mate-${randomUUID()}`, { devicePublicKey: teammateKey });
+
+      // A device key is write-once: re-sending the same one is fine, replacing it is not,
+      // because a replacement would redirect every future grant to a key of the caller's
+      // choosing without anyone re-confirming a fingerprint.
+      await store.registerDevicePublicKey(provisioned.workspaceId, ownerReplica.replicaId, ownerKey);
+      await expect(store.registerDevicePublicKey(provisioned.workspaceId, ownerReplica.replicaId, "C".repeat(43)))
+        .rejects.toBeInstanceOf(StoreConflictError);
+
+      // Nobody holds a key yet, so exactly one caller may establish the first one.
+      expect((await store.getWorkspaceKeyState(provisioned.workspaceId, ownerReplica.replicaId)).keyHolders).toBe(0);
+      await store.insertWorkspaceKeyGrants(owner, ownerReplica.replicaId, [grant(0, ownerReplica.replicaId, ownerKey)], { requireFirst: true });
+      await expect(store.insertWorkspaceKeyGrants(teammate, teammateReplica.replicaId, [grant(0, teammateReplica.replicaId, teammateKey)], { requireFirst: true }))
+        .rejects.toBeInstanceOf(StoreConflictError);
+
+      // A grant must match the recipient's registered key, or it is useless to them and a
+      // way to park one addressed to somebody else's.
+      await expect(store.insertWorkspaceKeyGrants(owner, ownerReplica.replicaId, [grant(0, teammateReplica.replicaId, ownerKey)]))
+        .rejects.toBeInstanceOf(StoreConflictError);
+
+      await store.insertWorkspaceKeyGrants(owner, ownerReplica.replicaId, [grant(0, teammateReplica.replicaId, teammateKey)]);
+      // Re-offering an epoch the recipient already holds is ignored, not an error: the
+      // daemon re-offers everything it holds on every sweep.
+      expect((await store.insertWorkspaceKeyGrants(owner, ownerReplica.replicaId, [grant(0, teammateReplica.replicaId, teammateKey)])).stored).toBe(0);
+
+      const teammateState = await store.getWorkspaceKeyState(provisioned.workspaceId, teammateReplica.replicaId);
+      expect(teammateState.grants.map((entry) => entry.epoch)).toEqual([0]);
+      expect(teammateState.keyHolders).toBe(2);
+
+      // Rotation: a second epoch reaches the devices already holding one.
+      await store.insertWorkspaceKeyGrants(owner, ownerReplica.replicaId, [grant(1, ownerReplica.replicaId, ownerKey), grant(1, teammateReplica.replicaId, teammateKey)]);
+      expect((await store.listWorkspaceKeyRecipients(provisioned.workspaceId)).find((entry) => entry.replicaId === teammateReplica.replicaId)?.epochs).toEqual([0, 1]);
+
+      // Removing the member retires their devices, so the next rotation has nowhere to
+      // send them a key -- which is the whole mechanism behind "rotate after a departure".
+      await store.disableMember(owner, added.memberId);
+      expect((await store.listWorkspaceKeyRecipients(provisioned.workspaceId)).map((entry) => entry.replicaId)).toEqual([ownerReplica.replicaId]);
+      await expect(store.insertWorkspaceKeyGrants(owner, ownerReplica.replicaId, [grant(2, teammateReplica.replicaId, teammateKey)]))
+        .rejects.toBeInstanceOf(StoreConflictError);
+      expect((await store.getWorkspaceKeyState(provisioned.workspaceId, ownerReplica.replicaId)).keyHolders).toBe(1);
+    } finally {
+      await store.pool.query("DELETE FROM audit_events WHERE workspace_id IN (SELECT workspace_id FROM members WHERE user_id = $1)", [ownerUser]);
+      await store.pool.query("DELETE FROM workspaces WHERE id IN (SELECT workspace_id FROM members WHERE user_id = $1)", [ownerUser]);
+      await store.close();
+    }
+  });
+});
+
+function grant(epoch: number, recipientReplicaId: string, recipientPublicKey: string) {
+  return {
+    epoch,
+    keyId: epoch.toString(16).padStart(16, "0"),
+    recipientReplicaId,
+    recipientPublicKey,
+    wrapped: {
+      version: 1 as const,
+      algorithm: "X25519-HKDF-SHA256-AES-256-GCM" as const,
+      senderPublicKey: "S".repeat(43),
+      nonce: "AAAAAAAAAAAAAAAA",
+      ciphertext: "Zm9vYmFyYmF6"
+    }
+  };
+}
+
+function makeSealedEvent(membership: Membership, replicaId: string, id: string, clientSequence: number): SealedTransactionCreatedEvent {
+  return {
+    id,
+    schemaVersion: 1,
+    workspaceId: membership.workspaceId,
+    replicaId,
+    actorId: membership.actorId,
+    type: "transaction.sealed",
+    clientSequence,
+    createdAt: new Date().toISOString(),
+    payload: {
+      id,
+      sealed: { version: 1, algorithm: "AES-256-GCM", epoch: 4, keyId: "0123456789abcdef", nonce: "AAAAAAAAAAAAAAAA", ciphertext: "Zm9vYmFyYmF6" },
+      changes: [{ pathToken: "a".repeat(64), kind: "modify" }]
+    }
+  };
+}

@@ -131,7 +131,14 @@ export type RemoteCursorTooOld = { status: "cursor-too-old"; resyncFrom: number;
 
 export type RemoteSyncTransport = {
   upload(record: OutboundRecord): Promise<LocalOperation>;
-  list(after: number): Promise<{ operations: LocalOperation[]; nextCursor: number } | RemoteCursorTooOld>;
+  /**
+   * `unreadable` names server sequences the transport deliberately dropped because this
+   * device holds no workspace key for the epoch that sealed them. It is the only
+   * accepted reason for a gap in an otherwise dense cursor; see syncRemote(). It is
+   * distinct from a `cursor-too-old` refusal, which is the service saying it no longer
+   * holds that history at all.
+   */
+  list(after: number): Promise<{ operations: LocalOperation[]; nextCursor: number; unreadable?: number[] } | RemoteCursorTooOld>;
   uploadTask(record: TaskOutboundRecord): Promise<RemoteTask>;
   listTasks(after: string): Promise<{ tasks: RemoteTask[]; nextCursor: string }>;
   uploadClaim(record: ClaimOutboundRecord): Promise<RemoteClaim>;
@@ -490,9 +497,18 @@ export class LocalDaemon {
       if ("status" in page) throw new Error("Coordination service refused the cursor it just told us to resynchronize from");
     }
     const listed = page;
-    const ordered = listed.operations.every((operation, index) => operation.sequence === (index === 0 ? this.remoteCursor + 1 : listed.operations[index - 1]!.sequence + 1));
-    const expectedCursor = listed.operations.at(-1)?.sequence ?? this.remoteCursor;
+    // The service assigns dense per-workspace sequences, so a gap means an operation went
+    // missing between there and here -- which is why this check exists and why it stays
+    // exact. The only tolerated gaps are the ones the transport declares in `unreadable`:
+    // operations sealed under a workspace key epoch this device was never granted, which
+    // it can name precisely because it is the party that failed to open them. A gap that
+    // is not declared is still an omission and still fails.
+    const unreadable = new Set(listed.unreadable ?? []);
+    const covered = [...listed.operations.map((operation) => operation.sequence), ...unreadable].sort((left, right) => left - right);
+    const ordered = covered.every((sequence, index) => sequence === (index === 0 ? this.remoteCursor + 1 : covered[index - 1]! + 1));
+    const expectedCursor = covered.at(-1) ?? this.remoteCursor;
     if (!ordered || listed.nextCursor !== expectedCursor || listed.operations.some((operation) => operation.workspaceId !== this.options.workspaceId || operation.sequence <= this.remoteCursor)) throw new Error("Service cursor response was invalid");
+    if (unreadable.size) await this.persist("remote.unreadable", { sequences: [...unreadable].sort((left, right) => left - right) });
     const previousCursor = this.remoteCursor;
     const insertedIds: string[] = [];
     let downloaded = 0;

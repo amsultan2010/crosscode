@@ -67,6 +67,164 @@ function assertPayloadIdMatches<T extends { id: string; payload: { id: string } 
   }
 }
 
+// ---------------------------------------------------------------------------
+// End-to-end encryption (docs/security.md#end-to-end-encryption)
+//
+// A sealed transaction is what the coordination service actually stores for an
+// encrypted workspace: an opaque AEAD blob plus the bare minimum of structure the
+// service needs to file it (an id for idempotency, and one row per changed file).
+// Everything content-bearing -- file contents, patches, paths, content hashes, and
+// the natural-language intent -- lives inside `sealed.ciphertext` under a key the
+// service has never held. See sealTransaction()/openTransaction() in
+// apps/daemon/src/sealing.ts, which are deliberately NOT in @crosscode/core: the
+// service links @crosscode/core, so keeping the sealing code out of it is a
+// structural guarantee that the service cannot decrypt even by accident.
+// ---------------------------------------------------------------------------
+
+/** base64url with no padding, which is how every binary field on the wire is encoded. */
+const base64UrlSchema = z.string().regex(/^[A-Za-z0-9_-]+$/, "Expected unpadded base64url");
+/** A raw X25519 public key: 32 bytes, base64url, so exactly 43 characters. */
+export const devicePublicKeySchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/, "Expected a base64url X25519 public key");
+export type DevicePublicKey = z.infer<typeof devicePublicKeySchema>;
+/** Truncated SHA-256 of an epoch key. Public: it identifies a key without revealing it. */
+export const keyIdSchema = z.string().regex(/^[0-9a-f]{16}$/, "Expected a 16-hex-character key id");
+
+export const sealedEnvelopeSchema = z.object({
+  version: z.literal(1),
+  algorithm: z.literal("AES-256-GCM"),
+  /** Which workspace key epoch sealed this. Epochs only ever move forward; see key rotation. */
+  epoch: z.number().int().nonnegative(),
+  keyId: keyIdSchema,
+  /** 12 random bytes. Never reused: a fresh one is drawn per seal. */
+  nonce: base64UrlSchema.max(32),
+  /** Ciphertext with the 16-byte GCM tag appended. */
+  ciphertext: base64UrlSchema
+}).strict();
+export type SealedEnvelope = z.infer<typeof sealedEnvelopeSchema>;
+
+export const changeKindSchema = z.enum(["add", "modify", "delete", "rename"]);
+
+/**
+ * The only per-file structure a sealed operation exposes. `pathToken` is
+ * HMAC-SHA256(pathKey, `${transactionId}\0${path}`) -- keyed with a subkey derived from
+ * the workspace key, and salted with the transaction id so the *same* file in two
+ * different operations produces two unrelated tokens. That leaves the service able to
+ * enforce "each path changes at most once per operation" (which is all
+ * `operation_files`' primary key ever needed) without being able to tell which file it
+ * is, or that two operations touched the same one.
+ */
+export const sealedFileSchema = z.object({
+  pathToken: z.string().regex(/^[0-9a-f]{64}$/, "Expected a 64-hex-character path token"),
+  kind: changeKindSchema
+}).strict();
+
+export const sealedTransactionSchema = z.object({
+  id: z.string().min(1),
+  sealed: sealedEnvelopeSchema,
+  changes: z.array(sealedFileSchema).min(1)
+}).strict();
+export type SealedTransaction = z.infer<typeof sealedTransactionSchema>;
+
+export const sealedTransactionCreatedEventSchema = eventEnvelopeSchema.extend({
+  type: z.literal("transaction.sealed"),
+  payload: sealedTransactionSchema
+}).strict().superRefine((event, context) => assertPayloadIdMatches(event, context));
+export type SealedTransactionCreatedEvent = z.infer<typeof sealedTransactionCreatedEventSchema>;
+
+/**
+ * What travels over the wire and sits in `operations.transaction`: plaintext for a
+ * self-hosted or pre-encryption workspace, sealed for an encrypted one. Consumers that
+ * need the plaintext call `isSealedTransaction()` and open it; the daemon does this at
+ * the transport seam so nothing else in the codebase ever sees the sealed form.
+ */
+// Sealed first: a zod union tries its options in order and builds a full error tree for
+// each one that fails, and `changeTransactionSchema` failing is expensive (strict object,
+// nested array, superRefine). Every operation in an encrypted workspace is sealed, and
+// this schema is on the download path for all of them, so the common case must not pay
+// for a discarded ChangeTransaction parse first.
+export const syncedTransactionSchema = z.union([sealedTransactionSchema, changeTransactionSchema]);
+export type SyncedTransaction = z.infer<typeof syncedTransactionSchema>;
+
+export function isSealedTransaction(transaction: SyncedTransaction): transaction is SealedTransaction {
+  return "sealed" in transaction;
+}
+
+/**
+ * One workspace key epoch, encrypted to one device. The sender does X25519 with the
+ * recipient's registered public key, derives an AES-256-GCM key with HKDF, and encrypts
+ * the 32-byte epoch key. The service stores and forwards this without ever holding a
+ * private key, exactly as it does for file payloads.
+ */
+export const wrappedKeySchema = z.object({
+  version: z.literal(1),
+  algorithm: z.literal("X25519-HKDF-SHA256-AES-256-GCM"),
+  senderPublicKey: devicePublicKeySchema,
+  nonce: base64UrlSchema.max(32),
+  ciphertext: base64UrlSchema.max(256)
+}).strict();
+export type WrappedKey = z.infer<typeof wrappedKeySchema>;
+
+export const workspaceKeyGrantSchema = z.object({
+  epoch: z.number().int().nonnegative(),
+  keyId: keyIdSchema,
+  recipientReplicaId: z.string().min(1),
+  wrapped: wrappedKeySchema,
+  createdAt: z.string().datetime()
+}).strict();
+export type WorkspaceKeyGrant = z.infer<typeof workspaceKeyGrantSchema>;
+
+export const createWorkspaceKeyGrantsRequestSchema = z.object({
+  grants: z.array(z.object({
+    epoch: z.number().int().nonnegative(),
+    keyId: keyIdSchema,
+    recipientReplicaId: z.string().min(1),
+    /** Echoed so the service can refuse a grant aimed at a key the recipient never registered. */
+    recipientPublicKey: devicePublicKeySchema,
+    wrapped: wrappedKeySchema
+  }).strict()).min(1).max(200)
+}).strict();
+export type CreateWorkspaceKeyGrantsRequest = z.infer<typeof createWorkspaceKeyGrantsRequestSchema>;
+
+/**
+ * What this device needs to decide whether it may create a workspace key, and every
+ * epoch already granted to it. `keyHolders` counts the active replicas that hold at
+ * least one epoch: zero means nobody in this workspace has a key yet and it is safe for
+ * the caller to mint the first one; non-zero with no grants means "wait to be granted",
+ * never "fall back to plaintext".
+ */
+export const workspaceKeyStateResponseSchema = z.object({
+  encrypted: z.boolean(),
+  keyHolders: z.number().int().nonnegative(),
+  grants: z.array(workspaceKeyGrantSchema)
+}).strict();
+export type WorkspaceKeyStateResponse = z.infer<typeof workspaceKeyStateResponseSchema>;
+
+export const workspaceKeyRecipientSchema = z.object({
+  replicaId: z.string().min(1),
+  replicaName: z.string().min(1),
+  actorId: z.string().min(1),
+  publicKey: devicePublicKeySchema,
+  /** Epochs this device has already been granted; empty means it has never been approved. */
+  epochs: z.array(z.number().int().nonnegative())
+}).strict();
+export type WorkspaceKeyRecipient = z.infer<typeof workspaceKeyRecipientSchema>;
+
+/**
+ * Registers this device's public key against an already-registered replica. Separate from
+ * `POST /v1/replicas` because that route only runs once, when a checkout first appears --
+ * every replica that existed before encryption, and every daemon restarting into a
+ * checkout that already has an id, needs a way to publish a key without re-registering.
+ */
+export const registerDeviceKeyRequestSchema = z.object({
+  publicKey: devicePublicKeySchema
+}).strict();
+export type RegisterDeviceKeyRequest = z.infer<typeof registerDeviceKeyRequestSchema>;
+
+export const listWorkspaceKeyRecipientsResponseSchema = z.object({
+  recipients: z.array(workspaceKeyRecipientSchema)
+}).strict();
+export type ListWorkspaceKeyRecipientsResponse = z.infer<typeof listWorkspaceKeyRecipientsResponseSchema>;
+
 export const taskCreatedEventSchema = eventEnvelopeSchema.extend({
   type: z.literal("task.created"),
   payload: taskSchema
@@ -163,7 +321,14 @@ export type Principal = z.infer<typeof principalSchema>;
 export const registerReplicaRequestSchema = z.object({
   name: z.string().min(1),
   repoRoot: z.string().min(1).nullable().optional(),
-  repoRemote: z.string().min(1).nullable().optional()
+  repoRemote: z.string().min(1).nullable().optional(),
+  // This device's X25519 public key, so an existing key holder can wrap workspace key
+  // epochs to it (see workspaceKeyGrantSchema). Optional: a daemon that never talks to an
+  // encrypted workspace has no use for one, and a pre-encryption daemon omits it. It is
+  // write-once -- the service refuses to replace a key already on file, since silently
+  // accepting a new one would let anything holding the device's token redirect future
+  // grants to a key of its own choosing.
+  devicePublicKey: devicePublicKeySchema.optional()
 }).strict();
 export type RegisterReplicaRequest = z.infer<typeof registerReplicaRequestSchema>;
 
@@ -418,7 +583,12 @@ export const pairingStatusResponseSchema = z.object({
   status: pairingStatusSchema,
   claimedAt: z.string().datetime().nullable(),
   replicaId: z.string().min(1).nullable(),
-  actorId: z.string().min(1).nullable()
+  actorId: z.string().min(1).nullable(),
+  // Additive extension for end-to-end encryption: the public key the claiming device
+  // registered, so whoever minted the code can wrap the workspace keyring to it. Null
+  // when the claimer sent none. The minting side must show its fingerprint to a human
+  // before granting -- the service relays this key and could substitute its own.
+  devicePublicKey: devicePublicKeySchema.nullable()
 }).strict();
 export type PairingStatusResponse = z.infer<typeof pairingStatusResponseSchema>;
 
@@ -429,7 +599,9 @@ export const claimPairingCodeRequestSchema = z.object({
   repoRoot: z.string().min(1).max(4_096),
   // Reported so the projects workstream can upsert a project from it; normalization and
   // the resulting projectId are entirely on that side of the seam (see Contract B).
-  repoRemote: z.string().min(1).max(2_048).nullable()
+  repoRemote: z.string().min(1).max(2_048).nullable(),
+  // Additive extension for end-to-end encryption; see registerReplicaRequestSchema.
+  devicePublicKey: devicePublicKeySchema.optional()
 }).strict();
 export type ClaimPairingCodeRequest = z.infer<typeof claimPairingCodeRequestSchema>;
 
@@ -439,7 +611,11 @@ export const claimPairingCodeResponseSchema = z.object({
   token: z.string().min(1),
   // Always null until the projects workstream extends the claim handler; the field is
   // declared now so the response shape never changes shape underneath a client.
-  projectId: z.string().min(1).nullable()
+  projectId: z.string().min(1).nullable(),
+  // Additive: the claiming device polls the key-state endpoint for the workspace keyring
+  // wrapped to the public key it just registered, and needs to know which pairing this
+  // was to tell a human which fingerprint to compare.
+  pairingId: z.string().min(1).nullable()
 }).strict();
 export type ClaimPairingCodeResponse = z.infer<typeof claimPairingCodeResponseSchema>;
 
@@ -451,7 +627,12 @@ export const workspaceTokenSchema = z.string().startsWith(WORKSPACE_TOKEN_PREFIX
 export type WorkspaceToken = z.infer<typeof workspaceTokenSchema>;
 
 export const serviceIngestRequestSchema = z.object({
-  event: transactionCreatedEventSchema
+  // Either form is accepted on the wire so a self-hosted deployment (where the operator
+  // already reads their own database) and a pre-encryption workspace keep working. Which
+  // one a workspace may use is not a per-request choice: once a workspace has ingested a
+  // sealed operation the service latches and refuses plaintext forever, so a downgrade
+  // cannot be induced by anything the service says to a client.
+  event: z.union([transactionCreatedEventSchema, sealedTransactionCreatedEventSchema])
 }).strict();
 export type ServiceIngestRequest = z.infer<typeof serviceIngestRequestSchema>;
 
@@ -467,7 +648,7 @@ export const remoteOperationSchema = z.object({
   eventId: z.string().min(1),
   workspaceId: z.string().min(1),
   senderReplicaId: z.string().min(1),
-  transaction: changeTransactionSchema,
+  transaction: syncedTransactionSchema,
   serverSequence: z.number().int().positive(),
   createdAt: z.string().datetime(),
   // The project the sending replica belongs to (Contract B), so a consumer can attribute

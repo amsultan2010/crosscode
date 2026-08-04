@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  isSealedTransaction,
+  sealedTransactionCreatedEventSchema,
+  sealedTransactionSchema,
+  syncedTransactionSchema,
   changeTransactionSchema,
   checkpointRequestSchema,
   claimPairingCodeRequestSchema,
@@ -240,15 +244,52 @@ describe("protocol schemas", () => {
     expect(() => claimPairingCodeRequestSchema.parse({ ...claim, extra: true })).toThrow();
     expect(() => claimPairingCodeRequestSchema.parse({ ...claim, repoRemote: undefined })).toThrow();
 
-    const claimed = { workspaceId: "w", replicaId: "r", token: "ccw_token", projectId: null };
+    const claimed = { workspaceId: "w", replicaId: "r", token: "ccw_token", projectId: null, pairingId: null };
     expect(claimPairingCodeResponseSchema.parse(claimed)).toEqual(claimed);
     expect(claimPairingCodeResponseSchema.parse({ ...claimed, projectId: "p" }).projectId).toBe("p");
 
-    const status = { status: "claimed" as const, claimedAt: "2026-08-01T12:00:00.000Z", replicaId: "r", actorId: "user@host" };
+    const status = { status: "claimed" as const, claimedAt: "2026-08-01T12:00:00.000Z", replicaId: "r", actorId: "user@host", devicePublicKey: null };
     expect(pairingStatusResponseSchema.parse(status)).toEqual(status);
     expect(() => pairingStatusResponseSchema.parse({ ...status, status: "unknown" })).toThrow();
 
     expect(workspaceTokenSchema.parse("ccw_abc")).toBe("ccw_abc");
     expect(() => workspaceTokenSchema.parse("eyJhbGciOi")).toThrow();
+  });
+
+  it("keeps sealed and plaintext transactions distinguishable, and lets neither leak into the other", () => {
+    const sealed = {
+      id: "operation-1",
+      sealed: { version: 1 as const, algorithm: "AES-256-GCM" as const, epoch: 0, keyId: "0123456789abcdef", nonce: "AAAAAAAAAAAAAAAA", ciphertext: "Zm9vYmFy" },
+      changes: [{ pathToken: "a".repeat(64), kind: "modify" as const }]
+    };
+    expect(sealedTransactionSchema.parse(sealed)).toEqual(sealed);
+    expect(isSealedTransaction(syncedTransactionSchema.parse(sealed))).toBe(true);
+
+    const plaintext = {
+      id: "operation-2",
+      base: { files: [] },
+      changes: [{ path: "a.txt", kind: "add" as const, afterContent: "x", afterHash: "h" }],
+      provenance: { source: "filesystem" as const, confidence: "known" as const },
+      safety: { risk: "low" as const, requiresApproval: false }
+    };
+    expect(isSealedTransaction(syncedTransactionSchema.parse(plaintext))).toBe(false);
+
+    // A sealed transaction must not be able to smuggle a path, a hash, or file content
+    // alongside the ciphertext -- the schema is strict precisely so that the set of things
+    // the service can see is enumerable by reading it.
+    expect(() => sealedTransactionSchema.parse({ ...sealed, intent: "leaked" })).toThrow();
+    expect(() => sealedTransactionSchema.parse({ ...sealed, changes: [{ pathToken: "a".repeat(64), kind: "modify", path: "a.txt" }] })).toThrow();
+    expect(() => sealedTransactionSchema.parse({ ...sealed, changes: [{ pathToken: "not-hex", kind: "modify" }] })).toThrow();
+    expect(() => sealedTransactionSchema.parse({ ...sealed, changes: [] })).toThrow();
+    expect(() => sealedTransactionSchema.parse({ ...sealed, sealed: { ...sealed.sealed, algorithm: "AES-128-CBC" } })).toThrow();
+
+    // The event envelope keeps the id-match rule the plaintext one has, so an operation
+    // cannot be filed under an id its payload does not claim.
+    const event = {
+      id: "operation-1", schemaVersion: 1 as const, workspaceId: "w", replicaId: "r", actorId: "a",
+      type: "transaction.sealed" as const, clientSequence: 1, createdAt: "2026-01-01T00:00:00.000Z", payload: sealed
+    };
+    expect(sealedTransactionCreatedEventSchema.parse(event)).toEqual(event);
+    expect(() => sealedTransactionCreatedEventSchema.parse({ ...event, id: "other" })).toThrow();
   });
 });

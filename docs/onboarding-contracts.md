@@ -73,10 +73,31 @@ min.
 
 ```jsonc
 // request
-{ "code": "K4T9-2WQZ", "actorId": "user@host", "replicaName": "laptop", "repoRoot": "/abs/path", "repoRemote": "git@github.com:o/r.git" | null }
+{ "code": "K4T9-2WQZ", "actorId": "user@host", "replicaName": "laptop", "repoRoot": "/abs/path", "repoRemote": "git@github.com:o/r.git" | null,
+  "devicePublicKey": "<base64url X25519>" }   // optional; see the encryption extension below
 // response data
-{ "workspaceId": "<uuid>", "replicaId": "<uuid>", "token": "<opaque service token>", "projectId": "<uuid>" | null }
+{ "workspaceId": "<uuid>", "replicaId": "<uuid>", "token": "<opaque service token>", "projectId": "<uuid>" | null,
+  "pairingId": "<uuid>" | null }
 ```
+
+### Encryption extension (additive)
+
+End-to-end encryption of file payloads (see [security.md](./security.md#end-to-end-encryption))
+extends this contract **additively** — no existing field changed meaning, type, or
+nullability, so a client or service that predates it still interoperates:
+
+- `POST /v1/pairing-codes/claim` accepts an optional `devicePublicKey` (raw X25519, 32
+  bytes, base64url). Omitting it pairs the device without giving it a workspace key.
+- Its response gains `pairingId`, so the claiming device can tell a human which pairing to
+  compare a fingerprint for.
+- `GET /v1/pairing-codes/:pairingId` gains `devicePublicKey: string | null`, relaying the
+  claiming device's key to whoever minted the code.
+- `POST /v1/replicas` accepts the same optional `devicePublicKey`.
+
+Pairing carries the key, but does not by itself grant it: the minting side must show the
+claiming device's 60-bit fingerprint to a human and get a confirmation before wrapping the
+workspace keyring to it. The service relays public keys and could substitute its own, so
+that comparison is the only thing that detects it — it is mandatory, not advisory.
 
 Claiming is atomic: a conditional `UPDATE ... WHERE claimed_at IS NULL AND expires_at > now()`
 that returns zero rows means already-claimed or expired — respond 410, never 200. Rate
