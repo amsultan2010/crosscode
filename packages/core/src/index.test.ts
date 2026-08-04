@@ -68,3 +68,24 @@ describe("core safety rules", () => {
     expect(riskForClassification("interface-impact")).toBe("high");
   });
 });
+
+describe("hunk overlap for pure insertions", () => {
+  // `@@ -5,0 +5,3 @@` is an insertion: nothing is removed, so its old-side length is 0.
+  // Compared literally a zero-length range can never intersect anything, which made two
+  // agents inserting at the same point read as independent and skip review entirely.
+  it("treats two insertions at the same point as overlapping", () => {
+    expect(hunksOverlap("@@ -5,0 +5,3 @@\n", "@@ -5,0 +5,2 @@\n")).toBe(true);
+  });
+
+  it("treats an insertion as overlapping a change to the line it lands against", () => {
+    expect(hunksOverlap("@@ -5,0 +5,3 @@\n", "@@ -5,1 +5,1 @@\n")).toBe(true);
+  });
+
+  it("still reports distant insertions as independent", () => {
+    expect(hunksOverlap("@@ -5,0 +5,3 @@\n", "@@ -40,0 +40,3 @@\n")).toBe(false);
+  });
+
+  it("still reports an insertion outside a modified range as independent", () => {
+    expect(hunksOverlap("@@ -20,0 +20,1 @@\n", "@@ -1,5 +1,5 @@\n")).toBe(false);
+  });
+});

@@ -64,6 +64,44 @@ export async function createCheckpoint(root: string, replicaId: string, message:
   await git(root, ["update-ref", ref, commit]);
   return { ref, commit, tree };
 }
+/** Every checkpoint ref this replica owns, oldest first (the ref name embeds its timestamp). */
+export async function listCheckpointRefs(root: string, replicaId: string): Promise<string[]> {
+  const prefix = `refs/crosscode/checkpoints/${replicaId}`;
+  const output = await git(root, ["for-each-ref", "--format=%(refname)", prefix]).catch(() => "");
+  return output ? output.split("\n").filter(Boolean).sort() : [];
+}
+
+/**
+ * Retires this replica's oldest checkpoint refs, keeping the newest `keep` plus anything
+ * in `retain`.
+ *
+ * Checkpoints are cheap to make and are made constantly -- on every capture, every
+ * validation command, every Git transition, and before every accept -- and each one pins
+ * a commit and a tree as a GC root. Left alone they accumulate for the life of the
+ * checkout and quietly bloat `.git`, so creating one now also retires the oldest.
+ *
+ * Deleting a ref only drops Crosscode's hold on those objects; Git's own gc decides when
+ * they actually go, and any checkpoint still named by an in-flight operation is passed in
+ * via `retain` so a rollback target is never collected out from under it.
+ */
+export async function pruneCheckpointRefs(
+  root: string, replicaId: string, keep: number, retain: readonly string[] = []
+): Promise<string[]> {
+  if (keep < 0) throw new Error("Checkpoint retention must not be negative");
+  const refs = await listCheckpointRefs(root, replicaId);
+  const protectedRefs = new Set(retain);
+  const prunable = refs.filter((ref) => !protectedRefs.has(ref));
+  const excess = prunable.slice(0, Math.max(0, prunable.length - keep));
+  const deleted: string[] = [];
+  for (const ref of excess) {
+    // Best-effort per ref: a concurrent daemon may have deleted it already, and failing
+    // the surrounding checkpoint over housekeeping would be strictly worse.
+    const removed = await git(root, ["update-ref", "-d", ref]).then(() => true).catch(() => false);
+    if (removed) deleted.push(ref);
+  }
+  return deleted;
+}
+
 export async function publishCommit(root: string, branch: string, message: string): Promise<{ branch: string; commit: string; tree: string; previous?: string }> {
   const ref = `refs/heads/${branch}`;
   const tip = await git(root, ["rev-parse", "-q", "--verify", ref]).catch(() => undefined);
@@ -149,7 +187,12 @@ export async function threeWayMerge(base: string, current: string, proposed: str
   try {
     const basePath = join(directory, "base"); const currentPath = join(directory, "current"); const proposedPath = join(directory, "proposed");
     await Promise.all([writeFile(basePath, base), writeFile(currentPath, current), writeFile(proposedPath, proposed)]);
-    const result = await exec("git", ["merge-file", "-p", currentPath, basePath, proposedPath]).then(({ stdout }) => ({ clean: true, content: stdout })).catch((error: { code?: number; stdout?: string }) => ({ clean: error.code === 1 ? false : false, content: error.stdout ?? "" }));
-    return result;
+    // `git merge-file` exits 0 on a clean merge and non-zero otherwise -- the conflict
+    // count for a conflicted merge, negative on a real error. Either way the merge is not
+    // clean, and the partially-merged stdout is only useful to show a human, so both
+    // collapse to the same result.
+    return await exec("git", ["merge-file", "-p", currentPath, basePath, proposedPath])
+      .then(({ stdout }) => ({ clean: true, content: stdout }))
+      .catch((error: { stdout?: string }) => ({ clean: false, content: error.stdout ?? "" }));
   } finally { await rm(directory, { recursive: true, force: true }); }
 }

@@ -4,7 +4,7 @@ import { contentHash } from "@crosscode/core";
 import { WebSocket } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
 import { createServiceServer } from "./http.js";
-import type { Membership, PgStore, StoredOperation } from "./store.js";
+import { StoreUnauthorizedError, type Membership, type PgStore, type StoredOperation } from "./store.js";
 import { signTestSupabaseToken, testSupabaseJwks } from "./test-jwks.js";
 
 const supabaseUrl = "https://rzsslbmahvoesjxmgefr.supabase.co";
@@ -320,3 +320,81 @@ function makeIntentEvent(): IntentPublishedEvent {
     payload: { id: "intent-1", actorId: membershipA.actorId, text: "Rename foo to bar", createdAt: "2026-01-01T00:00:00.000Z" }
   };
 }
+
+describe("workspace-token subscribers", () => {
+  // A paired install (`crosscode join --pair`) holds a `ccw_` token and no Supabase
+  // session. It already reaches the ingest and read surface over HTTP with that exact
+  // credential, so refusing it here only left pairing on the polling loop.
+  it("accepts a ccw_ workspace token in the handshake", async () => {
+    const store = {
+      resolveWorkspaceToken: async () => ({ ...membershipA, replicaId: replicaA }),
+      resolveMembership: async () => { throw new Error("should not verify a JWT for a workspace token"); },
+      assertReplicaOwnership: async () => null,
+      getCursor: async () => 4,
+      recordSessionStart: async () => {},
+      recordSessionEnd: async () => {}
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const { socket, first } = await connect(base, membershipA, replicaA, "ccw_paired-device-token");
+    expect(first).toEqual({ type: "subscribed", cursor: 4 });
+    socket.close();
+  });
+
+  it("refuses a workspace token scoped to a different workspace", async () => {
+    const store = {
+      // The token resolves fine -- it is simply scoped elsewhere, and must not be able to
+      // subscribe to a workspace it does not name just by asking for it.
+      resolveWorkspaceToken: async () => ({ ...membershipB, workspaceId: "workspace-2", replicaId: replicaB }),
+      assertReplicaOwnership: async () => null,
+      getCursor: async () => 0,
+      recordSessionStart: async () => {},
+      recordSessionEnd: async () => {}
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const { socket, first } = await connect(base, membershipA, replicaA, "ccw_other-workspace-token");
+    expect(first).toEqual({ type: "error", message: "Subscription rejected" });
+    socket.close();
+  });
+
+  it("refuses a revoked workspace token", async () => {
+    const store = {
+      resolveWorkspaceToken: async () => { throw new StoreUnauthorizedError("Workspace token is invalid or revoked"); },
+      assertReplicaOwnership: async () => null,
+      getCursor: async () => 0,
+      recordSessionStart: async () => {},
+      recordSessionEnd: async () => {}
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const { socket, first } = await connect(base, membershipA, replicaA, "ccw_revoked-token");
+    expect(first).toEqual({ type: "error", message: "Subscription rejected" });
+    socket.close();
+  });
+});
+
+describe("session bookkeeping failures", () => {
+  it("survives a store failure while closing a socket instead of crashing the process", async () => {
+    const store = {
+      resolveMembership: async (userId: string) => membershipByUserId(userId),
+      assertReplicaOwnership: async () => null,
+      getCursor: async () => 1,
+      recordSessionStart: async () => {},
+      // The socket is already gone by the time this runs, so there is nobody to report
+      // to -- but an unhandled rejection here used to take the whole service down.
+      recordSessionEnd: async () => { throw new Error("connection terminated unexpectedly"); }
+    } as unknown as PgStore;
+    const base = await listen(store);
+    const token = await signToken(membershipA.userId);
+    const { socket } = await connect(base, membershipA, replicaA, token);
+
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on("unhandledRejection", onRejection);
+    try {
+      socket.close();
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(rejections).toHaveLength(0);
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
+  });
+});

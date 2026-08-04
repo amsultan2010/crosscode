@@ -121,9 +121,9 @@ async function waitFor<T>(read: () => T | undefined, timeoutMs = 5_000): Promise
   throw new Error("Timed out waiting for the CLI to print its sign-in URL");
 }
 
-describe("crosscode -- signup", () => {
+describe("crosscode signup", () => {
   it("rejects when neither email nor password is available and stdin is not a TTY", async () => {
-    await expect(runCli(["signup"])).rejects.toThrow("Usage: crosscode -- signup --email <email> --password <password>");
+    await expect(runCli(["signup"])).rejects.toThrow("Usage: crosscode signup --email <email> --password <password>");
   });
 });
 
@@ -133,23 +133,73 @@ describe("crosscode join --invite", () => {
   });
 });
 
+// Billing status now reads the service's own GET /v1/workspace/billing rather than
+// opening a PostgreSQL connection, so it needs a configured checkout and a session --
+// not DATABASE_URL, which an end user would never have. --workspace is optional and
+// defaults to the workspace this checkout belongs to.
 describe("crosscode billing status", () => {
-  it("rejects when --workspace is missing", async () => {
-    await expect(runCli(["billing", "status"])).rejects.toThrow("Usage: crosscode billing status --workspace <workspaceId>");
+  it("requires `crosscode init` before it can reach the service", async () => {
+    await expect(runCli(["billing", "status"])).rejects.toThrow("Run `crosscode init` before talking to the coordination service");
   });
 
-  it("rejects when neither DATABASE_URL nor MIGRATION_DATABASE_URL is set", async () => {
+  it("does not require DATABASE_URL", async () => {
     const previousDatabaseUrl = process.env.DATABASE_URL;
     const previousMigrationDatabaseUrl = process.env.MIGRATION_DATABASE_URL;
     delete process.env.DATABASE_URL;
     delete process.env.MIGRATION_DATABASE_URL;
     try {
       await expect(runCli(["billing", "status", "--workspace", "workspace-1"])).rejects.toThrow(
-        "DATABASE_URL or MIGRATION_DATABASE_URL is required"
+        /coordination service|crosscode init/
       );
     } finally {
       if (previousDatabaseUrl !== undefined) process.env.DATABASE_URL = previousDatabaseUrl;
       if (previousMigrationDatabaseUrl !== undefined) process.env.MIGRATION_DATABASE_URL = previousMigrationDatabaseUrl;
+    }
+  });
+});
+
+describe("crosscode devices / members", () => {
+  it("exposes device and member management so the revocation endpoints are reachable from the CLI", async () => {
+    const commands = (await runCli(["commands"])).value as Array<{ command: string }>;
+    const names = commands.map((entry) => entry.command);
+    expect(names).toContain("devices list");
+    expect(names).toContain("devices revoke");
+    expect(names).toContain("members list");
+    expect(names).toContain("members remove");
+  });
+
+  it("lists retained checkpoints, which the daemon has always exposed but the CLI could not reach", async () => {
+    const commands = (await runCli(["commands"])).value as Array<{ command: string }>;
+    expect(commands.map((entry) => entry.command)).toContain("checkpoint list");
+  });
+});
+
+describe("DAEMON_UNAVAILABLE", () => {
+  // README documents this as the code an agent branches on when there is no daemon for
+  // the worktree. The common case -- no descriptor at all -- used to escape as a raw
+  // ENOENT under COMMAND_FAILED, with an absolute path in the message, so the one code
+  // agents are told to handle was unreachable in exactly the situation it names.
+  it("is what a command reports when no daemon is running", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "crosscode-cli-"));
+    try {
+      await exec("git", ["init", "-q", directory]);
+      await expect(runCli(["status"], directory)).rejects.toMatchObject({ code: "DAEMON_UNAVAILABLE" });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not leak an absolute path into the message", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "crosscode-cli-"));
+    try {
+      await exec("git", ["init", "-q", directory]);
+      await runCli(["status"], directory);
+      expect.unreachable("status should fail without a daemon");
+    } catch (error) {
+      expect((error as Error).message).not.toContain(directory);
+      expect((error as Error).message).toContain("no daemon is running for this worktree");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
     }
   });
 });

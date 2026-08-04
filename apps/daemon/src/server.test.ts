@@ -97,3 +97,42 @@ describe("local daemon HTTP boundary", () => {
     expect(injected.status).toBe(400);
   });
 });
+
+describe("daemon failure reporting", () => {
+  it("reports why a request failed instead of a bare 'Request failed'", async () => {
+    const path = await repo();
+    const running = await startDaemon(path, { workspaceId: "w", replicaId: "r", actorId: "a" });
+    servers.push(running);
+
+    // No committed .crosscode/config.yaml: the single most likely first-run failure.
+    // It used to surface as an opaque 500 with the real cause only in the daemon's own
+    // stderr, leaving a CLI or agent caller nothing to act on.
+    const response = await fetch(`http://127.0.0.1:${running.port}/v1/validate`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${running.secret}`, "content-type": "application/json" },
+      body: JSON.stringify({ profile: "fast" })
+    });
+    const body = await response.json() as { ok: boolean; error: string };
+
+    expect(body.ok).toBe(false);
+    expect(body.error).not.toBe("Request failed");
+    expect(body.error).toContain("fast");
+    expect(body.error).toMatch(/config\.yaml/);
+  });
+
+  it("masks the repository root so absolute paths stay out of agent transcripts", async () => {
+    const path = await repo();
+    const running = await startDaemon(path, { workspaceId: "w", replicaId: "r", actorId: "a" });
+    servers.push(running);
+
+    const response = await fetch(`http://127.0.0.1:${running.port}/v1/checkpoints/restore`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${running.secret}`, "content-type": "application/json" },
+      body: JSON.stringify({ ref: "refs/crosscode/checkpoints/r/does-not-exist", path: "a.txt" })
+    });
+    const body = await response.json() as { ok: boolean; error: string };
+
+    expect(body.ok).toBe(false);
+    expect(body.error).not.toContain(running.daemon.root);
+  });
+});

@@ -223,6 +223,43 @@ export const redeemInviteResponseSchema = z.object({
 }).strict();
 export type RedeemInviteResponse = z.infer<typeof redeemInviteResponseSchema>;
 
+// A paired device's `ccw_` token, secret excluded -- enough for a workspace owner to
+// recognise a machine and decide whether to revoke it. The plaintext token is returned
+// exactly once, by the pairing claim, and only its hash is ever stored.
+export const workspaceTokenSummarySchema = z.object({
+  id: z.string().min(1),
+  workspaceId: z.string().min(1),
+  replicaId: z.string().min(1).nullable(),
+  replicaName: z.string().min(1).nullable(),
+  actorId: z.string(),
+  lastUsedAt: z.string().datetime().nullable(),
+  revokedAt: z.string().datetime().nullable(),
+  createdAt: z.string().datetime()
+}).strict();
+export type WorkspaceTokenSummary = z.infer<typeof workspaceTokenSummarySchema>;
+
+export const listWorkspaceTokensResponseSchema = z.object({
+  tokens: z.array(workspaceTokenSummarySchema)
+}).strict();
+export type ListWorkspaceTokensResponse = z.infer<typeof listWorkspaceTokensResponseSchema>;
+
+// Removal is a soft disable, never a delete: operations and audit events reference the
+// member row, so history has to stay attributable after someone leaves.
+export const memberSummarySchema = z.object({
+  memberId: z.string().min(1),
+  actorId: z.string().min(1),
+  role: workspaceRoleSchema,
+  isPersonal: z.boolean(),
+  disabledAt: z.string().datetime().nullable(),
+  createdAt: z.string().datetime()
+}).strict();
+export type MemberSummary = z.infer<typeof memberSummarySchema>;
+
+export const listMembersResponseSchema = z.object({
+  members: z.array(memberSummarySchema)
+}).strict();
+export type ListMembersResponse = z.infer<typeof listMembersResponseSchema>;
+
 // A project is a repository inside a workspace (Contract B). repoRemote is the normalized
 // dedup key when the checkout has a remote; repoRoot is the last absolute path a daemon
 // reported and is advisory only -- it is the dedup key solely when repoRemote is null.
@@ -287,7 +324,8 @@ export const setWorkspaceAutonomyRequestSchema = z.object({
 }).strict();
 export type SetWorkspaceAutonomyRequest = z.infer<typeof setWorkspaceAutonomyRequestSchema>;
 
-// Pairing (docs/onboarding-contracts.md, Contract A). The dashboard mints a code, the
+// Pairing (docs/onboarding-contracts.md, Contract A). A workspace owner or member mints
+// a code (`POST /v1/pairing-codes`), the
 // user hands it to their coding agent, and the daemon redeems it unauthenticated -- the
 // code itself is the credential, so it is short-lived (15 minutes), single-use, and only
 // ever stored server-side as a SHA-256 hash.

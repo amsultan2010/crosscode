@@ -42,6 +42,15 @@ function monthStart(when: Date): string {
 
 // Increments the semantic-review-call counter for the current month. Callers should
 // run assertSemanticReviewCallAvailable() first; this only records usage.
+//
+// Deliberately has no call site today, unlike the seat cap and autonomy tier, which are
+// enforced in store.ts. Semantic review is delegated to the workspace member's own
+// already-connected MCP agent (AgentDelegatedReviewer) and never leaves their machine,
+// so there is no per-call cost to Crosscode to meter and no service-side request to hang
+// a counter on. Wiring it up would mean adding a network round-trip to the service
+// before every local review purely to bill for it. Keep this and
+// assertSemanticReviewCallAvailable ready for the day an external, paid provider is
+// offered; until then GET /v1/workspace/billing correctly reports 0 calls used.
 export async function incrementSemanticReviewUsage(store: PgStore, workspaceId: string, when: Date = new Date()): Promise<number> {
   const result = await store.pool.query<{ count: number }>(
     `INSERT INTO usage_counters (workspace_id, metric, period_start, count)

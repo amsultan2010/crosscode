@@ -7,9 +7,9 @@ import type TS from "typescript";
 /**
  * "typescript" is a large (~9.5 MB minified) compiler package. It is loaded
  * lazily, on first actual use, so that consumers of this module (such as the
- * VS Code extension, which imports @crosscode/git for discoverRepository but
- * never calls findAstDependentFiles) do not pull the compiler into their
- * bundle or process just by importing this file.
+ * CLI and MCP server, which import @crosscode/git for discoverRepository but
+ * never call findAstDependentFiles) do not pull the compiler into their
+ * process just by importing this file.
  */
 async function loadTs(): Promise<typeof TS> { return (await import("typescript")).default; }
 

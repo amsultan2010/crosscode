@@ -5,6 +5,7 @@ import {
   wsFanOutMessageSchema,
   wsSubscribeAckSchema,
   wsSubscribeRequestSchema,
+  WORKSPACE_TOKEN_PREFIX,
   type PresenceStatus,
   type RemoteClaim,
   type RemoteHandoff,
@@ -16,7 +17,7 @@ import {
 } from "@crosscode/protocol";
 import type { JWTVerifyGetKey } from "jose";
 import { verifySupabaseAccessToken } from "./auth.js";
-import type { PgStore } from "./store.js";
+import type { Membership, PgStore } from "./store.js";
 
 export type WebSocketGatewayOptions = {
   store: PgStore;
@@ -120,8 +121,7 @@ function handleConnection(
       clearTimeout(handshakeTimer);
       try {
         const request = wsSubscribeRequestSchema.parse(JSON.parse(data.toString()));
-        const claims = await verifySupabaseAccessToken(request.accessToken, options.jwks, options.supabaseUrl);
-        const membership = await options.store.resolveMembership(claims.userId, request.workspaceId);
+        const membership = await resolveSubscriber(options, request.accessToken, request.workspaceId);
         const projectId = await options.store.assertReplicaOwnership(membership.workspaceId, membership.memberId, request.replicaId);
         connection = register(connectionsByWorkspace, socket, membership.workspaceId, request.replicaId, membership.actorId, projectId);
         const cursor = await options.store.getCursor(membership.workspaceId);
@@ -142,17 +142,50 @@ function handleConnection(
   socket.on("close", () => {
     clearTimeout(handshakeTimer);
     if (!connection) return;
-    const registry = connectionsByWorkspace.get(connection.workspaceId);
-    if (registry?.get(connection.replicaId) === connection) {
-      registry.delete(connection.replicaId);
-      if (registry.size === 0) connectionsByWorkspace.delete(connection.workspaceId);
-      broadcastPresence(connectionsByWorkspace, connection.workspaceId, connection.replicaId, connection.actorId, connection.projectId, "offline");
+    const closed = connection;
+    const registry = connectionsByWorkspace.get(closed.workspaceId);
+    if (registry?.get(closed.replicaId) === closed) {
+      registry.delete(closed.replicaId);
+      if (registry.size === 0) connectionsByWorkspace.delete(closed.workspaceId);
+      broadcastPresence(connectionsByWorkspace, closed.workspaceId, closed.replicaId, closed.actorId, closed.projectId, "offline");
+      // Session bookkeeping is best-effort: the socket is already gone, so a failed
+      // write here has nobody to report to. It must still be caught -- an unhandled
+      // rejection on a database blip would take the whole service process down.
       void (async () => {
-        const cursor = await options.store.getCursor(connection!.workspaceId);
-        await options.store.recordSessionEnd(connection!.workspaceId, connection!.replicaId, cursor);
-      })();
+        const cursor = await options.store.getCursor(closed.workspaceId);
+        await options.store.recordSessionEnd(closed.workspaceId, closed.replicaId, cursor);
+      })().catch((error: unknown) => {
+        process.stderr.write(`Crosscode session end failed for replica ${closed.replicaId}: ${errorMessage(error)}\n`);
+      });
     }
   });
+}
+
+/**
+ * Resolves whichever credential the daemon offered to the membership it acts as. A
+ * `ccw_` workspace token is accepted alongside a Supabase access token so a paired
+ * install (`crosscode join --pair`) gets live sync too instead of silently falling
+ * back to the polling loop -- it already reaches the ingest/read surface over HTTP
+ * with the same credential, and the token names its own workspace, so subscribing
+ * grants it nothing it did not already have.
+ */
+async function resolveSubscriber(
+  options: WebSocketGatewayOptions,
+  credential: string,
+  workspaceId: string
+): Promise<Membership> {
+  if (credential.startsWith(WORKSPACE_TOKEN_PREFIX)) {
+    const resolved = await options.store.resolveWorkspaceToken(credential);
+    if (resolved.workspaceId !== workspaceId) throw new Error("Workspace token is scoped to a different workspace");
+    const { replicaId: _replicaId, ...membership } = resolved;
+    return membership;
+  }
+  const claims = await verifySupabaseAccessToken(credential, options.jwks, options.supabaseUrl);
+  return options.store.resolveMembership(claims.userId, workspaceId);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function register(

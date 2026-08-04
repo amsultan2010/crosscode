@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { createCheckpoint, discoverRepository, findSymbolReferences, inspectCheckpoint, publishCommit, restoreCheckpointFile, threeWayMerge, unifiedDiff } from "./index.js";
+import { createCheckpoint, discoverRepository, findSymbolReferences, inspectCheckpoint, listCheckpointRefs, pruneCheckpointRefs, publishCommit, restoreCheckpointFile, threeWayMerge, unifiedDiff } from "./index.js";
 
 const exec = promisify(execFile);
 const directories: string[] = [];
@@ -140,5 +140,69 @@ describe("git safety", () => {
     expect(await readFile(join(directory, "a.txt"), "utf8")).toBe("two\n");
     expect((await exec("git", ["-C", directory, "rev-parse", "refs/heads/release"])).stdout.trim()).toBe(result.commit);
     expect((await exec("git", ["-C", directory, "rev-parse", "refs/heads/main"])).stdout.trim()).toBe(headBefore);
+  });
+});
+
+describe("checkpoint retention", () => {
+  async function repositoryWithCommit(): Promise<string> {
+    const directory = await mkdtemp(join(tmpdir(), "crosscode-git-")); directories.push(directory);
+    await exec("git", ["init", "-q", "-b", "main", directory]);
+    await exec("git", ["-C", directory, "config", "user.email", "test@example.com"]);
+    await exec("git", ["-C", directory, "config", "user.name", "Test"]);
+    await writeFile(join(directory, "a.txt"), "one\n");
+    await exec("git", ["-C", directory, "add", "."]);
+    await exec("git", ["-C", directory, "commit", "-qm", "initial"]);
+    return directory;
+  }
+
+  it("keeps only the newest refs, so a long-lived checkout stops accumulating them forever", async () => {
+    const directory = await repositoryWithCommit();
+    const refs: string[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      await writeFile(join(directory, "a.txt"), `revision ${index}\n`);
+      refs.push((await createCheckpoint(directory, "replica-a", `checkpoint ${index}`)).ref);
+    }
+    expect(await listCheckpointRefs(directory, "replica-a")).toHaveLength(5);
+
+    const deleted = await pruneCheckpointRefs(directory, "replica-a", 2);
+
+    expect(deleted).toHaveLength(3);
+    const remaining = await listCheckpointRefs(directory, "replica-a");
+    expect(remaining).toHaveLength(2);
+    expect(remaining).toEqual(refs.slice(-2).sort());
+    // Really gone from the ref namespace, not just from our own bookkeeping.
+    await expect(exec("git", ["-C", directory, "rev-parse", "--verify", refs[0]!])).rejects.toBeDefined();
+  });
+
+  it("retains a checkpoint an in-flight operation still names, however old it is", async () => {
+    const directory = await repositoryWithCommit();
+    const refs: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      await writeFile(join(directory, "a.txt"), `revision ${index}\n`);
+      refs.push((await createCheckpoint(directory, "replica-a", `checkpoint ${index}`)).ref);
+    }
+    const oldest = refs[0]!;
+
+    const deleted = await pruneCheckpointRefs(directory, "replica-a", 1, [oldest]);
+
+    expect(deleted).not.toContain(oldest);
+    expect(await listCheckpointRefs(directory, "replica-a")).toContain(oldest);
+    // The rollback target still resolves, which is the whole point of retaining it.
+    expect((await exec("git", ["-C", directory, "rev-parse", "--verify", oldest])).stdout.trim()).toHaveLength(40);
+  });
+
+  it("leaves another replica's checkpoints alone", async () => {
+    const directory = await repositoryWithCommit();
+    for (let index = 0; index < 3; index += 1) {
+      await writeFile(join(directory, "a.txt"), `mine ${index}\n`);
+      await createCheckpoint(directory, "replica-a", `mine ${index}`);
+    }
+    await writeFile(join(directory, "a.txt"), "theirs\n");
+    await createCheckpoint(directory, "replica-b", "theirs");
+
+    await pruneCheckpointRefs(directory, "replica-a", 0);
+
+    expect(await listCheckpointRefs(directory, "replica-a")).toHaveLength(0);
+    expect(await listCheckpointRefs(directory, "replica-b")).toHaveLength(1);
   });
 });

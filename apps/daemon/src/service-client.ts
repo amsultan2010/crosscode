@@ -26,7 +26,7 @@ import {
   type RemoteTask,
   type RemoteValidation
 } from "@crosscode/protocol";
-import type { RemoteOperation } from "../../service/src/index.js";
+import type { LocalOperation } from "./types.js";
 import type { ClaimOutboundRecord, HandoffOutboundRecord, IntentOutboundRecord, OutboundRecord, TaskOutboundRecord, ValidationOutboundRecord } from "./state.js";
 import type { RemoteSyncTransport } from "./index.js";
 import { getSupabaseClient, toStoredSession, type StoredSession } from "./supabase-client.js";
@@ -45,7 +45,7 @@ export type CoordinationServiceHooks = {
  * hold a reference to the same identity object observe the newly assigned id.
  */
 export class CoordinationServiceClient implements RemoteSyncTransport {
-  // Exactly one of these is set: a Supabase session (from `crosscode -- login`) or a
+  // Exactly one of these is set: a Supabase session (from `crosscode login`) or a
   // `ccw_` workspace token (from `crosscode join --pair`). The workspace token covers the
   // daemon ingest/read surface only and cannot be refreshed, so a 401 on it is terminal.
   private session: StoredSession | undefined;
@@ -57,7 +57,7 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
     private readonly hooks: CoordinationServiceHooks = {}
   ) {
     if (!service.session && !service.workspaceToken) {
-      throw new Error("Run 'crosscode -- login' or 'crosscode join --pair <code>' before starting the daemon");
+      throw new Error("Run 'crosscode login' or 'crosscode join --pair <code>' before starting the daemon");
     }
     this.session = service.session;
     this.workspaceToken = service.workspaceToken;
@@ -85,10 +85,18 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
     return response.replicaId;
   }
 
-  // The live-sync WebSocket authenticates with a Supabase access token only, so a
-  // pairing-only install has none to offer; runDaemonProcess skips live sync for it.
+  /**
+   * The credential the live-sync WebSocket subscribes with: a refreshed Supabase access
+   * token, or the `ccw_` workspace token when this install was paired rather than logged
+   * in. The gateway accepts either, so a paired install gets live sync instead of being
+   * left on the polling loop -- it already reaches the same ingest and read surface over
+   * HTTP with this exact credential.
+   */
   async getValidAccessToken(): Promise<string> {
-    if (!this.session) throw new Error("Live sync requires a Supabase session; run 'crosscode -- login'");
+    if (!this.session) {
+      if (this.workspaceToken) return this.workspaceToken;
+      throw new Error("Live sync needs a credential; run 'crosscode login' or 'crosscode join --pair <code>'");
+    }
     if (isExpiringSoon(this.session.expiresAt)) await this.refreshAccessToken();
     return this.session.accessToken;
   }
@@ -97,13 +105,13 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
     if (!this.session) throw new Error("Workspace tokens cannot be refreshed; run 'crosscode join --pair <code>' again");
     const supabase = getSupabaseClient();
     const { data, error } = await supabase.auth.refreshSession({ refresh_token: this.session.refreshToken });
-    if (error || !data.session) throw new Error(`Supabase session refresh failed: ${error?.message ?? "no session returned"}; run 'crosscode -- login' again`);
+    if (error || !data.session) throw new Error(`Supabase session refresh failed: ${error?.message ?? "no session returned"}; run 'crosscode login' again`);
     this.session = toStoredSession(data.session);
     await this.hooks.onSessionRefreshed?.(this.session);
     return this.session.accessToken;
   }
 
-  async upload(record: OutboundRecord): Promise<RemoteOperation> {
+  async upload(record: OutboundRecord): Promise<LocalOperation> {
     const event = transactionCreatedEventSchema.parse(record.event);
     const data = await this.authorizedRequest("/v1/events", "POST", { event });
     const receipt = serviceIngestReceiptSchema.parse(data);
@@ -117,7 +125,7 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
     };
   }
 
-  async list(after: number): Promise<{ operations: RemoteOperation[]; nextCursor: number }> {
+  async list(after: number): Promise<{ operations: LocalOperation[]; nextCursor: number }> {
     const data = cursorResponseSchema.parse(await this.authorizedRequest(`/v1/operations?afterSequence=${after}`, "GET"));
     return {
       nextCursor: data.nextCursor,
@@ -236,12 +244,14 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
     try {
       return await request(this.service.url, path, method, this.session.accessToken, body, true, this.identity.workspaceId);
     } catch (error) {
-      if (error instanceof ServiceHttpError) {
-        if (error.status !== 401) throw error;
-        await this.refreshAccessToken();
-        return request(this.service.url, path, method, this.session!.accessToken, body, true, this.identity.workspaceId);
-      }
-      return request(this.service.url, path, method, this.session.accessToken, body, true, this.identity.workspaceId);
+      // A 401 is the one failure worth a second attempt, and only after refreshing:
+      // the access token is short-lived and rotating it is exactly what fixes it.
+      // Anything else -- including a network failure, which request() has already
+      // retried internally -- propagates. Re-issuing it here discarded the original
+      // error and quietly turned one timed-out upload into four sends.
+      if (!(error instanceof ServiceHttpError) || error.status !== 401) throw error;
+      await this.refreshAccessToken();
+      return request(this.service.url, path, method, this.session!.accessToken, body, true, this.identity.workspaceId);
     }
   }
 }

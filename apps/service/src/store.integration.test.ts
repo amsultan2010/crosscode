@@ -240,3 +240,188 @@ function makeEvent(membership: Membership, replicaId: string, id: string, client
     }
   };
 }
+
+describe.skipIf(!databaseUrl)("PostgreSQL plan limits", () => {
+  it("refuses the seat a plan does not have, and counts only active members", async () => {
+    const store = new PgStore(databaseUrl!);
+    try {
+      await store.migrate();
+      const owner = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId: randomUUID(), actorId: `owner-${randomUUID()}@example.com` });
+      // The default plan is `free`, whose seat cap is 3. The owner is seat one.
+      const second = await store.addMember({ workspaceId: owner.workspaceId, userId: randomUUID(), actorId: `b-${randomUUID()}@example.com` });
+      await store.addMember({ workspaceId: owner.workspaceId, userId: randomUUID(), actorId: `c-${randomUUID()}@example.com` });
+
+      await expect(store.addMember({ workspaceId: owner.workspaceId, userId: randomUUID(), actorId: `d-${randomUUID()}@example.com` }))
+        .rejects.toThrow(/seat cap/);
+
+      // Removing someone frees their seat, because the count filters on disabled_at.
+      const identity: Membership = { memberId: owner.memberId, userId: "", actorId: "", workspaceId: owner.workspaceId, role: "owner" };
+      expect(await store.countActiveMembers(owner.workspaceId)).toBe(3);
+      await store.disableMember(identity, second.memberId);
+      expect(await store.countActiveMembers(owner.workspaceId)).toBe(2);
+      await expect(store.addMember({ workspaceId: owner.workspaceId, userId: randomUUID(), actorId: `e-${randomUUID()}@example.com` })).resolves.toBeDefined();
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("refuses an autonomy tier the plan does not unlock, and allows the one it does", async () => {
+    const store = new PgStore(databaseUrl!);
+    try {
+      await store.migrate();
+      const owner = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId: randomUUID(), actorId: `owner-${randomUUID()}@example.com` });
+      const identity: Membership = { memberId: owner.memberId, userId: "", actorId: "", workspaceId: owner.workspaceId, role: "owner" };
+
+      // `free` unlocks always-ask only.
+      await expect(store.setWorkspaceAutonomyTier(identity, 0)).resolves.toBe(0);
+      await expect(store.setWorkspaceAutonomyTier(identity, 1)).rejects.toThrow(/auto-if-clean/);
+      await expect(store.setWorkspaceAutonomyTier(identity, 2)).rejects.toThrow(/auto-always/);
+      expect(await store.getWorkspaceAutonomyTier(owner.workspaceId)).toBe(0);
+
+      await store.pool.query("UPDATE workspaces SET plan = 'unlimited' WHERE id = $1", [owner.workspaceId]);
+      await expect(store.setWorkspaceAutonomyTier(identity, 2)).resolves.toBe(2);
+    } finally {
+      await store.close();
+    }
+  });
+});
+
+describe.skipIf(!databaseUrl)("PostgreSQL revocation", () => {
+  it("revokes a paired device's token so it stops resolving, and disables its replica", async () => {
+    const store = new PgStore(databaseUrl!);
+    try {
+      await store.migrate();
+      const owner = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId: randomUUID(), actorId: `owner-${randomUUID()}@example.com` });
+      const identity: Membership = { memberId: owner.memberId, userId: "", actorId: "", workspaceId: owner.workspaceId, role: "owner" };
+      const minted = await store.createPairingCode(identity);
+      const claimed = await store.claimPairingCode({ code: minted.code, actorId: "agent", replicaName: `laptop-${randomUUID()}` });
+
+      // The token works before revocation.
+      expect((await store.resolveWorkspaceToken(claimed.token)).workspaceId).toBe(owner.workspaceId);
+      const [summary] = await store.listWorkspaceTokens(identity);
+      expect(summary?.revokedAt).toBeNull();
+
+      const revoked = await store.revokeWorkspaceToken(identity, summary!.id);
+      expect(revoked.revokedAt).not.toBeNull();
+
+      // ...and stops working on the very next call, with no expiry to wait out.
+      await expect(store.resolveWorkspaceToken(claimed.token)).rejects.toBeInstanceOf(StoreUnauthorizedError);
+      await expect(store.assertReplicaOwnership(owner.workspaceId, owner.memberId, claimed.replicaId)).rejects.toBeInstanceOf(StoreUnauthorizedError);
+      await expect(store.revokeWorkspaceToken(identity, summary!.id)).rejects.toBeInstanceOf(StoreConflictError);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("removing a member ends their access and takes their devices with them", async () => {
+    const store = new PgStore(databaseUrl!);
+    try {
+      await store.migrate();
+      const owner = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId: randomUUID(), actorId: `owner-${randomUUID()}@example.com` });
+      const identity: Membership = { memberId: owner.memberId, userId: "", actorId: "", workspaceId: owner.workspaceId, role: "owner" };
+      const memberUserId = randomUUID();
+      const member = await store.addMember({ workspaceId: owner.workspaceId, userId: memberUserId, actorId: `m-${randomUUID()}@example.com` });
+      const memberIdentity = await store.resolveMembership(memberUserId, owner.workspaceId);
+      const minted = await store.createPairingCode(memberIdentity);
+      const claimed = await store.claimPairingCode({ code: minted.code, actorId: "agent", replicaName: `laptop-${randomUUID()}` });
+      expect((await store.resolveWorkspaceToken(claimed.token)).memberId).toBe(member.memberId);
+
+      const removed = await store.disableMember(identity, member.memberId);
+      expect(removed.disabledAt).not.toBeNull();
+
+      await expect(store.resolveMembership(memberUserId, owner.workspaceId)).rejects.toBeInstanceOf(StoreUnauthorizedError);
+      await expect(store.resolveWorkspaceToken(claimed.token)).rejects.toBeInstanceOf(StoreUnauthorizedError);
+      await expect(store.assertReplicaOwnership(owner.workspaceId, member.memberId, claimed.replicaId)).rejects.toBeInstanceOf(StoreUnauthorizedError);
+      expect((await store.listMembers(identity)).find((entry) => entry.memberId === member.memberId)?.disabledAt).not.toBeNull();
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("keeps at least one owner and refuses self-removal", async () => {
+    const store = new PgStore(databaseUrl!);
+    try {
+      await store.migrate();
+      const owner = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId: randomUUID(), actorId: `owner-${randomUUID()}@example.com` });
+      const identity: Membership = { memberId: owner.memberId, userId: "", actorId: "", workspaceId: owner.workspaceId, role: "owner" };
+
+      await expect(store.disableMember(identity, owner.memberId)).rejects.toThrow(/cannot remove themselves/);
+
+      // A second owner exists, but removing the sole *other* owner is still refused
+      // when it would leave the workspace with none.
+      const solo = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId: randomUUID(), actorId: `solo-${randomUUID()}@example.com` });
+      const soloIdentity: Membership = { memberId: solo.memberId, userId: "", actorId: "", workspaceId: solo.workspaceId, role: "owner" };
+      const secondOwner = await store.addMember({ workspaceId: solo.workspaceId, userId: randomUUID(), actorId: `o2-${randomUUID()}@example.com`, role: "member" });
+      await store.pool.query("UPDATE members SET role = 'owner' WHERE id = $1", [secondOwner.memberId]);
+      await expect(store.disableMember(soloIdentity, secondOwner.memberId)).resolves.toBeDefined();
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("refuses revocation and removal to a non-owner", async () => {
+    const store = new PgStore(databaseUrl!);
+    try {
+      await store.migrate();
+      const owner = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId: randomUUID(), actorId: `owner-${randomUUID()}@example.com` });
+      const memberUserId = randomUUID();
+      await store.addMember({ workspaceId: owner.workspaceId, userId: memberUserId, actorId: `m-${randomUUID()}@example.com` });
+      const memberIdentity = await store.resolveMembership(memberUserId, owner.workspaceId);
+
+      await expect(store.listWorkspaceTokens(memberIdentity)).rejects.toBeInstanceOf(StoreUnauthorizedError);
+      await expect(store.revokeWorkspaceToken(memberIdentity, randomUUID())).rejects.toBeInstanceOf(StoreUnauthorizedError);
+      await expect(store.disableMember(memberIdentity, owner.memberId)).rejects.toBeInstanceOf(StoreUnauthorizedError);
+    } finally {
+      await store.close();
+    }
+  });
+});
+
+describe.skipIf(!databaseUrl)("PostgreSQL project keys", () => {
+  it("promotes a remote-less project instead of filing a second row for the same checkout", async () => {
+    const store = new PgStore(databaseUrl!);
+    try {
+      await store.migrate();
+      const owner = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId: randomUUID(), actorId: `owner-${randomUUID()}@example.com` });
+      const repoRoot = `/tmp/checkout-${randomUUID()}`;
+      const repoRemote = `github.com/acme/repo-${randomUUID()}`;
+
+      // First seen before it had a remote...
+      const first = await store.upsertProject(owner.workspaceId, { repoRoot });
+      expect(first?.repoRemote).toBeNull();
+
+      // ...then the same checkout reports one.
+      const second = await store.upsertProject(owner.workspaceId, { repoRoot, repoRemote });
+
+      expect(second?.id).toBe(first!.id);
+      expect(second?.repoRemote).toBe(repoRemote);
+      expect((await store.listProjects(owner.workspaceId)).filter((project) => project.repoRoot === repoRoot)).toHaveLength(1);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("does not promote when another project already holds that remote", async () => {
+    const store = new PgStore(databaseUrl!);
+    try {
+      await store.migrate();
+      const owner = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId: randomUUID(), actorId: `owner-${randomUUID()}@example.com` });
+      const repoRemote = `github.com/acme/repo-${randomUUID()}`;
+      const claimedRoot = `/tmp/first-${randomUUID()}`;
+      const otherRoot = `/tmp/second-${randomUUID()}`;
+
+      const claimed = await store.upsertProject(owner.workspaceId, { repoRoot: claimedRoot, repoRemote });
+      const rootOnly = await store.upsertProject(owner.workspaceId, { repoRoot: otherRoot });
+      expect(rootOnly?.id).not.toBe(claimed?.id);
+
+      // The second checkout turns out to be a clone of the same repository: it must
+      // converge on the existing remote-keyed row, not steal the remote for its own.
+      const converged = await store.upsertProject(owner.workspaceId, { repoRoot: otherRoot, repoRemote });
+
+      expect(converged?.id).toBe(claimed?.id);
+      expect((await store.getProject(owner.workspaceId, rootOnly!.id))?.repoRemote).toBeNull();
+    } finally {
+      await store.close();
+    }
+  });
+});
