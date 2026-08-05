@@ -18,8 +18,14 @@ import { createServerlessHandler } from "@crosscode/service/serverless";
  */
 export const config = { runtime: "nodejs" };
 
-// Built on first request and reused while the instance stays warm, so the Postgres pool
-// and the Supabase JWKS fetch are not paid for on every invocation.
+// The specifier resolves to apps/service/dist/serverless.js, a bundle built by
+// scripts/build-serverless.mjs and produced here by the buildCommand in vercel.json. It has
+// to be JavaScript: Vercel traces this import, copies the resolved file into the function,
+// and Node will not load TypeScript out of node_modules. Pointing it back at src/ returns
+// the API to 500 on every route, which is where it sat for days.
+//
+// Calling this is cheap. The Postgres pool and the Supabase JWKS fetch are built on the
+// first request that needs them and reused while the instance stays warm.
 const handler = createServerlessHandler();
 
 export default async function (request: IncomingMessage, response: ServerResponse): Promise<void> {

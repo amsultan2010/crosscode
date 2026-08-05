@@ -2,13 +2,13 @@
 
 ## Authentication
 
-Workspace members authenticate directly against Supabase Auth — `crosscode
-login` (loopback browser callback) or `crosscode login --email/--password`
-(headless); the daemon stores the resulting Supabase
+Workspace members authenticate directly against Supabase Auth, either through
+`crosscode login` (loopback browser callback) or `crosscode login
+--email/--password` (headless). The daemon stores the resulting Supabase
 session (short-lived access token plus a longer-lived refresh token) rather
 than a Crosscode-issued credential. The coordination service verifies each
 request's access token against Supabase's own signing key
-(`verifySupabaseAccessToken`, `apps/service/src/auth.ts`) — Supabase signs
+(`verifySupabaseAccessToken`, `apps/service/src/auth.ts`). Supabase signs
 access tokens with an asymmetric key (ES256 by default), fetched and cached
 from `<SUPABASE_URL>/auth/v1/.well-known/jwks.json`, not a shared secret, so
 there is nothing equivalent to `CROSSCODE_JWT_SECRET` to configure or leak.
@@ -24,7 +24,7 @@ there is nothing equivalent to `CROSSCODE_JWT_SECRET` to configure or leak.
 }
 ```
 
-A Supabase access token carries only the member's `auth.users` id — not a
+A Supabase access token carries only the member's `auth.users` id, not a
 workspace, replica, or role scope the way Crosscode's own previously-issued
 tokens did. Every authenticated request must therefore also carry an
 `x-crosscode-workspace-id` header naming the workspace it targets
@@ -43,7 +43,7 @@ process, which is exactly the shape that OAuth loopback redirects have to get
 right, so the same defenses apply.
 
 - **Loopback-only binding.** The callback server binds `127.0.0.1` on an
-  ephemeral port — never `0.0.0.0`, never a fixed port. Nothing off the machine
+  ephemeral port, never `0.0.0.0` and never a fixed port. Nothing off the machine
   can reach it, and nothing can squat the port in advance.
 - **The `state` parameter.** The CLI generates a 32-character random `state`,
   puts it in the URL it opens, and requires the callback body to echo it back.
@@ -56,8 +56,8 @@ right, so the same defenses apply.
   if none arrives within 300 seconds the command fails with `LOGIN_TIMEOUT`
   rather than leaving a listener open. The permissive CORS headers on
   `/callback` (`Access-Control-Allow-Origin: *`) exist only so the site's fetch
-  succeeds — they widen who may *send* to the endpoint, which is precisely why
-  `state` and not origin is the thing being trusted.
+  succeeds. They widen who may *send* to the endpoint, which is why `state` and
+  not origin is the thing being trusted.
 - **Tokens are never printed.** Neither the access token nor the refresh token
   is written to stdout, in `--json` mode or out of it. `crosscode login --json`
   emits only `{"value":{"userId":"…","email":"…"}}`. This keeps credentials out
@@ -66,8 +66,8 @@ right, so the same defenses apply.
   environment variable to set or leak.
 - **The session lands in a mode-`0600` file.** Both login paths persist through
   the same daemon config writer to `<git-dir>/crosscode/config.json`, owner
-  read/write only, outside versioned files — with the refresh token preferring
-  the OS keychain where one exists (see below). The browser path introduces no
+  read/write only, outside versioned files. The refresh token prefers the OS
+  keychain where one exists (see below). The browser path introduces no
   new storage location and no new credential type.
 - **Headless is not a downgrade path.** `--email/--password` signs in against
   Supabase directly with no loopback server and no `state` involved, so agents
@@ -78,8 +78,8 @@ right, so the same defenses apply.
 Three credentials can be taken away, and none of them requires waiting for an expiry:
 
 - **A member.** `crosscode members remove <memberId>` (`DELETE /v1/members/:id`, owner
-  only) sets `members.disabled_at`. Every authorization path — `resolveMembership`,
-  `resolveWorkspaceToken`, `assertReplicaOwnership` — already filters on it, so access
+  only) sets `members.disabled_at`. Every authorization path already filters on it
+  (`resolveMembership`, `resolveWorkspaceToken`, `assertReplicaOwnership`), so access
   ends on the next request. The row is disabled rather than deleted because operations,
   validations, and audit events reference it and history has to stay attributable. The
   same transaction retires their replicas and revokes their workspace tokens, so removing
@@ -88,8 +88,8 @@ Three credentials can be taken away, and none of them requires waiting for an ex
 - **A paired device.** `crosscode devices revoke <tokenId>`
   (`DELETE /v1/workspace-tokens/:id`, owner only) sets `workspace_tokens.revoked_at` and
   disables the associated replica. `ccw_` tokens never expire and are not
-  self-describing — they are opaque random bytes resolved against the database on every
-  single request — which is exactly what makes immediate revocation possible.
+  self-describing. They are opaque random bytes resolved against the database on every
+  request, which is what makes immediate revocation possible.
 - **A Supabase session.** `crosscode logout` clears this checkout's session (and any
   `ccw_` token) from the config file and the OS keychain, and signs out of Supabase.
 
@@ -101,11 +101,16 @@ revoke it. Both are audited (`member.removed`, `workspace_token.revoked`).
 ## End-to-end encryption
 
 Every file payload Crosscode syncs is encrypted on the sending device with a key the
-coordination service has never held. `api.getcrosscode.dev` stores ciphertext in
-`operations.event` — the single home of file content since migration 013 — and cannot read
-it, not with a database dump, not with a subpoena, not with an engineer at a console.
+coordination service has never held. The hosted service at `www.getcrosscode.dev` stores
+ciphertext in `operations.event`, the single home of file content since migration 013, and
+cannot read it: not with a database dump, not with a subpoena, not with an engineer at a
+console.
 
-This section is the reasoning, not just the mechanism. If any of it stops being true, the
+The scope is the file payload. Tasks, claims, handoffs, published intents, and validation
+results are stored in the clear, and [What the server can and cannot
+see](#what-the-server-can-and-cannot-see) lists exactly which fields those are.
+
+This section is the reasoning as well as the mechanism. If any of it stops being true, the
 claim on the landing page has to come down with it.
 
 ### Why full end-to-end, and not encryption at rest
@@ -117,30 +122,31 @@ pick.
 Encryption at rest under a key we hold defends against exactly one thing: someone
 obtaining the storage without also obtaining the service. It does nothing about a
 compromised service process, a malicious or coerced insider, a subpoena, or a
-misconfigured internal tool — in all of those the key is right there next to the data. For
-a coordination service the honest summary would be "we can read your code, but we promise
-to be careful," and that is precisely the sentence a developer evaluating a tool for their
-employer's private repository is trying to avoid hearing.
+misconfigured internal tool. In all of those the key is right there next to the data. For
+a coordination service the accurate summary would be "we can read your code, but we promise
+to be careful," which is the sentence a developer evaluating a tool for their employer's
+private repository is trying to avoid hearing.
 
 Full end-to-end was affordable here for one structural reason: **the service never
 inspected file content in the first place.** Conflict classification, diffing, dependency
 analysis, three-way merges, and AI review all run client-side in `apps/daemon` and
 `packages/core`. The service is a store-and-forward relay that assigns sequence numbers
 and fans messages out. The only place it ever touched content was the integrity check at
-`apps/service/src/http.ts` — discussed below — and that check was never load-bearing.
+`apps/service/src/http.ts`, discussed below, and that check was never load-bearing.
 
 So encryption costs the service no capability it was using. That will not stay true for
 free: any future server-side feature that needs to read content (search across a
 workspace, server-rendered diffs, a web review UI) would have to break this, and the
-answer is that it does not get built server-side. That is the trade, stated up front.
+answer is that it does not get built server-side. That is the trade.
 
 ### What the server can and cannot see
 
 Encrypted, under a key we do not have:
 
 - File contents (`afterContent`), unified patches, and the base snapshot.
-- **File paths.** Paths are as sensitive as content — `src/billing/stripe-webhook-v2.ts`
-  tells you a great deal — so they are inside the ciphertext, not beside it.
+- **File paths.** A path is as sensitive as content, since
+  `src/billing/stripe-webhook-v2.ts` tells you a great deal on its own, so paths are
+  inside the ciphertext rather than beside it.
 - Content hashes (`beforeHash`, `afterHash`, `base.files[].contentHash`). A SHA-256 of a
   file is a confirmation oracle: anyone holding a candidate file can check whether you
   have it. Leaving hashes in the clear would have quietly undone much of the encryption.
@@ -148,25 +154,26 @@ Encrypted, under a key we do not have:
 
 In the clear, and therefore visible to us:
 
-- Workspace, member, replica, and project ids, and `actor_id` — normally an email address.
+- Workspace, member, replica, and project ids, and `actor_id`, normally an email address.
   Multi-tenant authorization is done on these; they cannot be encrypted.
-- **`repoRemote`** — the normalized git remote, e.g. `github.com/acme/secret-project`.
+- **`repoRemote`**, the normalized git remote, for example `github.com/acme/secret-project`.
   Projects are keyed on it (Contract B), so it is stored as-is. If a repository's *name*
   is itself confidential, self-host.
 - Timestamps, sequence numbers, and the number of files an operation touches.
 - Ciphertext length, which bounds the plaintext size. A large commit looks like a large
   commit.
 - The change kind per file (`add`/`modify`/`delete`/`rename`).
-- Tasks, claims, intents, handoffs, and validation output are **not yet sealed**. Task
-  titles and claim targets do contain paths and descriptions. This is a real gap, it is
-  not covered by the claim above, and it is called out on the privacy page rather than
-  quietly omitted. The envelope built here is reusable for them.
+- Task titles, claim targets, published intent text, handoff notes, and validation output
+  are **not yet sealed**. Task titles and claim targets do contain paths and descriptions
+  of what someone is working on. This is a real gap, it is not covered by the claim above,
+  and the privacy page states it rather than omitting it. The envelope built here is
+  reusable for them.
 
 Per-file rows still exist server-side, keyed by a `pathToken` instead of a path:
 `HMAC-SHA256(pathKey, transactionId || "\0" || path)`. The transaction id is mixed in so
-the *same* file in two operations produces two unrelated tokens — otherwise the service
+the *same* file in two operations produces two unrelated tokens. Without that, the service
 could build a per-file change history without decrypting anything. The service keeps only
-what it actually used the column for: "an operation may change each path at most once."
+what it used the column for: "an operation may change each path at most once."
 
 ### What replaces the server-side hash check
 
@@ -177,13 +184,13 @@ operations. It should be, and its removal loses nothing:
 **That check never protected a receiving client.** It ran on our server, on data our
 server could rewrite. A service willing to substitute `afterContent` would substitute
 `afterHash` to match, and the check would pass. It was only ever a garbage-in filter that
-caught a *client* miscomputing its own hash — useful, but not evidence of anything to
-anyone downstream.
+caught a *client* miscomputing its own hash. That is useful, but it is not evidence of
+anything to anyone downstream.
 
 The check that always mattered is the receiver's. `assertChangeIntegrity`
 (`apps/daemon/src/index.ts`) re-verifies every downloaded change before anything is
-applied, and did so before this work existed — precisely because the server's word was
-never sufficient. Encryption *upgrades* that check rather than removing it:
+applied, and did so before this work existed, because the server's word was never
+sufficient. Encryption *upgrades* that check rather than removing it:
 
 - The payload is sealed with **AES-256-GCM**. Opening it verifies an authentication tag
   computed under a key the service has never held. A modified byte does not decrypt.
@@ -192,12 +199,12 @@ never sufficient. Encryption *upgrades* that check rather than removing it:
   workspace, re-attributed to a different replica, or spliced onto another operation.
 - The clear-text `changes` array is outside the ciphertext, because the service needs a
   row per file. So the receiver recomputes every `pathToken` from the decrypted paths and
-  compares — a dropped, duplicated, reordered, or relabelled row is caught.
+  compares, so a dropped, duplicated, reordered, or relabelled row is caught.
 - The original plaintext hash check still runs afterwards, unchanged.
 
 Net: integrity moves from *a hash the server could forge* to *an AEAD tag the server
-cannot*. The structural checks that never needed plaintext — one change per path,
-principal binding, replica ownership, role gates — all still run server-side.
+cannot*. The structural checks that never needed plaintext still run server-side: one
+change per path, principal binding, replica ownership, and role gates.
 
 The same reasoning applies to `redactPath`, which refused to relay `.env` and friends.
 That also only ever caught a well-meaning client; a malicious one renames the file. It now
@@ -213,9 +220,9 @@ every epoch it has been given, so history stays readable across rotations.
 Storage is the same shape the Supabase refresh token already uses: the OS keychain when
 one exists (macOS `security`, Linux `secret-tool`), otherwise a mode-`0600` file at
 `<git-dir>/crosscode/keyring.json`, never committed. Because macOS silently truncates a
-keychain secret written through stdin at 128 bytes — a limit the refresh-token path was
-also quietly exposed to, now guarded — the keychain holds a small wrapping key and the
-file holds the keyring encrypted under it.
+keychain secret written through stdin at 128 bytes, the keychain holds a small wrapping
+key and the file holds the keyring encrypted under it. The refresh-token path was exposed
+to the same limit and is now guarded too.
 
 Reaching a second device uses the existing pairing flow (Contract A):
 
@@ -233,7 +240,7 @@ Reaching a second device uses the existing pairing flow (Contract A):
 **The fingerprint comparison is the whole security of that step, and it is not optional
 theatre.** The service relays public keys, so it could offer one of its own and be handed
 the workspace keyring. Comparing 60 bits out of band is what detects that. Grants are
-therefore never issued automatically to a device nobody has approved — auto-granting to
+therefore never issued automatically to a device nobody has approved. Auto-granting to
 whatever the service listed would hand it the key on request and make every other claim on
 this page false. The automatic sweep only re-grants to devices that already hold an epoch,
 which is how a rotation reaches an offline machine without a second human decision.
@@ -251,7 +258,7 @@ introductions at all.
 Everything sealed from that point is unreadable to anyone holding only the old epochs.
 
 **Rotation cannot un-share history, and nothing can.** Someone who was in the workspace
-downloaded and decrypted those operations on their own machine — and had a full checkout
+downloaded and decrypted those operations on their own machine, and had a full checkout
 of the repository besides. No key operation reaches back into a copy someone already has.
 Any product claiming otherwise is describing access control, not cryptography.
 
@@ -269,9 +276,9 @@ Rotation is not automatic on removal, because it is not free: every device has t
 the new epoch, and a device that is offline and never comes back is left behind. The CLI
 prompts for it after a removal instead of deciding.
 
-History under old epochs is deliberately **not** re-encrypted. The service cannot do it —
-it cannot read the data — and having clients re-upload the entire history would mean
-decrypting and re-uploading every proposal a workspace has ever had. Old epochs stay in
+History under old epochs is **not** re-encrypted. The service cannot do it, because it
+cannot read the data, and having clients do it would mean decrypting and re-uploading every
+proposal a workspace has ever had. Old epochs stay in
 the keyring; plan retention (`historyRetentionDays`) is what ages that data out.
 
 ### Default on, and what it costs to lose the key
@@ -282,9 +289,9 @@ your code" cannot carry an asterisk about a checkbox.
 
 That default is affordable here for a specific reason worth being explicit about: **the
 durable artifact is your Git repository, which you already have.** Losing a workspace key
-costs the coordination history — past proposals, their diffs and intents — not a line of
-source. That is a bounded, recoverable loss, which is what makes default-on defensible for
-Crosscode where it would not be for, say, a hosted database.
+costs the coordination history, meaning past proposals with their diffs and intents. It
+costs no source. That is a bounded, recoverable loss, which is what makes default-on
+defensible for Crosscode where it would not be for a hosted database.
 
 We cannot reset a key for you. There is nothing on our side to reset it from; that is the
 same fact as "we cannot read your code." Recovery is therefore local:
@@ -298,9 +305,9 @@ same fact as "we cannot read your code." Recovery is therefore local:
   existed.
 
 An **anti-downgrade latch** backs the default: once a workspace has ingested one sealed
-operation, the service refuses plaintext for it forever. There is deliberately no way to
-unlatch — an unlatch would be a supported path for making previously-unreadable data
-readable to us. Whether a client encrypts is decided entirely by whether it holds a local
+operation, the service refuses plaintext for it forever. There is no way to unlatch, since
+an unlatch would be a supported path for making previously-unreadable data readable to us.
+Whether a client encrypts is decided entirely by whether it holds a local
 key, so nothing the service says can talk a client out of encrypting; the latch exists to
 stop a rolled-back or misconfigured client from putting plaintext back.
 
@@ -315,13 +322,14 @@ Holds against: a database dump or backup theft; a subpoena served on us; an engi
 production access; a compromised or malicious service process reading stored data; a
 service that tampers with stored payloads (detected by the AEAD tag).
 
-Does **not** hold against: a compromised member device — it has the key and the checkout,
-and this is not defended against; a member who leaves with data they already downloaded;
+Does **not** hold against: a compromised member device, which has the key and the checkout
+and is not defended against; a member who leaves with data they already downloaded;
 metadata analysis over what stays in the clear above; and an *actively malicious* service
-during one pairing, which can offer its own public key — detected by the fingerprint
-comparison, which is why that step is mandatory rather than advisory.
+during one pairing, which can offer its own public key. The fingerprint comparison detects
+that, which is why the step is mandatory rather than advisory.
 
-Not yet covered: tasks, claims, intents, handoffs, and validation output.
+Not yet covered: task titles, claim targets, published intents, handoff notes, and
+validation output, all of which reach the service in the clear.
 
 ## The billing webhook
 
@@ -338,7 +346,7 @@ credential. Four independent defenses:
 2. **The signature is verified over the raw bytes, before parsing.**
    `verifyStripeSignature` (`apps/service/src/stripe.ts`) recomputes HMAC-SHA256 over
    `<timestamp>.<body>` and compares it constant-time (`timingSafeEqual`) against every
-   `v1=` entry in the header — there is more than one during a secret rotation. The
+   `v1=` entry in the header, since there is more than one during a secret rotation. The
    signature is attacker-supplied and the secret is not, so a byte-at-a-time comparison
    would leak the expected digest under enough attempts. A header with no timestamp or no
    `v1` entry is refused rather than falling through to "nothing to compare, so pass", which
@@ -368,7 +376,7 @@ daemon ingest/read surface and can never start, change, or cancel a subscription
 Workspace and member provisioning is still an administrator-side operation
 (`pnpm service:provision`), but it now creates or invites a Supabase Auth user
 by email through the Supabase admin API (`SUPABASE_SERVICE_ROLE_KEY`) and
-writes the corresponding workspace/member row straight to Postgres — there is
+writes the corresponding workspace/member row straight to Postgres. There is
 no one-time enrollment token or replica secret anymore. A replica (an
 individual daemon/device identity) is self-registered by the authenticated
 member calling `POST /v1/replicas` (`CoordinationServiceClient
@@ -378,7 +386,7 @@ rather than being minted by exchanging an admin-issued token. The Supabase
 session's refresh token is stored in the OS keychain when available (macOS
 `security`, Linux `secret-tool`), the same way the replica secret used to be;
 otherwise it falls back to the daemon's local, mode-`0600` config file
-(`<git-dir>/crosscode/config.json`) outside versioned files — never committed,
+(`<git-dir>/crosscode/config.json`) outside versioned files. It is never committed and
 never sent anywhere but Supabase and the coordination service. The daemon
 refreshes an expiring access token automatically (`refreshAccessToken`) using
 the stored refresh token, and re-persists the rotated session through the same
@@ -399,8 +407,8 @@ Separately, `configuredExcludedPaths`/`matchesConfiguredExclusion`
 (`apps/daemon/src/config.ts`) read `excludedPaths` from the committed
 `.crosscode/config.yaml` at `HEAD` and glob-match (`minimatch`, `dot: true`)
 outgoing file paths against them. Excluded paths are dropped before a change is
-even captured as a transaction — they never reach the redaction step because they
-never leave the local checkout.
+even captured as a transaction. They never reach the redaction step, because they never
+leave the local checkout.
 
 ## Sensitive-action confirmation
 
@@ -431,7 +439,7 @@ calls the `submit_semantic_review` MCP tool (`POST
 /v1/semantic-reviews/:requestId/submit`, `docs/mcp-clients.md`) with its
 judgment, or the request times out into the safe `uncertain`/
 `requiresHumanApproval` fallback. Crosscode stores, configures, or transmits no
-separate AI provider credentials for this — the redaction, prompt-injection
+separate AI provider credentials for this. The redaction, prompt-injection
 resistance, risk safety gate, and audit-record guarantees described above and
 in BUILD_INSTRUCTIONS.md section 12 apply identically to the agent-delegated
 bundle.
@@ -444,7 +452,8 @@ is itself an LLM reading repository text that may contain instructions aimed at 
 receives that text already framed as data rather than as a bare JSON blob it has to decide
 how to interpret. The preamble states that the delimited content is never instructions,
 that the reviewer has no tool, file, Git, or publish capability, and that a human decides
-what happens next — which is true: `resolveSemanticReview` only writes an audit record.
+what happens next. That last part is true: `resolveSemanticReview` only writes an audit
+record.
 
 ### `policy.autoApplyRisk`
 
@@ -470,7 +479,7 @@ Trust boundaries:
   site holds no workspace state, issues no Crosscode-specific credential, and
   cannot reach a daemon. There is no browser surface that reads or writes
   coordination data at all, so a compromised web page's blast radius stops at
-  "can attempt to deliver a session to a login that is already waiting" — which
+  "can attempt to deliver a session to a login that is already waiting", which
   is what `state` is there to reject.
 - **Daemon ↔ local filesystem:** fully trusted. The daemon reads and writes the
   checkout it manages directly; there is no sandboxing between the daemon
@@ -486,7 +495,7 @@ Trust boundaries:
   `operations`, and it is deliberately kept outside that role: the scheduled sweep
   opens a second connection with `CROSSCODE_RETENTION_DATABASE_URL`, so no
   request-handling code path can reach a connection able to erase history. Row Level Security policies
-  (`004_supabase_auth.sql`) are defense-in-depth on top of this — the service
+  (`004_supabase_auth.sql`) are defense-in-depth on top of this. The service
   itself still connects with a privileged role rather than through PostgREST,
   so application-level authorization in `resolveMembership` remains the primary
   enforcement point; the RLS policies matter if the Supabase project's
@@ -497,7 +506,7 @@ What a malicious or compromised replica **can** do, given its role's server-side
 checks (`apps/service/src/auth.ts`, `store.ts`):
 
 - Upload operations, tasks, claims, handoffs, and intents within its own role's
-  permissions (an `owner`/`member` can write; a `viewer` cannot — every ingest
+  permissions (an `owner`/`member` can write; a `viewer` cannot, and every ingest
   endpoint rejects `viewer` with 403).
 - See other members' presence, tasks, claims, handoffs, and intents within the
   same workspace, since these fan out to every subscribed replica in that

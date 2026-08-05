@@ -30,6 +30,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # Resolves every import in the Vercel function the way the deployment will, and loads
+      # what it finds. The API returned 500 on every route for days because that import
+      # pointed at a .ts file; a green build says nothing about it either way.
+      - name: Serverless function imports load
+        run: node scripts/check-function-imports.mjs
       # No CROSSCODE_TEST_DATABASE_URL here on purpose: `pnpm test` runs files in
       # parallel, and the PostgreSQL suites share one database. Running them that way
       # let unrelated suites interleave session and presence rows and fail sporadically.
