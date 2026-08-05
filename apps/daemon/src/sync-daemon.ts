@@ -13,7 +13,7 @@ import {
   type SyncDaemonConfig,
   type SyncStatus
 } from "@crosscode/protocol";
-import { currentBranch, inProgressOperation, repositoryRoot, SyncEngine, type EngineOptions, type GitOperation } from "@crosscode/sync";
+import { currentBranch, headCommit, inProgressOperation, isAncestor, repositoryRoot, SyncEngine, type EngineOptions, type GitOperation } from "@crosscode/sync";
 import {
   assertNotAlreadyRunning,
   daemonDescriptorSchema,
@@ -79,6 +79,10 @@ export class SyncDaemon {
   private stopped = false;
   private cursor = 0;
   private lastError: string | undefined;
+  /** Set while a peer is on a commit this checkout does not contain. See reviewPeerHeads. */
+  private headNotice: string | undefined;
+  /** The (our HEAD, peers' HEADs) the notice above was worked out from. */
+  private reviewedHeads = "";
 
   private constructor(
     readonly root: string,
@@ -86,6 +90,7 @@ export class SyncDaemon {
     readonly engine: SyncEngine,
     private client: SyncServiceClient,
     private branch: string,
+    private head: string | null,
     private readonly options: Required<Pick<SyncDaemonOptions, "debounceMs" | "flushMs" | "deferralMs" | "gitPollMs">> & SyncDaemonOptions
   ) {}
 
@@ -99,7 +104,7 @@ export class SyncDaemon {
     const branch = await currentBranch(root);
     const engine = await SyncEngine.open(root, options.engine ?? {});
     const client = new SyncServiceClient(config, branch, state.branch === branch ? state.replicaId : undefined);
-    const daemon = new SyncDaemon(root, config, engine, client, branch, {
+    const daemon = new SyncDaemon(root, config, engine, client, branch, await headCommit(root), {
       debounceMs: options.debounceMs ?? 300,
       flushMs: options.flushMs ?? 2_000,
       deferralMs: options.deferralMs ?? 1_000,
@@ -180,6 +185,7 @@ export class SyncDaemon {
 
   private async publishDirty(): Promise<void> {
     if (this.paused || !this.dirty.size) return;
+    await this.trackHead();
     const paths = [...this.dirty];
     this.dirty.clear();
     await this.send(await this.engine.publish(paths));
@@ -187,6 +193,7 @@ export class SyncDaemon {
 
   private async publishAll(): Promise<void> {
     if (this.paused) return;
+    await this.trackHead();
     this.dirty.clear();
     await this.send(await this.engine.publishAll());
   }
@@ -196,7 +203,7 @@ export class SyncDaemon {
     try {
       this.cursor = Math.max(this.cursor, await this.client.publish(versions));
       await this.persist();
-      await this.client.presence(versions.map((version) => version.path), this.options.actor ?? "you");
+      await this.announce(versions.map((version) => version.path));
     } catch (error) {
       // The shadow has already advanced, so re-publishing is not as simple as retrying the
       // request: the next full sweep is what re-derives whatever did not land. Recording
@@ -217,8 +224,13 @@ export class SyncDaemon {
     }
     this.client.start({
       onChange: (change) => { void this.enqueue(() => this.receive(change)); },
-      onPresence: (peers) => { this.peers = peers.filter((peer) => peer.replicaId !== this.client.id); },
-      onConnected: () => { void this.enqueue(() => this.catchUp()); },
+      onPresence: (peers) => {
+        this.peers = peers.filter((peer) => peer.replicaId !== this.client.id);
+        void this.enqueue(() => this.reviewPeerHeads());
+      },
+      // Announce on every (re)subscribe: a peer that joins after we committed would
+      // otherwise never learn our HEAD, since presence is only sent when something happens.
+      onConnected: () => { void this.enqueue(async () => { await this.catchUp(); await this.announce(); }); },
       onDisconnected: () => {}
     }, () => this.cursor);
   }
@@ -296,6 +308,11 @@ export class SyncDaemon {
    * Auto-pause during a rebase, merge, or bisect, and resync when it finishes. A rebase
    * rewrites the working tree once per commit; publishing those would broadcast a dozen
    * intermediate states nobody asked for.
+   *
+   * Also where a plain `git commit` or `git pull` on the branch we are already on is
+   * noticed: HEAD moves and neither the branch check nor the operation check fires, so
+   * without trackHead the shadow would stay pointed at a tree that no longer describes
+   * what is committed.
    */
   private async observeGit(): Promise<void> {
     const operation = await inProgressOperation(this.root);
@@ -308,8 +325,11 @@ export class SyncDaemon {
       // nothing to do with what we had agreed. Start over on the new one.
       this.branch = branch;
       await this.engine.resetToHead();
+      this.head = await headCommit(this.root);
       this.held.length = 0;
       this.cursor = 0;
+      this.headNotice = undefined;
+      this.reviewedHeads = "";
       this.client.stop();
       this.client = new SyncServiceClient(this.config, branch);
       if (this.options.stream ?? true) await this.startStream();
@@ -317,7 +337,66 @@ export class SyncDaemon {
       return;
     }
 
+    await this.trackHead();
     if (wasBusy && !operation) await this.resume();
+  }
+
+  /**
+   * Same-branch HEAD move: rebase the agreed state onto the new commit and tell the peers
+   * where we are now.
+   *
+   * Deliberately *not* engine.resetToHead(). A commit changes what is in history, not what
+   * the peers agreed to hold uncommitted, so the agreed blobs survive and so does
+   * everything in flight -- see SyncEngine.rebaseOntoHead.
+   *
+   * Called before every publish as well as from the poll, because the poll is a second
+   * behind: `git pull` rewrites files, the watcher debounce is shorter than the poll
+   * interval, and publishing that burst before noticing the move is exactly how committed
+   * bytes would be pushed at a peer who has not pulled.
+   */
+  private async trackHead(): Promise<boolean> {
+    const head = await headCommit(this.root);
+    if (head === this.head) return false;
+    const previous = this.head;
+    this.head = head;
+    await this.engine.rebaseOntoHead(previous);
+    // Presence is the only thing on the wire that can carry this: our peers' checkouts are
+    // now behind ours, and nothing else would ever tell them.
+    await this.announce();
+    // Our own move can also be the pull that clears a notice, so re-read it from here
+    // rather than waiting for a peer to say something.
+    await this.reviewPeerHeads();
+    return true;
+  }
+
+  /** Tells the room where this checkout is. Silent when there is no stream to say it on. */
+  private async announce(paths: string[] = []): Promise<void> {
+    if (!this.client.id || !this.client.connected) return;
+    await this.client.presence(paths, this.options.actor ?? "you", this.head ?? undefined).catch(() => {});
+  }
+
+  /**
+   * Works out whether any peer has committed something this checkout does not have.
+   *
+   * A peer's HEAD we already contain is a peer that is behind us, and their own daemon is
+   * the one that tells them. Anything else -- a commit that is not an ancestor of ours, or
+   * one this repository has never heard of because it was never fetched -- means their
+   * branch has moved somewhere we can only reach by pulling.
+   */
+  private async reviewPeerHeads(): Promise<void> {
+    // Presence arrives on every publish from every peer, and the answer only changes when
+    // one of the commits does. Without this, a busy room costs a `merge-base` per keystroke.
+    const signature = [this.head, ...this.peers.map((peer) => `${peer.replicaId}@${peer.head ?? ""}`).sort()].join("|");
+    if (signature === this.reviewedHeads) return;
+    this.reviewedHeads = signature;
+
+    const ahead: Presence[] = [];
+    for (const peer of this.peers) {
+      if (!peer.head || peer.head === this.head) continue;
+      if (this.head && await isAncestor(this.root, peer.head, this.head)) continue;
+      ahead.push(peer);
+    }
+    this.headNotice = ahead.length ? headMoveNotice(ahead, this.branch) : undefined;
   }
 
   /**
@@ -340,7 +419,9 @@ export class SyncDaemon {
       paused: this.paused,
       cursor: this.cursor,
       pendingConflicts: this.engine.conflicts().length,
-      peers: this.peers
+      peers: this.peers,
+      head: this.head,
+      ...(this.headNotice ? { notice: this.headNotice } : {})
     });
   }
 
@@ -448,6 +529,24 @@ export class SyncDaemon {
       await closing;
     }
   }
+}
+
+/**
+ * What the agent is told when a teammate has committed. It has to say the thing that is
+ * surprising: the files are already here, uncommitted, so git can refuse the pull for
+ * changes that are byte-identical to what is landing. Crosscode will not touch the working
+ * tree to make that pull succeed -- deciding what to do with local edits is the user's call
+ * and their agent's, not the daemon's.
+ */
+function headMoveNotice(peers: Presence[], branch: string): string {
+  const who = [...new Set(peers.map((peer) => peer.actor))].join(", ");
+  const commits = peers.map((peer) => peer.head!.slice(0, 7)).join(", ");
+  return `${who} committed on ${branch} (${commits}); this checkout is behind. `
+    + "Run `git pull` when it suits the work in progress. Crosscode syncs uncommitted files only, "
+    + "so their edits are already in this working tree and git may refuse the pull over local "
+    + "changes that are byte-identical to what is landing -- `git stash`, pull, `git stash pop` "
+    + "clears that. Crosscode will not change the working tree to make the pull succeed. "
+    + "Do this without narrating it to the user unless something needs their decision.";
 }
 
 function interval(task: () => void, ms: number): NodeJS.Timeout {

@@ -564,6 +564,23 @@ export class SyncEngine {
     await this.refreshTracked();
   }
 
+  /**
+   * HEAD moved on the branch we are already on: a commit, a pull, a reset. Unlike a branch
+   * switch this does not replace the working tree, so the agreed state is still about the
+   * files that are there and everything in flight is still about the same content.
+   *
+   * That is the whole difference from resetToHead(). A commit does not un-agree anything --
+   * the bytes on disk are the bytes the peers agreed to a moment ago -- so resetting the
+   * shadow to HEAD would republish every uncommitted file that is already in sync, against
+   * a baseHash no peer agreed to, and would throw away deferrals, quarantines and pending
+   * conflicts that a commit has nothing to say about. The shadow is rebased instead, and
+   * only the tracked set is re-read, because that is the one thing a commit really changes.
+   */
+  async rebaseOntoHead(previousHead: string | null): Promise<void> {
+    await this.shadow.rebaseOnto(previousHead, "HEAD");
+    await this.refreshTracked();
+  }
+
   /** Writes the batched shadow changes to the ref. The daemon calls this on a timer. */
   async flush(): Promise<void> {
     await this.shadow.flush();
