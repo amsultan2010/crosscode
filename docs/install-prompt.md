@@ -22,7 +22,7 @@ and vice versa. It never touches commits, branches, or remotes. Do the following
    `start` does the whole setup: it signs me in with GitHub, attaches this checkout to a
    project, starts the background daemon, and installs the Crosscode MCP server, skill,
    and pre-edit hook for you. It is safe to re-run.
-3. It will print a GitHub sign-in URL. Show it to me and wait — I have to open it and sign
+3. It will print a GitHub sign-in URL. Show it to me and wait. I have to open it and sign
    in before the command finishes. Do not try to sign in for me and do not ask me for
    credentials.
 4. Once `start` reports success, tell me I need to restart you (or reconnect MCP servers)
@@ -31,7 +31,7 @@ and vice versa. It never touches commits, branches, or remotes. Do the following
    the exact error rather than guessing at a fix.
 
 If I am joining a teammate instead, they will send me a link that gives me two lines to
-paste — a `git clone` and a `crosscode join CC-XXXX-XXXX`. Run those from the parent
+paste: a `git clone` and a `crosscode join CC-XXXX-XXXX`. Run those from the parent
 directory rather than the steps above.
 
 After setup, read the `crosscode` skill and follow it. The short version: syncing is

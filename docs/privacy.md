@@ -14,7 +14,7 @@ checkout and stopping it leaves an ordinary Git repository behind.
 
 - **The files you edit while syncing**: path, content, the hashes either side merged
   against, and whether the change was a modify or a delete. Tracked files only.
-- **Your GitHub account identity** — the account you signed in with, and the project
+- **Your GitHub account identity**: the account you signed in with, and the project
   memberships we use to decide who may sync with whom.
 - **Your repository, as `owner/repo`.** Projects are keyed on it. If a repository's *name*
   is confidential, this is not the tool for it.
@@ -53,7 +53,7 @@ Your repository is the durable artifact the whole time, on your disk, as ordinar
 ## Removing someone
 
 Removing a member from a project ends their access immediately: their daemon stops receiving
-on its next request. It cannot un-share what they already have — they had a full checkout of
+on its next request. It cannot un-share what they already have. They had a full checkout of
 the repository. No product can reach into a copy someone already holds, and we would rather
 tell you that than let you believe otherwise.
 

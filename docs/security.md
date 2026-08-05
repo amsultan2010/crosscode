@@ -78,7 +78,7 @@ encryption**, no device pairing, and no key exchange. The service can read the f
 it stores; [privacy.md](./privacy.md) says so in the same words.
 
 We built E2E once and removed it. It bought a real property and cost a device-pairing
-ceremony, a keyring, epochs, rotation, and recovery paths — for a product whose durable
+ceremony, a keyring, epochs, rotation, and recovery paths, for a product whose durable
 artifact is a Git repository the user already has. The honest trade for this product is
 fewer moving parts and a plain statement of what we hold.
 

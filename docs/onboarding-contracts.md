@@ -39,7 +39,7 @@ or out of it.
 
 ## Contract B: projects
 
-A project is one repository, keyed on `owner/repo` — `createProjectRequest.repo`, which the
+A project is one repository, keyed on `owner/repo` in `createProjectRequest.repo`, which the
 schema constrains to that shape. `crosscode start` creates the project the first time and
 attaches to the existing one afterwards; it is idempotent, and re-running it in a configured
 checkout only reports state and makes sure the daemon is up.
@@ -100,7 +100,7 @@ Both commands leave the checkout in the same state, and both are idempotent:
 5. The pre-edit hook registered for Claude Code, and for Codex where its config format is
    recognized.
 
-Steps 3–5 are described in [mcp-clients.md](./mcp-clients.md). Any of them failing is
+Steps 3 to 5 are described in [mcp-clients.md](./mcp-clients.md). Any of them failing is
 reported but does not fail the command: syncing works without an agent attached, and MCP
 alone works without hooks.
 
