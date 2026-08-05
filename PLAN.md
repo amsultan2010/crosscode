@@ -165,12 +165,12 @@ starting Phase 4; port the algorithm, not the code.
 - [ ] **Verify:** two replicas, 100 changes in order; cursor catch-up after forced disconnect
 
 ### 4 — Daemon
-- [ ] Watch (tracked files, denylist, ~300ms per-file debounce) → shadow diff → publish
-- [ ] Receive → apply / merge / conflict
-- [ ] Hot-file deferral, loop suppression
-- [ ] Reconnect, catch-up, full resync when cursor is too old
-- [ ] Auto-pause on git operations; auto-restart on crash
-- [ ] **Verify:** three real daemons, concurrent edits, all converge identical; one intentional collision → exactly one conflict
+- [x] Watch (tracked files, denylist, ~300ms per-file debounce) → shadow diff → publish
+- [x] Receive → apply / merge / conflict
+- [x] Hot-file deferral, loop suppression
+- [x] Reconnect, catch-up, full resync when cursor is too old
+- [x] Auto-pause on git operations; auto-restart on crash
+- [x] **Verify:** three real daemons, concurrent edits, all converge identical; one intentional collision → exactly one conflict
 
 ### 5 — CLI + onboarding
 - [ ] Cut to 5 commands

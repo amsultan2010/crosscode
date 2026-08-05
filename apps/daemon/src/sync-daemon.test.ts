@@ -1,0 +1,284 @@
+import { execFile } from "node:child_process";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { promisify } from "node:util";
+import { afterEach, describe, expect, it } from "vitest";
+import { DaemonClient } from "./client.js";
+import { writeSyncConfig } from "./sync-config.js";
+import { SyncDaemon, type SyncDaemonOptions } from "./sync-daemon.js";
+import { startSyncServiceStub, type SyncServiceStub } from "./sync-service-stub.js";
+
+/**
+ * Three real daemons -- real watchers, real sockets, real git -- against an in-process
+ * stand-in for the coordination service. PLAN.md's phase 4 verification, and the case the
+ * spike explicitly left unproven: it only ever ran two replicas.
+ */
+
+const exec = promisify(execFile);
+const directories: string[] = [];
+const daemons: SyncDaemon[] = [];
+const services: SyncServiceStub[] = [];
+
+afterEach(async () => {
+  await Promise.all(daemons.splice(0).map((daemon) => daemon.stop()));
+  await Promise.all(services.splice(0).map((service) => service.close()));
+  await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
+
+const FAST: SyncDaemonOptions = {
+  debounceMs: 40,
+  flushMs: 100,
+  deferralMs: 60,
+  gitPollMs: 100,
+  // The 10s hot window is real behaviour, not a constant worth waiting out in a test.
+  engine: { hotWindowMs: 150, maxDeferrals: 3 }
+};
+
+async function seedOrigin(files: Record<string, string>): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "crosscode-origin-"));
+  directories.push(root);
+  await exec("git", ["init", "-q", "-b", "main", root]);
+  await exec("git", ["-C", root, "config", "user.email", "seed@example.com"]);
+  await exec("git", ["-C", root, "config", "user.name", "seed"]);
+  for (const [path, content] of Object.entries(files)) {
+    await mkdir(dirname(join(root, path)), { recursive: true });
+    await writeFile(join(root, path), content);
+  }
+  await exec("git", ["-C", root, "add", "-A"]);
+  await exec("git", ["-C", root, "commit", "-qm", "seed"]);
+  return root;
+}
+
+async function checkout(origin: string, name: string, service: SyncServiceStub): Promise<string> {
+  const parent = await mkdtemp(join(tmpdir(), `crosscode-${name}-`));
+  directories.push(parent);
+  const root = join(parent, name);
+  await exec("git", ["clone", "-q", origin, root]);
+  await exec("git", ["-C", root, "config", "user.email", `${name}@example.com`]);
+  await exec("git", ["-C", root, "config", "user.name", name]);
+  await writeSyncConfig(root, { projectId: "project-1", repo: "acme/app", service: { url: service.url } });
+  return root;
+}
+
+async function start(root: string, options: SyncDaemonOptions = {}): Promise<SyncDaemon> {
+  const daemon = await SyncDaemon.start(root, { ...FAST, ...options });
+  daemons.push(daemon);
+  return daemon;
+}
+
+/** A user edit: the daemon has to notice it the same way it notices any other. */
+async function type(root: string, path: string, content: string): Promise<void> {
+  await mkdir(dirname(join(root, path)), { recursive: true });
+  await writeFile(join(root, path), content);
+}
+
+const read = (root: string, path: string) => readFile(join(root, path), "utf8").catch(() => null);
+
+async function waitFor<T>(description: string, probe: () => Promise<T | undefined>, timeoutMs = 20_000): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  let last: unknown;
+  while (Date.now() < deadline) {
+    try {
+      const result = await probe();
+      if (result !== undefined && result !== false) return result;
+    } catch (error) { last = error; }
+    await new Promise((next) => setTimeout(next, 50));
+  }
+  throw new Error(`Timed out waiting for ${description}${last ? `: ${String(last)}` : ""}`);
+}
+
+async function allEqual(roots: string[], path: string, expected?: string): Promise<string | undefined> {
+  const contents = await Promise.all(roots.map((root) => read(root, path)));
+  const [first] = contents;
+  if (first === null || !contents.every((content) => content === first)) return undefined;
+  if (expected !== undefined && first !== expected) return undefined;
+  return first;
+}
+
+const lines = (count: number) => Array.from({ length: count }, (_, index) => `line ${index + 1}`).join("\n") + "\n";
+function edit(source: string, index: number, replacement: string): string {
+  const parts = source.split("\n");
+  parts[index] = replacement;
+  return parts.join("\n");
+}
+
+describe("three real daemons", () => {
+  it("converges byte-identically on concurrent edits, with no conflicts and no interaction", async () => {
+    const service = await startSyncServiceStub();
+    services.push(service);
+    const origin = await seedOrigin({ "a.txt": "a\n", "b.txt": "b\n", "c.txt": "c\n", "shared.txt": lines(30) });
+    const roots = await Promise.all(["alice", "bob", "carol"].map((name) => checkout(origin, name, service)));
+    const running = [];
+    for (const root of roots) running.push(await start(root));
+
+    // Three peers, three files, at the same time.
+    await Promise.all([
+      type(roots[0]!, "a.txt", "alice\n"),
+      type(roots[1]!, "b.txt", "bob\n"),
+      type(roots[2]!, "c.txt", "carol\n")
+    ]);
+
+    await waitFor("a.txt everywhere", () => allEqual(roots, "a.txt", "alice\n"));
+    await waitFor("b.txt everywhere", () => allEqual(roots, "b.txt", "bob\n"));
+    await waitFor("c.txt everywhere", () => allEqual(roots, "c.txt", "carol\n"));
+
+    // ...and three disjoint hunks of one file.
+    const base = lines(30);
+    await type(roots[0]!, "shared.txt", edit(base, 1, "ALICE"));
+    await type(roots[1]!, "shared.txt", edit(base, 14, "BOB"));
+    await type(roots[2]!, "shared.txt", edit(base, 27, "CAROL"));
+
+    const merged = await waitFor("shared.txt to converge", async () => {
+      const content = await allEqual(roots, "shared.txt");
+      return content?.includes("ALICE") && content.includes("BOB") && content.includes("CAROL") ? content : undefined;
+    });
+
+    expect(merged).toContain("ALICE");
+    expect(running.flatMap((daemon) => daemon.conflicts())).toHaveLength(0);
+    for (const daemon of running) expect(daemon.status().pendingConflicts).toBe(0);
+  }, 60_000);
+
+  it("turns one deliberate collision into exactly one conflict, and resolves it", async () => {
+    const service = await startSyncServiceStub();
+    services.push(service);
+    const base = lines(20);
+    const origin = await seedOrigin({ "shared.txt": base });
+    const roots = await Promise.all(["alice", "bob", "carol"].map((name) => checkout(origin, name, service)));
+    const [alice, bob, carol] = [await start(roots[0]!), await start(roots[1]!), await start(roots[2]!)];
+
+    // Bob is paused, so his edit stays home and alice's arrives while he is holding it:
+    // a collision on the same line, deterministically ordered.
+    await bob.setPaused(true);
+    await type(roots[1]!, "shared.txt", edit(base, 9, "BOB"));
+    await type(roots[0]!, "shared.txt", edit(base, 9, "ALICE"));
+    await waitFor("alice's line to reach carol", () => allEqual([roots[0]!, roots[2]!], "shared.txt", edit(base, 9, "ALICE")));
+    await bob.setPaused(false);
+
+    const conflicts = await waitFor("bob's conflict", async () => {
+      const found = bob.conflicts();
+      return found.length ? found : undefined;
+    });
+
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]!.path).toBe("shared.txt");
+    expect(conflicts[0]!.ours).toBe(edit(base, 9, "BOB"));
+    expect(conflicts[0]!.theirs).toBe(edit(base, 9, "ALICE"));
+    expect(conflicts[0]!.ancestor).toBe(base);
+    // Exactly one: bob quarantines the path rather than publishing his side of it, so
+    // alice and carol never sit down to fix the same collision from the other end.
+    expect(alice.conflicts()).toHaveLength(0);
+    expect(carol.conflicts()).toHaveLength(0);
+    // And nothing was written over bob's work.
+    expect(await read(roots[1]!, "shared.txt")).toBe(edit(base, 9, "BOB"));
+
+    const resolution = edit(base, 9, "ALICE AND BOB");
+    const client = await DaemonClient.connect(roots[1]!);
+    await expect(client.conflicts()).resolves.toHaveLength(1);
+    await expect(client.resolve(conflicts[0]!.id, resolution)).resolves.toHaveLength(0);
+
+    await waitFor("the resolution everywhere", () => allEqual(roots, "shared.txt", resolution));
+    expect((await client.status()).pendingConflicts).toBe(0);
+  }, 60_000);
+});
+
+describe("the daemon around the engine", () => {
+  it("catches up from its cursor after the socket drops", async () => {
+    const service = await startSyncServiceStub();
+    services.push(service);
+    const origin = await seedOrigin({ "a.txt": "0\n" });
+    const roots = await Promise.all(["alice", "bob"].map((name) => checkout(origin, name, service)));
+    const [alice, bob] = [await start(roots[0]!), await start(roots[1]!)];
+    await waitFor("both daemons connected", async () => alice.status().connected && bob.status().connected);
+
+    service.disconnectAll();
+    await type(roots[0]!, "a.txt", "published while bob was away\n");
+
+    await waitFor("bob to catch up", () => allEqual(roots, "a.txt", "published while bob was away\n"));
+    // The cursor moves once the change is fully accounted for, which is a beat after the
+    // bytes land on disk.
+    await waitFor("bob's cursor to advance", async () => bob.status().cursor > 0);
+  }, 60_000);
+
+  it("resyncs from full content when the service says the cursor is too old", async () => {
+    const service = await startSyncServiceStub();
+    services.push(service);
+    const origin = await seedOrigin({ "a.txt": "0\n" });
+    const roots = await Promise.all(["alice", "bob"].map((name) => checkout(origin, name, service)));
+    const [alice, bob] = [await start(roots[0]!), await start(roots[1]!)];
+    await waitFor("both connected", async () => alice.status().connected && bob.status().connected);
+
+    // History bob never saw is gone; the only honest recovery is full content.
+    service.disconnectAll();
+    await type(roots[0]!, "a.txt", "first\n");
+    await waitFor("alice to publish", async () => service.changes.length > 0);
+    service.retentionFloor = 1_000;
+
+    await waitFor("bob to adopt the watermark", async () => bob.status().cursor >= 1_000);
+    expect(bob.status().cursor).toBeGreaterThanOrEqual(1_000);
+  }, 60_000);
+
+  it("pauses during a git operation and resyncs when it is over", async () => {
+    const service = await startSyncServiceStub();
+    services.push(service);
+    const origin = await seedOrigin({ "a.txt": "0\n" });
+    const roots = await Promise.all(["alice", "bob"].map((name) => checkout(origin, name, service)));
+    const [alice, bob] = [await start(roots[0]!), await start(roots[1]!)];
+    await waitFor("both connected", async () => alice.status().connected && bob.status().connected);
+
+    // A merge left mid-flight is exactly the state `git merge` stops in on a conflict.
+    await writeFile(join(roots[0]!, ".git", "MERGE_HEAD"), `${await exec("git", ["-C", roots[0]!, "rev-parse", "HEAD"]).then(({ stdout }) => stdout.trim())}\n`);
+    await waitFor("alice to pause", async () => alice.status().paused);
+    await type(roots[0]!, "a.txt", "mid-merge\n");
+    await new Promise((next) => setTimeout(next, 400));
+    expect(await read(roots[1]!, "a.txt")).toBe("0\n");
+
+    await rm(join(roots[0]!, ".git", "MERGE_HEAD"));
+    await waitFor("alice to resume and resync", () => allEqual(roots, "a.txt", "mid-merge\n"));
+    expect(alice.status().paused).toBe(false);
+  }, 60_000);
+
+  it("refuses a second daemon for the same worktree", async () => {
+    const service = await startSyncServiceStub();
+    services.push(service);
+    const origin = await seedOrigin({ "a.txt": "0\n" });
+    const root = await checkout(origin, "alice", service);
+    await start(root);
+
+    await expect(SyncDaemon.start(root, FAST)).rejects.toThrow("already running");
+  }, 30_000);
+
+  it("serves the local API the CLI and MCP server use", async () => {
+    const service = await startSyncServiceStub();
+    services.push(service);
+    const origin = await seedOrigin({ "a.txt": "0\n" });
+    const root = await checkout(origin, "alice", service);
+    const daemon = await start(root);
+    const client = await DaemonClient.connect(root);
+
+    const status = await client.status();
+    expect(status.branch).toBe("main");
+    expect(status.paused).toBe(false);
+    await expect(client.conflicts()).resolves.toEqual([]);
+    await expect(client.pause(true)).resolves.toMatchObject({ paused: true });
+    expect(daemon.status().paused).toBe(true);
+    await expect(client.pause(false)).resolves.toMatchObject({ paused: false });
+    await expect(client.resolve("no-such-conflict", "x")).rejects.toThrow();
+  }, 30_000);
+
+  it("never publishes a secret, however hard the user edits it", async () => {
+    const service = await startSyncServiceStub();
+    services.push(service);
+    const origin = await seedOrigin({ ".env": "SECRET=1\n", "a.txt": "0\n" });
+    const roots = await Promise.all(["alice", "bob"].map((name) => checkout(origin, name, service)));
+    const [alice, bob] = [await start(roots[0]!), await start(roots[1]!)];
+    await waitFor("both connected", async () => alice.status().connected && bob.status().connected);
+
+    await type(roots[0]!, ".env", "SECRET=leaked\n");
+    await type(roots[0]!, "a.txt", "1\n");
+
+    await waitFor("the harmless file to travel", () => allEqual(roots, "a.txt", "1\n"));
+    expect(service.changes.some((change) => change.version.path === ".env")).toBe(false);
+    expect(await read(roots[1]!, ".env")).toBe("SECRET=1\n");
+  }, 60_000);
+});
