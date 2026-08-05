@@ -63,6 +63,26 @@ export function createServerlessHandler(environment: NodeJS.ProcessEnv = process
 }
 
 function buildHandler(environment: NodeJS.ProcessEnv): { handler: ServerlessHandler; store: PgStore } {
+  // Built before anything that can throw. Everything below -- a missing variable, a
+  // malformed DATABASE_URL, an unusable certificate -- fails every single request, which is
+  // exactly the class of fault most worth reporting and the one a reporter constructed
+  // afterwards can never see. Inert unless SENTRY_DSN is set.
+  const reporter = createObservability(environment);
+  try {
+    return buildConfiguredHandler(environment, reporter);
+  } catch (error) {
+    reporter.capture(error, { route: "/startup", method: "PROCESS" });
+    // Not awaited: this path rethrows into the platform, and flush() resolving later is
+    // better than swallowing the original configuration error to wait for it.
+    void reporter.flush();
+    throw error;
+  }
+}
+
+function buildConfiguredHandler(
+  environment: NodeJS.ProcessEnv,
+  reporter: ReturnType<typeof createObservability>
+): { handler: ServerlessHandler; store: PgStore } {
   const databaseUrl = required(environment.DATABASE_URL, "DATABASE_URL");
   const supabaseUrl = required(environment.SUPABASE_URL, "SUPABASE_URL");
   // Set when the database's certificate chains to a private root (Supabase's pooler does).
@@ -89,8 +109,6 @@ function buildHandler(environment: NodeJS.ProcessEnv): { handler: ServerlessHand
   // Deliberately not awaited inline: the check is one query, and blocking every first
   // request behind it would add a round-trip to each cold start.
   const privileged = store.assertRuntimePrivileges().then(() => undefined, (error: unknown) => error);
-  // Inert unless SENTRY_DSN is set in the function's environment.
-  const reporter = createObservability(environment);
   const guarded: ServerlessHandler = async (request, response) => {
     const context = observeRequest(reporter, request, response);
     try {
