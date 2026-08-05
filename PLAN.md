@@ -107,13 +107,22 @@ is the last state both sides agreed on. Free from that: the merge base, "have I 
 since we synced?", undo (`git checkout refs/crosscode/shadow -- <path>`), and content storage
 in git's own object store. Never moves HEAD, never appears in `git log`.
 
-**Sync unit is one file:** `{ path, baseHash, contentHash, content-or-patch }`. No bundles,
-no lifecycle, no accept/reject.
+**Sync unit is one file:** `{ path, op, baseHash, contentHash, content-or-patch }`. No bundles,
+no lifecycle, no accept/reject. `op` is `modify` or `delete` — without it a delete is
+indistinguishable from an empty file.
 
 **Apply rule** for incoming change to `P`, where `L` = my disk, `S` = shadow:
-1. `L == S` → write it, silent
-2. `L != S` and sender built from `S` → 3-way merge; clean → write silent, conflict → surface
-3. Sender built from something else → catch up from cursor, retry
+1. `L == S` **and the sender built from `S`** → write it, silent
+2. Otherwise → 3-way merge against the sender's base, resolved by content hash from git's
+   object store; clean → write silent, conflict → surface
+3. Only if that base blob is genuinely missing → catch up from cursor, retry
+
+The sender advances its shadow on send. Binaries are never merged — concurrent binary edits
+are always a conflict. A conflicted path is quarantined: neither published nor applied until
+it is resolved.
+
+Phase 2 proved all four of those clauses are load-bearing — the earlier draft of this rule
+lost data silently on concurrent edits, and rebroadcast forever without the shadow advance.
 
 **Six tables:** `users` `projects` `project_members` `invites` `replicas` `file_versions`.
 Presence is in-memory in the websocket gateway.
@@ -122,24 +131,24 @@ Presence is in-memory in the websocket gateway.
 
 ## Checklist
 
-Nothing below is started.
+Phases 1 and 2 are done. Phase 3 is next.
 
 ### 1 — Strip
-- [ ] Tasks / claims / handoffs / intents — daemon, routes, 4 tables, CLI, MCP
-- [ ] Proposal lifecycle — accept, reject, analyze, diff, artifacts
-- [ ] Checkpoints · validation profiles · publish-to-branch · autonomy tiers
-- [ ] Semantic review, agent-delegated reviewer, TypeScript dependency graph
-- [ ] E2E key + device pairing — `workspace-key.ts`, `sealing.ts`, pairing routes, migrations 009/015
-- [ ] Stripe — `billing*.ts`, `stripe.ts`, migrations 008/011/014
-- [ ] Self-hosting — `--service` flag and docs
+- [x] Tasks / claims / handoffs / intents — daemon, routes, 4 tables, CLI, MCP
+- [x] Proposal lifecycle — accept, reject, analyze, diff, artifacts
+- [x] Checkpoints · validation profiles · publish-to-branch · autonomy tiers
+- [x] Semantic review, agent-delegated reviewer, TypeScript dependency graph
+- [x] E2E key + device pairing — `workspace-key.ts`, `sealing.ts`, pairing routes, migrations 009/015
+- [x] Stripe — `billing*.ts`, `stripe.ts`, migrations 008/011/014
+- [x] Self-hosting — `--service` flag and docs
 - [x] `provision-admin.ts` · `prune.ts` · `retention.ts`
-- [ ] **Verify:** builds; only sync-related code remains
+- [x] **Verify:** builds; only sync-related code remains
 
 ### 2 — Prove the merge core
-- [ ] Two temp checkouts, no service, no network
-- [ ] Shadow ref + apply rule + hot-file deferral + loop suppression
-- [ ] Cases: disjoint files · same file disjoint hunks · same file same lines · delete vs edit · rename · binary · offline then reconnect
-- [ ] **Verify:** both sides converge byte-identical with zero interaction; same-line case yields exactly one conflict and writes nothing
+- [x] Two temp checkouts, no service, no network
+- [x] Shadow ref + apply rule + hot-file deferral + loop suppression
+- [x] Cases: disjoint files · same file disjoint hunks · same file same lines · delete vs edit · rename · binary · offline then reconnect
+- [x] **Verify:** both sides converge byte-identical with zero interaction; same-line case yields exactly one conflict and writes nothing
 
 > If this isn't clean, stop and rethink before going further.
 
