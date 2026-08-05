@@ -7,7 +7,7 @@ local Crosscode daemon for the current worktree.
 ## The short version
 
 ```bash
-npm install -g @crosscode/cli
+npm install -g crosscode-cli
 crosscode start
 ```
 
@@ -17,11 +17,11 @@ the daemon: `.mcp.json` for Claude Code by default, or `--mcp cursor` /
 configuring a client by hand or using Codex CLI, whose TOML config `start` does not
 touch.
 
-`@crosscode/cli` is not on npm yet, so the two commands above do not work until it
+`crosscode-cli` is not on npm yet, so the two commands above do not work until it
 is published. Until then, build it from a clone and install the tarball, as
 described under Packaging in the README.
 
-Without a global install, `npx --yes @crosscode/cli start` does the same thing, and
+Without a global install, `npx --yes crosscode-cli start` does the same thing, and
 writes an `npx`-based MCP command because npm's cache is not somewhere a config may
 point at long-term.
 
@@ -144,7 +144,7 @@ be moved to a new major release underneath you:
 ```json
 {
   "command": "npx",
-  "args": ["-y", "--package", "@crosscode/cli@0.1.0", "crosscode-mcp"]
+  "args": ["-y", "--package", "crosscode-cli@0.1.0", "crosscode-mcp"]
 }
 ```
 

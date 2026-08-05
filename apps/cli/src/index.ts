@@ -826,11 +826,11 @@ function isMainModule(): boolean {
  * Both published bins point at this file, and this is what tells them apart.
  *
  * npm only auto-picks a package's executable when every `bin` entry names the same file, or
- * when one is named after the package -- and `@crosscode/cli`'s unscoped name is `cli`,
- * which matches neither `crosscode` nor `crosscode-mcp`. Shipping two distinct bin targets
- * therefore made `npx @crosscode/cli start` fail outright with "could not determine
- * executable to run". Pointing both at this file satisfies the first rule, so npx resolves
- * `crosscode`, and dispatching on the name we were invoked under keeps `crosscode-mcp`.
+ * when one is named after the package -- and `crosscode-cli` matches neither `crosscode` nor
+ * `crosscode-mcp`. Shipping two distinct bin targets therefore made `npx crosscode-cli start`
+ * fail outright with "could not determine executable to run". Pointing both at this file
+ * satisfies the first rule, so npx resolves `crosscode`, and dispatching on the name we were
+ * invoked under keeps `crosscode-mcp`.
  *
  * npm's Windows `.cmd` shims pass the resolved script path as argv[1] rather than the bin
  * name, so there is nothing to dispatch on there; `crosscode mcp` is the spelling that works

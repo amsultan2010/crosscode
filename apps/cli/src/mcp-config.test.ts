@@ -35,11 +35,11 @@ describe("resolveMcpLaunch", () => {
   it("writes an npx invocation when nothing is on PATH, so the entry survives this process", () => {
     expect(resolveMcpLaunch("1.2.3", { PATH: "" }, "linux")).toEqual({
       command: "npx",
-      args: ["-y", "--package", "@crosscode/cli@1.2.3", "crosscode-mcp"]
+      args: ["-y", "--package", "crosscode-cli@1.2.3", "crosscode-mcp"]
     });
   });
 
-  // The whole point of the check: `npx @crosscode/cli start` finds `crosscode-mcp` on PATH,
+  // The whole point of the check: `npx crosscode-cli start` finds `crosscode-mcp` on PATH,
   // but only inside a cache directory npm may evict, so the short command would break later.
   it("rejects a bin inside npx's cache and falls back to npx", async () => {
     const cache = await tempDir();
@@ -59,7 +59,7 @@ describe("resolveMcpLaunch", () => {
     expect(resolveMcpLaunch("1.2.3", { PATH: directory }, "win32")).toEqual({ command: "crosscode", args: ["mcp"] });
     expect(resolveMcpLaunch("1.2.3", { PATH: "" }, "win32")).toEqual({
       command: "npx",
-      args: ["-y", "--package", "@crosscode/cli@1.2.3", "crosscode", "mcp"]
+      args: ["-y", "--package", "crosscode-cli@1.2.3", "crosscode", "mcp"]
     });
   });
 });
@@ -110,10 +110,10 @@ describe("registerMcpServer", () => {
   it("writes OpenCode's own shape", async () => {
     const root = await tempDir();
 
-    const registration = await registerMcpServer(root, "opencode", { command: "npx", args: ["-y", "@crosscode/cli"] });
+    const registration = await registerMcpServer(root, "opencode", { command: "npx", args: ["-y", "crosscode-cli"] });
 
     expect(JSON.parse(await readFile(registration.path, "utf8"))).toEqual({
-      mcp: { crosscode: { type: "local", command: ["npx", "-y", "@crosscode/cli"], enabled: true } }
+      mcp: { crosscode: { type: "local", command: ["npx", "-y", "crosscode-cli"], enabled: true } }
     });
   });
 

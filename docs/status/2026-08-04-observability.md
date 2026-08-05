@@ -29,7 +29,7 @@ Nothing else was touched. `apps/service/src/http.ts`, `.github/workflows/ci.yml`
 ## Two design decisions worth reviewing
 
 **No `@sentry/node` dependency.** The daemon is bundled into the published
-`@crosscode/cli` tarball by `scripts/build.mjs`, and every runtime dependency there is a
+`crosscode-cli` tarball by `scripts/build.mjs`, and every runtime dependency there is a
 real npm package users install to run a file watcher. Sentry ingest is one POST of an
 envelope, so the transport is 20 lines. It also makes the privacy constraint provable:
 because the event is built field by field rather than by handing an `Error` to an SDK,

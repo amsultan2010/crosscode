@@ -42,7 +42,7 @@ export function parseMcpClient(value: string): McpClient {
 /**
  * How an MCP client should launch the server so that it still works tomorrow.
  *
- * `npx @crosscode/cli start` runs out of a cache directory npm is free to evict, and the
+ * `npx crosscode-cli start` runs out of a cache directory npm is free to evict, and the
  * bare `crosscode-mcp` only resolves while npx's own PATH is in effect -- so writing the
  * short command there produces a config that works exactly once and then fails at the next
  * agent session with a command-not-found the user cannot connect back to this. In that case
@@ -63,7 +63,7 @@ export function resolveMcpLaunch(
   const [name, ...rest] = platform === "win32" ? ["crosscode", "mcp"] : ["crosscode-mcp"];
   const installed = findOnPath(name!, environment, platform);
   if (installed && !isEphemeral(installed, environment)) return { command: name!, args: rest };
-  return { command: "npx", args: ["-y", "--package", `@crosscode/cli@${version}`, name!, ...rest] };
+  return { command: "npx", args: ["-y", "--package", `crosscode-cli@${version}`, name!, ...rest] };
 }
 
 function findOnPath(name: string, environment: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | undefined {

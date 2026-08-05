@@ -236,7 +236,7 @@ async function ensureMcpRegistered(
       : `${registration.label} already has the crosscode MCP server in ${registration.path}.`
   );
   if (launch.command === "npx") {
-    report("That entry runs Crosscode through npx. `npm install -g @crosscode/cli` and re-run `crosscode start` for a faster, pinned local install.");
+    report("That entry runs Crosscode through npx. `npm install -g crosscode-cli` and re-run `crosscode start` for a faster, pinned local install.");
   }
   report("Restart your agent (or reconnect its MCP servers) to pick it up.");
   return { registration, launch };

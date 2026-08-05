@@ -12,7 +12,7 @@ Two things block a stranger running one command, and neither can be finished fro
    200 and every database-backed route still returns 500 until those variables exist. See
    [Set the service environment variables](#set-the-service-environment-variables) for the
    exact commands.
-2. **`@crosscode/cli` is still unpublished.** Publishing needs an interactive `npm login` and
+2. **`crosscode-cli` is still unpublished.** Publishing needs an interactive `npm login` and
    an npm account that owns the `@crosscode` scope. Everything up to `npm publish` is done and
    verified; the ordered commands are in
    `docs/status/2026-08-04-npm-publish-checklist.md`.
@@ -88,9 +88,9 @@ imported, and the two get fixed in different places. Routes that need the databa
 fail, so the probe cannot pass for a service that is really down. This is exactly what the
 preview deployment below shows.
 
-## Problem 2: `@crosscode/cli` is not published
+## Problem 2: `crosscode-cli` is not published
 
-`npm view @crosscode/cli` returns `404 Not Found`. The package is now verified publish-ready.
+`npm view crosscode-cli` returns `404 Not Found`. The package is now verified publish-ready.
 Nothing in `package.json` needed changing: `files`, `bin`, `engines`, `repository`, `license`,
 `description`, `keywords` and `publishConfig` are all correct for a public first release. The
 field-by-field check is in the checklist document.
@@ -98,7 +98,7 @@ field-by-field check is in the checklist document.
 `npm pack` produces exactly what it should:
 
 ```
-npm notice 📦  @crosscode/cli@0.1.0
+npm notice 📦  crosscode-cli@0.1.0
 npm notice Tarball Contents
 npm notice 1.1kB LICENSE
 npm notice 37.6kB README.md
@@ -305,7 +305,7 @@ way, which is the criterion.
   them. Nothing I changed touches the store, and coverage of `store.ts` is unchanged.
 - **The `docker build` step in `ci.yml` was not exercised locally**, same reason.
 - **Nothing was published to npm and no production deployment was promoted.** Both are yours.
-- **`README.md` still says `npx @crosscode/cli start`**, which stays a dead link until you
+- **`README.md` still says `npx crosscode-cli start`**, which stays a dead link until you
   publish. That file belongs to another workstream, so I left it alone.
 - **The preview deployments I created are protected by Vercel Authentication** and cannot be
   smoke-checked by an anonymous CI job. The `deployment_status` trigger in `smoke.yml` will

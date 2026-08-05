@@ -397,11 +397,11 @@ links 404 until C's branch merges. Nothing to change at merge.
 
 Verify each of these before launch:
 
-1. **`npx @crosscode/cli start`** appears three times: the hero command strip, the install
+1. **`npx crosscode-cli start`** appears three times: the hero command strip, the install
    section, and the closing CTA. It is also inside the agent install prompt as
-   `npx --yes @crosscode/cli start --no-browser`. All of it assumes `@crosscode/cli` is
+   `npx --yes crosscode-cli start --no-browser`. All of it assumes `crosscode-cli` is
    published to npm. It is not, today.
-2. **`npm install -g @crosscode/cli`** in the install section note.
+2. **`npm install -g crosscode-cli`** in the install section note.
 3. **`crosscode start`, `crosscode join --invite <code>`, `crosscode accept`,
    `crosscode publish --branch`, `crosscode claim path`, `crosscode key export`** appear in
    copy, in the animated demo, and in the use-case cards. These need the published package

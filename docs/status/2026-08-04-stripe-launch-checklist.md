@@ -6,7 +6,7 @@ move a workspace between plans. Derived from the code that is actually deployed:
 `apps/service/src/http.ts`, `apps/service/src/billing-webhook.ts`, `apps/cli/src/index.ts`,
 and `apps/docs-site/vercel.json`.
 
-Two blockers sit outside this list and are tracked elsewhere: `@crosscode/cli` is not
+Two blockers sit outside this list and are tracked elsewhere: `crosscode-cli` is not
 published to npm, and `https://www.getcrosscode.dev/api/v1/*` currently answers 500
 (`ERR_MODULE_NOT_FOUND` for `@crosscode/service/src/serverless.ts`, being fixed by workstream
 A). Step 8 below cannot pass until the second one is fixed.

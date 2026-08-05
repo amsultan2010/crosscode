@@ -6,7 +6,7 @@ shell and file-edit access in the current project, so it can complete every step
 itself with no manual work from the person pasting it. This exact text is also what
 the marketing site's "Install" button copies to the clipboard, so keep both in sync.
 
-`@crosscode/cli` is not on npm yet, so the `npx` lines below fail with a 404 until it is
+`crosscode-cli` is not on npm yet, so the `npx` lines below fail with a 404 until it is
 published. The prompt is written for the published package and needs no edit when that
 lands.
 
@@ -25,7 +25,7 @@ review, never as writes into our files. Do the following:
 2. From this project's Git root, run:
 
    ```
-   npx --yes @crosscode/cli start --no-browser
+   npx --yes crosscode-cli start --no-browser
    ```
 
    `start` does the whole setup: it configures this checkout, signs me in, attaches
@@ -38,9 +38,9 @@ review, never as writes into our files. Do the following:
    create an account, before the command finishes. Do not try to sign in for me,
    and do not ask me for my password.
 4. If I say I would rather not use a browser at all, run it headlessly instead:
-   `npx --yes @crosscode/cli start --email <my email> --password <my password>`,
+   `npx --yes crosscode-cli start --email <my email> --password <my password>`,
    using credentials I give you. If I have no account yet, that path needs
-   `npx --yes @crosscode/cli signup --email <e> --password <p>` first.
+   `npx --yes crosscode-cli signup --email <e> --password <p>` first.
 5. Once `start` reports success, tell me the config was written and that I need to
    restart/reload you (or reconnect MCP servers) for the new "crosscode" server to
    be picked up.
@@ -49,19 +49,19 @@ review, never as writes into our files. Do the following:
    fix.
 
 If I am joining a teammate's workspace rather than using my own, run
-`npx --yes @crosscode/cli join --invite <code>` with the invite code I give you
+`npx --yes crosscode-cli join --invite <code>` with the invite code I give you
 after step 5, then restart as above.
 ````
 
 ## Notes for whoever is embedding this prompt
 
 - Nothing is cloned and nothing is built. `npx` fetches the published
-  `@crosscode/cli` package, whose `dist/` bundle carries the CLI, the daemon, and
+  `crosscode-cli` package, whose `dist/` bundle carries the CLI, the daemon, and
   the MCP server. Node 24 is the only requirement.
 - The MCP entry `start` writes points at `npx` when Crosscode is not installed
   durably, and at the short `crosscode-mcp` command when it is. See
   `resolveMcpLaunch` in `apps/cli/src/mcp-config.ts`. Suggest
-  `npm install -g @crosscode/cli` to anyone who will use it daily: agent sessions
+  `npm install -g crosscode-cli` to anyone who will use it daily: agent sessions
   then launch from a stable path instead of re-resolving through npm's cache.
 - `--no-browser` is there because an agent has no browser, and the default flow would
   otherwise open a tab nobody is looking at. `crosscode start` refuses to try when it

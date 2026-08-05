@@ -121,7 +121,7 @@ and the npm bin-resolution paragraph.
 | `README.md:490` "There is no hosted/managed coordination service yet" | `apps/daemon/src/hosted.ts:19` sets `DEFAULT_SERVICE_URL = "https://www.getcrosscode.dev"`; `curl -o /dev/null -w "%{http_code}" https://www.getcrosscode.dev/` → `200` | **False.** Replaced with what is actually true: the service is the compiled-in default and its API is currently broken |
 | `README.md:491` "There is no production website deployed yet, so `crosscode login` has no default site" | `curl` on `/` → 200, `/auth/cli.html` → 200, `/auth/signup.html` → 200; `resolveWebUrl()` in `apps/daemon/src/browser-login.ts` falls back to `DEFAULT_WEB_URL` and its own comment says `WEB_URL_REQUIRED` is no longer reachable | **False.** Removed; the deprecated-`CROSSCODE_DASHBOARD_URL` note that was buried in it was kept |
 | "Billing is a placeholder, no payment provider wired up" | `apps/service/src/stripe.ts` is 353 lines of `StripeBillingProvider`; `apps/service/src/http.ts:334` routes `POST /v1/webhooks/stripe`; BUILD_INSTRUCTIONS Phase 10 | **Stale.** Stripe is implemented. What is *not* done is the live account and price ids, which the bullet now says |
-| "The CLI is deliberately not published to npm" (design choice) | `npm view @crosscode/cli version` → `E404 ... could not be found`; BUILD_INSTRUCTIONS "Distribution and hosting" says the npm token is expired and `npm login` needs a TTY | **Wrong framing.** Unpublished for an operational reason, not by design. Bullet rewritten and a status callout added at the top of the README |
+| "The CLI is deliberately not published to npm" (design choice) | `npm view crosscode-cli version` → `E404 ... could not be found`; BUILD_INSTRUCTIONS "Distribution and hosting" says the npm token is expired and `npm login` needs a TTY | **Wrong framing.** Unpublished for an operational reason, not by design. Bullet rewritten and a status callout added at the top of the README |
 | "checkout answers 503 and the webhook route does not exist" without Stripe config | `apps/service/src/http.ts:903` throws `HttpError(503, "Billing is not configured on this deployment")`; the webhook handler at :334 requires `options.billing?.webhookSecret` | **True.** Kept verbatim in meaning |
 | "`crosscode billing upgrade --plan student` is refused" | `apps/service/src/http.test.ts:1261` posts `{plan:"student"}` and asserts the refusal; BUILD_INSTRUCTIONS Phase 10 states the 403 | **True.** Kept |
 | README "The service must run as a persistent process, **not** on serverless functions" | `apps/docs-site/api/[...path].ts` and `apps/service/src/serverless.ts` both exist; the README's own Packaging section says `apps/service` "runs as functions inside the website's deployment" | **Self-contradictory.** Rewritten: a persistent process is what gets you the `/v1/stream` WebSocket, the hosted deployment runs on Vercel functions and therefore polls |
@@ -208,10 +208,10 @@ Do not let any landing-page copy say or imply "we can't see anything".
   published package and needs no edit. Command to confirm:
 
   ```
-  npm view @crosscode/cli version
+  npm view crosscode-cli version
   ```
 
-  Today that returns `E404 ... '@crosscode/cli@*' could not be found`.
+  Today that returns `E404 ... 'crosscode-cli@*' could not be found`.
 
 ## What was left conditional
 
