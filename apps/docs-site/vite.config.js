@@ -27,7 +27,9 @@ export default defineConfig({
         signin: resolve(root, "auth/signin.html"),
         signup: resolve(root, "auth/signup.html"),
         passwordReset: resolve(root, "auth/reset.html"),
-        cliLogin: resolve(root, "auth/cli.html")
+        cliLogin: resolve(root, "auth/cli.html"),
+        // One page for every /join/:code; vercel.json rewrites the code into it.
+        join: resolve(root, "join.html")
       }
     }
   }
