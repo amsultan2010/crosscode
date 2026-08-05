@@ -132,7 +132,7 @@ Nothing below is started.
 - [ ] E2E key + device pairing — `workspace-key.ts`, `sealing.ts`, pairing routes, migrations 009/015
 - [ ] Stripe — `billing*.ts`, `stripe.ts`, migrations 008/011/014
 - [ ] Self-hosting — `--service` flag and docs
-- [ ] `provision-admin.ts` · `prune.ts` · `retention.ts`
+- [x] `provision-admin.ts` · `prune.ts` · `retention.ts`
 - [ ] **Verify:** builds; only sync-related code remains
 
 ### 2 — Prove the merge core

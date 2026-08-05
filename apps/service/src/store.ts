@@ -1,31 +1,14 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type {
-  Claim, ClaimCreatedEvent, ClaimReleasedEvent, CreateWorkspaceKeyGrantsRequest, DevicePublicKey, EventEnvelope, Handoff,
-  HandoffRequestedEvent, HandoffRespondedEvent, Intent, IntentPublishedEvent, PairingStatus, Project, RemoteClaim,
-  RemoteHandoff, RemoteIntent, RemoteOperation, RemoteTask, RemoteValidation, SealedTransactionCreatedEvent,
-  SyncedTransaction, Task, TaskCreatedEvent, TaskUpdatedEvent, TransactionCreatedEvent, Validation,
-  ValidationCompletedEvent, WorkspaceKeyGrant, WorkspaceKeyRecipient, WrappedKey
+  EventEnvelope, Project, RemoteOperation, SyncedTransaction, TransactionCreatedEvent
 } from "@crosscode/protocol";
-import { isSealedTransaction, PAIRING_CODE_ALPHABET, PAIRING_CODE_TTL_MS, WORKSPACE_TOKEN_PREFIX } from "@crosscode/protocol";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
-import {
-  assertPlanAllowsAutonomyTier, assertSeatCapAvailable, assertSelfServeWorkspaceAvailable,
-  clampAutonomyTierToPlan, entitlementForSubscription, maxAutonomyTierFor,
-  AUTONOMY_TIER_NAMES, PAYMENT_GRACE_PERIOD_DAYS, PLAN_LIMITS,
-  type BillingInterval, type PaidPlan, type Plan, type SubscriptionState
-} from "./billing.js";
 import { hashCanonicalPayload } from "./crypto.js";
 import { normalizeRepoRemote, normalizeRepoRoot, projectNameFrom } from "./projects.js";
 
 export class StoreConflictError extends Error {}
 export class StoreUnauthorizedError extends Error {}
-/**
- * A single-use credential that is gone: already claimed, expired, or never existed. All
- * three collapse into one error deliberately -- Contract A requires the claim endpoint
- * not to be an oracle that tells an attacker whether a guessed code was ever real.
- */
-export class StoreGoneError extends Error {}
 
 export type StoredOperation = RemoteOperation & {
   event: EventEnvelope;
@@ -34,33 +17,12 @@ export type StoredOperation = RemoteOperation & {
 /**
  * One page of the operation history, or a refusal to answer this cursor at all because
  * retention has deleted the rows it asks for. `resyncFrom` is the oldest cursor that can
- * still be served completely; `retentionDays` is the plan window that caused the deletion,
- * so the message a client shows can name it.
+ * still be served completely; `retentionDays` is the window that caused the deletion, so
+ * the message a client shows can name it.
  */
 export type OperationPage =
   | { status: "ok"; items: StoredOperation[]; nextCursor: number; hasMore: boolean }
   | { status: "cursor-too-old"; resyncFrom: number; retentionDays: number };
-
-/** What one workspace's retention sweep did; `deleted: 0` means it was already inside its window. */
-export type RetentionSweepResult = {
-  workspaceId: string;
-  plan: Plan;
-  retentionDays: number;
-  deleted: number;
-  /** The watermark after the sweep: the highest server_sequence no longer present. */
-  prunedThrough: number;
-};
-
-export type PresenceSummary = {
-  replicaId: string;
-  actorId: string;
-  status: "online" | "offline";
-  lastSeenAt: string | null;
-  cursor: number | null;
-  // Which project this replica is a checkout of (Contract B); null when it registered
-  // before projects existed or reported no repository.
-  projectId: string | null;
-};
 
 export type Membership = {
   memberId: string;
@@ -82,22 +44,6 @@ export type Invite = {
   createdAt: string;
 };
 
-/**
- * A minted `ccw_` token, without the secret. Only the metadata a workspace owner needs
- * to recognise a device and decide whether to revoke it -- the plaintext exists once, in
- * the claim response, and only its hash is ever stored.
- */
-export type WorkspaceTokenSummary = {
-  id: string;
-  workspaceId: string;
-  replicaId: string | null;
-  replicaName: string | null;
-  actorId: string;
-  lastUsedAt: string | null;
-  revokedAt: string | null;
-  createdAt: string;
-};
-
 export type MemberSummary = {
   memberId: string;
   actorId: string;
@@ -107,110 +53,25 @@ export type MemberSummary = {
   createdAt: string;
 };
 
-export type PairingCodeMint = {
-  pairingId: string;
-  /** The only time the plaintext code exists server-side; only its hash is persisted. */
-  code: string;
-  expiresAt: string;
-};
-
-export type PairingCodeStatus = {
-  status: PairingStatus;
-  claimedAt: string | null;
-  replicaId: string | null;
-  actorId: string | null;
-  /** The claiming device's X25519 public key, relayed so the minter can wrap the keyring to it. */
-  devicePublicKey: DevicePublicKey | null;
-};
-
-export type PairingClaimResult = {
-  workspaceId: string;
-  replicaId: string;
-  /** Plaintext `ccw_` workspace token; likewise only ever persisted as a hash. */
-  token: string;
-  pairingId: string;
-};
-
-/**
- * What a `ccw_` workspace token resolves to. It borrows the membership of whoever minted
- * the pairing code it came from, so downstream authorization (role checks, replica
- * ownership) is the same code path a Supabase-authenticated request takes.
- */
-export type WorkspaceTokenIdentity = Membership & { replicaId: string | null };
-
 const DEFAULT_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 
 /**
- * The plan a workspace is entitled to *right now*, as a SQL expression over the workspaces
- * row. It is the stored plan, except that a dunning grace period which has run out drops it
- * to free without waiting for the sweep in billing-sweep.ts to write that down.
- *
- * Every enforcement path reads through this rather than `plan` directly, so an unswept row
- * cannot buy a workspace extra seats, extra autonomy, or a longer retention promise.
+ * How long the change log is kept, in days. Was a per-plan window (PLAN_LIMITS) until
+ * billing was removed; it is now the one retention promise the service makes, and the only
+ * thing that still reads it is the cursor-too-old answer below.
  */
-const EFFECTIVE_PLAN_SQL =
-  "CASE WHEN grace_period_ends_at IS NOT NULL AND grace_period_ends_at <= now() THEN 'free' ELSE plan END";
+const HISTORY_RETENTION_DAYS = 7;
 
-/** Everything about a workspace's subscription, with the effective plan already applied. */
-export type WorkspaceBillingRecord = {
-  workspaceId: string;
-  /** Effective plan -- what limits apply. See EFFECTIVE_PLAN_SQL. */
-  plan: Plan;
-  /** The plan being paid for; differs from `plan` only while a payment is failing. */
-  billingPlan: PaidPlan | null;
-  billingInterval: BillingInterval | null;
-  billingStatus: string | null;
-  billingSeats: number | null;
-  gracePeriodEndsAt: string | null;
-  cancelAtPeriodEnd: boolean;
-  currentPeriodEnd: string | null;
-  stripeCustomerId: string | null;
-  stripeSubscriptionId: string | null;
-  billingOwnerMemberId: string | null;
-  billingOwnerActorId: string | null;
-};
-
-type BillingRow = {
-  billing_owner_actor_id?: string | null;
-  plan: Plan;
-  billing_plan: PaidPlan | null;
-  billing_interval: BillingInterval | null;
-  billing_status: string | null;
-  billing_seats: number | null;
-  grace_period_ends_at: Date | null;
-  subscription_cancel_at_period_end: boolean;
-  subscription_current_period_end: Date | null;
-  stripe_customer_id: string | null;
-  stripe_subscription_id: string | null;
-  billing_owner_member_id: string | null;
-};
-
-// Unqualified column names throughout, so the same list works in a SELECT over `workspaces
-// w` and in an UPDATE ... RETURNING, where it reads the post-update row.
-const BILLING_COLUMNS = `${EFFECTIVE_PLAN_SQL} AS plan, billing_plan, billing_interval, billing_status,
-        billing_seats, grace_period_ends_at, subscription_cancel_at_period_end,
-        subscription_current_period_end, stripe_customer_id, stripe_subscription_id,
-        billing_owner_member_id`;
-
-function mapBilling(workspaceId: string, row: BillingRow): WorkspaceBillingRecord {
-  return {
-    workspaceId,
-    plan: row.plan,
-    billingPlan: row.billing_plan,
-    billingInterval: row.billing_interval,
-    billingStatus: row.billing_status,
-    billingSeats: row.billing_seats,
-    gracePeriodEndsAt: row.grace_period_ends_at ? new Date(row.grace_period_ends_at).toISOString() : null,
-    cancelAtPeriodEnd: row.subscription_cancel_at_period_end,
-    currentPeriodEnd: row.subscription_current_period_end ? new Date(row.subscription_current_period_end).toISOString() : null,
-    stripeCustomerId: row.stripe_customer_id,
-    stripeSubscriptionId: row.stripe_subscription_id,
-    billingOwnerMemberId: row.billing_owner_member_id,
-    // Only the SELECT path joins members for the display name; the UPDATE ... RETURNING
-    // path does not, and its caller (applySubscriptionState) has no use for it.
-    billingOwnerActorId: row.billing_owner_actor_id ?? null
-  };
-}
+/**
+ * How many workspaces one user may create for themselves. Set far above what a real person
+ * needs, so it is an abuse ceiling -- an account farming workspaces for free unmetered
+ * storage -- rather than a plan wall.
+ *
+ * The Contract C personal workspace is deliberately outside this count: it is provisioned
+ * by ensurePersonalWorkspace(), not createWorkspace(), so a user can never be locked out of
+ * the workspace their first authenticated request depends on.
+ */
+export const MAX_SELF_SERVE_WORKSPACES_PER_USER = 10;
 
 export class PgStore {
   readonly pool: Pool;
@@ -279,6 +140,10 @@ export class PgStore {
       // shape, so this never has to be re-stated when a column it touches moves.
       const encryptionSql = await readFile(new URL("../migrations/015_encryption.sql", import.meta.url), "utf8");
       await client.query(encryptionSql);
+      // Last, because it drops what everything above created and this service no longer
+      // serves. The earlier files stay as the applied history of deployed databases.
+      const stripSql = await readFile(new URL("../migrations/016_strip.sql", import.meta.url), "utf8");
+      await client.query(stripSql);
     } finally {
       await client.query("SELECT pg_advisory_unlock(hashtext('crosscode_migrate'))");
       client.release();
@@ -338,7 +203,9 @@ export class PgStore {
            WHERE user_id = $1 AND role = 'owner' AND NOT is_personal AND disabled_at IS NULL`,
         [input.userId]
       );
-      assertSelfServeWorkspaceAvailable(Number(owned.rows[0]!.count));
+      if (Number(owned.rows[0]!.count) >= MAX_SELF_SERVE_WORKSPACES_PER_USER) {
+        throw new StoreConflictError(`You already own ${MAX_SELF_SERVE_WORKSPACES_PER_USER} workspaces, which is the per-account limit`);
+      }
       await client.query("INSERT INTO workspaces (id, name) VALUES ($1, $2)", [workspaceId, input.workspaceName]);
       await client.query(
         "INSERT INTO members (id, workspace_id, user_id, actor_id, role) VALUES ($1, $2, $3, $4, 'owner')",
@@ -367,9 +234,8 @@ export class PgStore {
   }): Promise<{ workspaceId: string; memberId: string }> {
     const memberId = randomUUID();
     return this.transaction(async (client) => {
-      const workspace = await client.query<{ plan: Plan }>(`SELECT ${EFFECTIVE_PLAN_SQL} AS plan FROM workspaces WHERE id = $1 FOR UPDATE`, [input.workspaceId]);
+      const workspace = await client.query("SELECT id FROM workspaces WHERE id = $1 FOR UPDATE", [input.workspaceId]);
       if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
-      await assertSeatAvailable(client, input.workspaceId, workspace.rows[0].plan);
       try {
         await client.query(
           `INSERT INTO members (id, workspace_id, user_id, actor_id, role) VALUES ($1, $2, $3, $4, $5)`,
@@ -470,17 +336,8 @@ export class PgStore {
       if (!invite) throw new StoreUnauthorizedError("Invite code is not valid");
       if (invite.redeemed_at) throw new StoreConflictError("Invite has already been redeemed");
       if (invite.expires_at.getTime() <= Date.now()) throw new StoreConflictError("Invite has expired");
-      // The seat cap is checked at the moment a seat is actually taken, not when the
-      // invite was minted: an owner can hand out more invites than seats, and the plan
-      // can change in between. FOR UPDATE on the workspace serialises concurrent
-      // redemptions so two invites cannot both slip past the last free seat.
-      //
-      // This is also where "a downgrade below the current seat count keeps existing
-      // members and refuses new ones" is enforced: nothing here inspects or touches the
-      // members already in the workspace, it only refuses to add another one.
-      const workspace = await client.query<{ plan: Plan }>(`SELECT ${EFFECTIVE_PLAN_SQL} AS plan FROM workspaces WHERE id = $1 FOR UPDATE`, [invite.workspace_id]);
+      const workspace = await client.query("SELECT id FROM workspaces WHERE id = $1 FOR UPDATE", [invite.workspace_id]);
       if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
-      await assertSeatAvailable(client, invite.workspace_id, workspace.rows[0].plan);
       const memberId = randomUUID();
       try {
         await client.query(
@@ -537,187 +394,6 @@ export class PgStore {
     const row = result.rows[0];
     return row ? { workspaceId: row.workspace_id, memberId: row.id } : undefined;
   }
-
-  async createPairingCode(identity: Membership): Promise<PairingCodeMint> {
-    const pairingId = randomUUID();
-    const expiresAt = new Date(Date.now() + PAIRING_CODE_TTL_MS);
-    const code = generatePairingCode();
-    return this.transaction(async (client) => {
-      await client.query(
-        `INSERT INTO pairing_codes (id, workspace_id, code_hash, created_by, expires_at)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [pairingId, identity.workspaceId, sha256(code), identity.memberId, expiresAt]
-      );
-      await this.audit(client, identity.workspaceId, identity.memberId, null, "pairing.code_created", { pairingId });
-      return { pairingId, code, expiresAt: expiresAt.toISOString() };
-    });
-  }
-
-  async getPairingCodeStatus(identity: Membership, pairingId: string): Promise<PairingCodeStatus | undefined> {
-    const result = await this.pool.query<{ expires_at: Date; claimed_at: Date | null; claimed_replica_id: string | null; claimed_actor_id: string | null; device_public_key: string | null }>(
-      `SELECT p.expires_at, p.claimed_at, p.claimed_replica_id, p.claimed_actor_id, r.device_public_key
-         FROM pairing_codes p
-         LEFT JOIN replicas r ON r.id = p.claimed_replica_id
-        WHERE p.id = $1 AND p.workspace_id = $2`,
-      [pairingId, identity.workspaceId]
-    );
-    const row = result.rows[0];
-    if (!row) return undefined;
-    return {
-      status: row.claimed_at ? "claimed" : row.expires_at.getTime() <= Date.now() ? "expired" : "pending",
-      claimedAt: row.claimed_at ? new Date(row.claimed_at).toISOString() : null,
-      replicaId: row.claimed_replica_id,
-      actorId: row.claimed_actor_id,
-      devicePublicKey: row.device_public_key as DevicePublicKey | null
-    };
-  }
-
-  /**
-   * Redeems a pairing code, unauthenticated: the code is the credential. Single-use is
-   * enforced by the conditional UPDATE below -- zero rows back means already-claimed,
-   * expired, or never existed, and the caller cannot tell which (StoreGoneError -> 410).
-   * Everything after it runs in the same transaction, so a failure anywhere (a replica
-   * name that cannot be made unique, say) releases the code rather than burning it.
-   */
-  async claimPairingCode(input: { code: string; actorId: string; replicaName: string; devicePublicKey?: DevicePublicKey }): Promise<PairingClaimResult> {
-    return this.transaction(async (client) => {
-      const claimed = await client.query<{ id: string; workspace_id: string; created_by: string }>(
-        `UPDATE pairing_codes SET claimed_at = now(), claimed_actor_id = $2
-          WHERE code_hash = $1 AND claimed_at IS NULL AND expires_at > now()
-          RETURNING id, workspace_id, created_by`,
-        [sha256(input.code), input.actorId]
-      );
-      const pairing = claimed.rows[0];
-      if (!pairing) throw new StoreGoneError("Pairing code is no longer available");
-
-      const replicaId = randomUUID();
-      let registered = false;
-      // replicas are UNIQUE (workspace_id, name); a second machine called "laptop" must
-      // still be able to pair, so fall back to a disambiguated name rather than failing.
-      for (const name of [input.replicaName, `${input.replicaName}-${randomBytes(3).toString("hex")}`]) {
-        // A failed statement poisons the surrounding transaction, so each attempt runs
-        // inside a savepoint the unique violation can be rolled back to.
-        await client.query("SAVEPOINT crosscode_replica_insert");
-        try {
-          await client.query("INSERT INTO replicas (id, workspace_id, member_id, name, device_public_key) VALUES ($1, $2, $3, $4, $5)", [
-            replicaId, pairing.workspace_id, pairing.created_by, name, input.devicePublicKey ?? null
-          ]);
-          await client.query("RELEASE SAVEPOINT crosscode_replica_insert");
-          registered = true;
-          break;
-        } catch (error) {
-          if (!isUniqueViolation(error)) throw error;
-          await client.query("ROLLBACK TO SAVEPOINT crosscode_replica_insert");
-        }
-      }
-      if (!registered) throw new StoreConflictError("Replica name is already registered");
-
-      await client.query("UPDATE pairing_codes SET claimed_replica_id = $2 WHERE id = $1", [pairing.id, replicaId]);
-
-      const token = generateWorkspaceToken();
-      await client.query(
-        `INSERT INTO workspace_tokens (id, workspace_id, member_id, replica_id, token_hash, pairing_id)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [randomUUID(), pairing.workspace_id, pairing.created_by, replicaId, sha256(token), pairing.id]
-      );
-      await this.audit(client, pairing.workspace_id, pairing.created_by, replicaId, "pairing.code_claimed", { pairingId: pairing.id });
-      return { workspaceId: pairing.workspace_id, replicaId, token, pairingId: pairing.id };
-    });
-  }
-
-  /**
-   * Resolves a `ccw_` workspace token to the membership it was minted against. Lookup is
-   * by hash, so a stolen database dump does not yield usable tokens.
-   */
-  async resolveWorkspaceToken(token: string): Promise<WorkspaceTokenIdentity> {
-    const result = await this.pool.query<{ member_id: string; user_id: string; actor_id: string; role: Membership["role"]; workspace_id: string; replica_id: string | null }>(
-      `UPDATE workspace_tokens t SET last_used_at = now()
-         FROM members m
-        WHERE t.token_hash = $1 AND t.revoked_at IS NULL
-          AND m.id = t.member_id AND m.disabled_at IS NULL
-        RETURNING m.id AS member_id, m.user_id, m.actor_id, m.role, t.workspace_id, t.replica_id`,
-      [sha256(token)]
-    );
-    const row = result.rows[0];
-    if (!row) throw new StoreUnauthorizedError("Workspace token is invalid or revoked");
-    return {
-      memberId: row.member_id, userId: row.user_id, actorId: row.actor_id,
-      workspaceId: row.workspace_id, role: row.role, replicaId: row.replica_id
-    };
-  }
-
-  /**
-   * Every `ccw_` token minted for this workspace, secret excluded. Owner-gated at the
-   * route, and re-gated here so a new call site cannot hand a member the device list.
-   */
-  async listWorkspaceTokens(identity: Membership): Promise<WorkspaceTokenSummary[]> {
-    if (identity.role !== "owner") throw new StoreUnauthorizedError("Only workspace owners can list workspace tokens");
-    const result = await this.pool.query<{
-      id: string; workspace_id: string; replica_id: string | null; replica_name: string | null;
-      actor_id: string; last_used_at: Date | null; revoked_at: Date | null; created_at: Date;
-    }>(
-      `SELECT t.id, t.workspace_id, t.replica_id, r.name AS replica_name, m.actor_id,
-              t.last_used_at, t.revoked_at, t.created_at
-         FROM workspace_tokens t
-         JOIN members m ON m.id = t.member_id
-         LEFT JOIN replicas r ON r.id = t.replica_id
-        WHERE t.workspace_id = $1
-        ORDER BY t.created_at DESC`,
-      [identity.workspaceId]
-    );
-    return result.rows.map((row) => ({
-      id: row.id,
-      workspaceId: row.workspace_id,
-      replicaId: row.replica_id,
-      replicaName: row.replica_name,
-      actorId: row.actor_id,
-      lastUsedAt: row.last_used_at ? new Date(row.last_used_at).toISOString() : null,
-      revokedAt: row.revoked_at ? new Date(row.revoked_at).toISOString() : null,
-      createdAt: new Date(row.created_at).toISOString()
-    }));
-  }
-
-  /**
-   * Revokes a paired device's `ccw_` token. resolveWorkspaceToken() already refuses a
-   * token with revoked_at set, so this takes effect on the very next request -- there is
-   * no cached session to wait out, which is the whole reason the tokens are opaque and
-   * resolved against the database on every call rather than being self-describing.
-   */
-  async revokeWorkspaceToken(identity: Membership, tokenId: string): Promise<WorkspaceTokenSummary> {
-    if (identity.role !== "owner") throw new StoreUnauthorizedError("Only workspace owners can revoke workspace tokens");
-    return this.transaction(async (client) => {
-      const result = await client.query<{ id: string; replica_id: string | null; member_id: string; last_used_at: Date | null; revoked_at: Date; created_at: Date }>(
-        `UPDATE workspace_tokens SET revoked_at = now()
-          WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL
-          RETURNING id, replica_id, member_id, last_used_at, revoked_at, created_at`,
-        [tokenId, identity.workspaceId]
-      );
-      const row = result.rows[0];
-      if (!row) throw new StoreConflictError("Workspace token is not available to revoke");
-      // Retiring the replica too, so a revoked device stops appearing as a live
-      // participant: assertReplicaOwnership already refuses a disabled replica, which
-      // closes the ingest path even for a credential that somehow survives.
-      if (row.replica_id) {
-        await client.query("UPDATE replicas SET disabled_at = now() WHERE id = $1 AND workspace_id = $2", [row.replica_id, identity.workspaceId]);
-      }
-      const actor = await client.query<{ actor_id: string; name: string | null }>(
-        `SELECT m.actor_id, r.name FROM members m LEFT JOIN replicas r ON r.id = $2 WHERE m.id = $1`,
-        [row.member_id, row.replica_id]
-      );
-      await this.audit(client, identity.workspaceId, identity.memberId, row.replica_id, "workspace_token.revoked", { tokenId });
-      return {
-        id: row.id,
-        workspaceId: identity.workspaceId,
-        replicaId: row.replica_id,
-        replicaName: actor.rows[0]?.name ?? null,
-        actorId: actor.rows[0]?.actor_id ?? "",
-        lastUsedAt: row.last_used_at ? new Date(row.last_used_at).toISOString() : null,
-        revokedAt: new Date(row.revoked_at).toISOString(),
-        createdAt: new Date(row.created_at).toISOString()
-      };
-    });
-  }
-
   async listMembers(identity: Membership): Promise<MemberSummary[]> {
     const result = await this.pool.query<{ id: string; actor_id: string; role: Membership["role"]; is_personal: boolean; disabled_at: Date | null; created_at: Date }>(
       `SELECT id, actor_id, role, is_personal, disabled_at, created_at
@@ -735,12 +411,10 @@ export class PgStore {
   }
 
   /**
-   * Removes a member's access. Sets disabled_at rather than deleting the row: operations,
-   * validations, and audit events reference members, and history must stay attributable
-   * after someone leaves. Every authorization path already filters on
-   * `disabled_at IS NULL`, so this takes effect on the member's next request -- including
-   * for any `ccw_` token minted from their pairing codes, which resolveWorkspaceToken
-   * joins through the same member row.
+   * Removes a member's access. Sets disabled_at rather than deleting the row: operations
+   * and audit events reference members, and history must stay attributable after someone
+   * leaves. Every authorization path already filters on `disabled_at IS NULL`, so this
+   * takes effect on the member's next request.
    */
   async disableMember(identity: Membership, memberId: string): Promise<MemberSummary> {
     if (identity.role !== "owner") throw new StoreUnauthorizedError("Only workspace owners can remove members");
@@ -763,29 +437,9 @@ export class PgStore {
         "UPDATE members SET disabled_at = now() WHERE id = $1 RETURNING disabled_at",
         [memberId]
       );
-      // Their devices go with them: the replicas stop being able to ingest and the
-      // tokens stop resolving, without waiting for anything to expire.
+      // Their devices go with them: the replicas stop being able to ingest, without
+      // waiting for anything to expire.
       await client.query("UPDATE replicas SET disabled_at = now() WHERE member_id = $1 AND disabled_at IS NULL", [memberId]);
-      await client.query("UPDATE workspace_tokens SET revoked_at = now() WHERE member_id = $1 AND revoked_at IS NULL", [memberId]);
-      // The subscription belongs to the workspace, not to whoever happened to start it, so
-      // the payer leaving reassigns a label and cancels nothing. The remaining owner check
-      // above guarantees there is somebody to reassign to; the longest-tenured one is
-      // picked so the choice is stable rather than arbitrary.
-      const reassigned = await client.query<{ billing_owner_member_id: string | null }>(
-        `UPDATE workspaces SET billing_owner_member_id = (
-             SELECT id FROM members
-              WHERE workspace_id = $1 AND role = 'owner' AND disabled_at IS NULL AND id <> $2
-              ORDER BY created_at ASC LIMIT 1
-           )
-          WHERE id = $1 AND billing_owner_member_id = $2
-          RETURNING billing_owner_member_id`,
-        [identity.workspaceId, memberId]
-      );
-      if (reassigned.rows[0]) {
-        await this.audit(client, identity.workspaceId, identity.memberId, null, "billing.owner_reassigned", {
-          from: memberId, to: reassigned.rows[0].billing_owner_member_id
-        });
-      }
       await this.audit(client, identity.workspaceId, identity.memberId, null, "member.removed", { memberId });
       return {
         memberId: row.id,
@@ -798,205 +452,13 @@ export class PgStore {
     });
   }
 
-  /** Active (non-disabled) member count, for the plan seat cap. */
-  async countActiveMembers(workspaceId: string): Promise<number> {
-    const result = await this.pool.query<{ count: string }>(
-      "SELECT count(*) FROM members WHERE workspace_id = $1 AND disabled_at IS NULL",
-      [workspaceId]
-    );
-    return Number(result.rows[0]!.count);
-  }
-
-  async getWorkspaceBilling(workspaceId: string): Promise<WorkspaceBillingRecord> {
-    const result = await this.pool.query<BillingRow>(
-      `SELECT ${BILLING_COLUMNS}, (SELECT actor_id FROM members WHERE id = w.billing_owner_member_id) AS billing_owner_actor_id
-         FROM workspaces w WHERE w.id = $1`,
-      [workspaceId]
-    );
-    if (!result.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
-    return mapBilling(workspaceId, result.rows[0]);
-  }
-
-  /**
-   * Records the Stripe customer a workspace's cards live on, and who is paying. Both are
-   * written before checkout rather than after, so a customer created for a checkout that
-   * was then abandoned is still found and reused next time instead of being orphaned.
-   */
-  async linkStripeCustomer(workspaceId: string, customerId: string, billingOwnerMemberId: string): Promise<void> {
-    await this.pool.query(
-      `UPDATE workspaces
-          SET stripe_customer_id = COALESCE(stripe_customer_id, $2),
-              billing_owner_member_id = COALESCE(billing_owner_member_id, $3)
-        WHERE id = $1`,
-      [workspaceId, customerId, billingOwnerMemberId]
-    );
-  }
-
-  /** The workspace a webhook is about, resolved from Stripe's own ids. */
-  async findWorkspaceForBilling(input: { subscriptionId?: string | null; customerId?: string | null }): Promise<string | null> {
-    if (!input.subscriptionId && !input.customerId) return null;
-    const result = await this.pool.query<{ id: string }>(
-      `SELECT id FROM workspaces
-        WHERE ($1::text IS NOT NULL AND stripe_subscription_id = $1)
-           OR ($2::text IS NOT NULL AND stripe_customer_id = $2)
-        ORDER BY (stripe_subscription_id = $1) DESC NULLS LAST
-        LIMIT 1`,
-      [input.subscriptionId ?? null, input.customerId ?? null]
-    );
-    return result.rows[0]?.id ?? null;
-  }
-
-  /**
-   * Applies a subscription's authoritative state to a workspace. This is the single write
-   * path for `plan`, and every lifecycle decision that has a database consequence lands
-   * here:
-   *
-   * - Payment failure opens a grace period (COALESCE, so redelivered or repeated failure
-   *   events extend nothing -- the deadline is set once, by the first failure).
-   * - A successful payment clears it.
-   * - Losing auto-always clamps autonomy_tier down instead of leaving a tier the plan no
-   *   longer unlocks, and never below auto-if-clean.
-   * - Nothing is deleted, disabled, or counted: members, operations, replicas and tokens
-   *   are not touched by a plan change in either direction.
-   *
-   * It is a pure function of the state passed in, which is what makes replayed and
-   * out-of-order webhooks safe: applying an old event re-reads current state from Stripe
-   * first, so the write it produces is the same one the newest event would produce.
-   */
-  async applySubscriptionState(input: {
-    workspaceId: string;
-    state: SubscriptionState;
-    graceDays?: number;
-  }): Promise<WorkspaceBillingRecord> {
-    const entitlement = entitlementForSubscription(input.state);
-    return this.transaction(async (client) => {
-      const previousRow = await client.query<BillingRow>(
-        `SELECT ${BILLING_COLUMNS} FROM workspaces WHERE id = $1 FOR UPDATE`,
-        [input.workspaceId]
-      );
-      if (!previousRow.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
-      const previous = mapBilling(input.workspaceId, previousRow.rows[0]);
-      // A workspace that cancelled and then bought again has two subscriptions in Stripe's
-      // history, and the dead one keeps emitting for a while (a final invoice, a deletion).
-      // Those events must not write, or a delayed one lands after the new checkout and
-      // takes the plan the user just paid for straight back off them. A non-current
-      // subscription may only be applied when the current one is itself finished
-      // (billingPlan null), which is exactly the case where it is the new one arriving.
-      if (
-        previous.stripeSubscriptionId !== null &&
-        previous.stripeSubscriptionId !== input.state.subscriptionId &&
-        previous.billingPlan !== null
-      ) return previous;
-      const updated = await client.query<BillingRow>(
-        `UPDATE workspaces w SET
-            plan = $2,
-            billing_plan = $3,
-            billing_interval = $4,
-            billing_status = $5,
-            billing_seats = $6,
-            stripe_customer_id = COALESCE($7, w.stripe_customer_id),
-            stripe_subscription_id = $8,
-            subscription_cancel_at_period_end = $9,
-            subscription_current_period_end = $10,
-            grace_period_ends_at = CASE WHEN $11::boolean
-              THEN COALESCE(w.grace_period_ends_at, now() + ($12 || ' days')::interval)
-              ELSE NULL END,
-            autonomy_tier = LEAST(w.autonomy_tier, $13::integer)
-          WHERE w.id = $1
-          RETURNING ${BILLING_COLUMNS}`,
-        [
-          input.workspaceId,
-          entitlement.plan,
-          // Keep naming the plan being paid for through a grace period; drop it only once
-          // the subscription is terminal, where there is nothing left being paid for.
-          entitlement.plan === "free" && !entitlement.inGrace ? null : input.state.plan,
-          input.state.interval,
-          input.state.status,
-          input.state.seats,
-          input.state.customerId,
-          input.state.subscriptionId,
-          input.state.cancelAtPeriodEnd,
-          input.state.currentPeriodEnd,
-          entitlement.inGrace,
-          input.graceDays ?? PAYMENT_GRACE_PERIOD_DAYS,
-          maxAutonomyTierFor(entitlement.plan)
-        ]
-      );
-      await this.audit(client, input.workspaceId, null, null, "billing.plan_applied", {
-        from: previous.plan, to: entitlement.plan,
-        status: input.state.status, subscriptionId: input.state.subscriptionId, inGrace: entitlement.inGrace
-      });
-      return mapBilling(input.workspaceId, updated.rows[0]!);
-    });
-  }
-
-  /** Mirrors a seat-quantity change Stripe has already accepted (Team's per-seat price). */
-  async recordSeatQuantity(workspaceId: string, seats: number): Promise<void> {
-    await this.pool.query("UPDATE workspaces SET billing_seats = $2 WHERE id = $1", [workspaceId, seats]);
-  }
-
-  /**
-   * Claims a Stripe webhook event id. Returns false when the event has already been
-   * processed to completion, which is what makes redelivery a no-op.
-   *
-   * An event that was claimed but never completed (the handler crashed, or Stripe timed us
-   * out mid-flight) is deliberately allowed through again: the handler is idempotent, and
-   * silently swallowing a half-applied delivery would be the worse failure.
-   */
-  async claimBillingEvent(eventId: string, type: string): Promise<boolean> {
-    const inserted = await this.pool.query(
-      "INSERT INTO billing_events (id, type) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING RETURNING id",
-      [eventId, type]
-    );
-    if (inserted.rows[0]) return true;
-    const existing = await this.pool.query<{ processed_at: Date | null }>(
-      "SELECT processed_at FROM billing_events WHERE id = $1",
-      [eventId]
-    );
-    return existing.rows[0]?.processed_at === null;
-  }
-
-  async completeBillingEvent(eventId: string, workspaceId: string | null): Promise<void> {
-    await this.pool.query(
-      "UPDATE billing_events SET processed_at = now(), workspace_id = $2 WHERE id = $1",
-      [eventId, workspaceId]
-    );
-  }
-
-  /**
-   * Drops workspaces whose payment grace period has run out to free's limits, durably.
-   * Nothing is deleted: members stay, history stays, and the autonomy tier is clamped to
-   * what free unlocks rather than reset. Reads already apply this via EFFECTIVE_PLAN_SQL,
-   * so the sweep is about writing the state down (and auditing it), not about enforcement.
-   */
-  async expireBillingGracePeriods(): Promise<number> {
-    return this.transaction(async (client) => {
-      const expired = await client.query<{ id: string; billing_plan: string | null }>(
-        `UPDATE workspaces SET plan = 'free', autonomy_tier = LEAST(autonomy_tier, $1::integer)
-          WHERE grace_period_ends_at IS NOT NULL AND grace_period_ends_at <= now() AND plan <> 'free'
-          RETURNING id, billing_plan`,
-        [maxAutonomyTierFor("free")]
-      );
-      for (const row of expired.rows) {
-        await this.audit(client, row.id, null, null, "billing.grace_period_expired", { previousPlan: row.billing_plan });
-      }
-      return expired.rows.length;
-    });
-  }
-
-  async getWorkspacePlan(workspaceId: string): Promise<string> {
-    const result = await this.pool.query<{ plan: string }>(`SELECT ${EFFECTIVE_PLAN_SQL} AS plan FROM workspaces WHERE id = $1`, [workspaceId]);
-    if (!result.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
-    return result.rows[0].plan;
-  }
-
   /**
    * Idempotent upsert of a project (Contract B), keyed by the normalized git remote when
    * the checkout has one and by the absolute repo root otherwise. Returns null when the
    * caller reported neither usable key, so every call site can safely do
    * `(await store.upsertProject(...))?.id ?? null`.
    *
-   * Safe to call on every registration/claim/pairing: repeat calls only bump
+   * Safe to call on every registration: repeat calls only bump
    * last_activity_at and refresh the advisory repo_root.
    */
   async upsertProject(
@@ -1078,38 +540,17 @@ export class PgStore {
     return result.rows[0] ? mapProject(result.rows[0]) : null;
   }
 
-  /**
-   * Upserts the project for a reported checkout and links an already-registered replica to
-   * it, returning the project id (null when the caller reported no usable key).
-   *
-   * This is the single call the pairing claim handler needs to populate Contract A's
-   * `projectId` -- it registers its replica first, then attributes it here -- so the
-   * projects logic stays entirely on this side of the ownership seam.
-   */
-  async attachReplicaToProject(
-    workspaceId: string, replicaId: string,
-    repo: { repoRoot?: string | null; repoRemote?: string | null }
-  ): Promise<string | null> {
-    const project = await this.upsertProject(workspaceId, repo);
-    if (!project) return null;
-    await this.pool.query(
-      "UPDATE replicas SET project_id = $3 WHERE id = $1 AND workspace_id = $2",
-      [replicaId, workspaceId, project.id]
-    );
-    return project.id;
-  }
-
   async registerReplica(
     userId: string, workspaceId: string, name: string,
-    repo: { repoRoot?: string | null; repoRemote?: string | null; devicePublicKey?: DevicePublicKey } = {}
+    repo: { repoRoot?: string | null; repoRemote?: string | null } = {}
   ): Promise<{ replicaId: string; createdAt: string; projectId: string | null }> {
     const membership = await this.resolveMembership(userId, workspaceId);
     const project = await this.upsertProject(workspaceId, repo);
     const replicaId = randomUUID();
     try {
       const result = await this.pool.query<{ created_at: Date }>(
-        `INSERT INTO replicas (id, workspace_id, member_id, name, project_id, device_public_key) VALUES ($1, $2, $3, $4, $5, $6) RETURNING created_at`,
-        [replicaId, workspaceId, membership.memberId, name, project?.id ?? null, repo.devicePublicKey ?? null]
+        `INSERT INTO replicas (id, workspace_id, member_id, name, project_id) VALUES ($1, $2, $3, $4, $5) RETURNING created_at`,
+        [replicaId, workspaceId, membership.memberId, name, project?.id ?? null]
       );
       return { replicaId, createdAt: new Date(result.rows[0]!.created_at).toISOString(), projectId: project?.id ?? null };
     } catch (error) {
@@ -1134,35 +575,21 @@ export class PgStore {
     return result.rows[0].project_id;
   }
 
-  async appendOperation(identity: Membership, event: TransactionCreatedEvent | SealedTransactionCreatedEvent): Promise<StoredOperation> {
+  async appendOperation(identity: Membership, event: TransactionCreatedEvent): Promise<StoredOperation> {
     const transaction = event.payload;
-    // A sealed operation exposes one opaque token per changed file instead of a path (see
-    // sealedFileSchema). Everything below treats that token exactly as it treated a path:
-    // it is the per-file key in operation_files, and it is what "each path only once"
-    // ranges over. The service does not know, and no longer needs to know, which file it is.
-    const files = isSealedTransaction(transaction)
-      ? transaction.changes.map((change) => ({ key: change.pathToken, kind: change.kind, beforeHash: null, afterHash: null }))
-      : transaction.changes.map((change) => ({ key: change.path, kind: change.kind, beforeHash: change.beforeHash ?? null, afterHash: change.afterHash ?? null }));
-    const sealed = isSealedTransaction(transaction);
+    const files = transaction.changes.map((change) => ({
+      key: change.path, kind: change.kind, beforeHash: change.beforeHash ?? null, afterHash: change.afterHash ?? null
+    }));
     if (new Set(files.map((file) => file.key)).size !== files.length) {
       throw new StoreConflictError("An operation may change each path only once");
     }
     const payloadHash = hashCanonicalPayload(event);
     return this.transaction(async (client) => {
-      const workspace = await client.query<{ next_sequence: string; plan: Plan; encryption_latched_at: Date | null }>(
-        `SELECT next_sequence, encryption_latched_at, ${EFFECTIVE_PLAN_SQL} AS plan FROM workspaces WHERE id = $1 FOR UPDATE`,
+      const workspace = await client.query<{ next_sequence: string }>(
+        "SELECT next_sequence FROM workspaces WHERE id = $1 FOR UPDATE",
         [identity.workspaceId]
       );
       if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
-      // The anti-downgrade latch. Whether a client encrypts is decided entirely by whether
-      // it holds a workspace key, so this does not cause encryption -- it prevents a
-      // workspace that has started sending ciphertext from silently going back, whether
-      // because a client was rolled back, misconfigured, or told to by a compromised
-      // service. There is deliberately no way to unlatch: doing so would be a supported
-      // path for making previously-unreadable data readable to us.
-      if (!sealed && workspace.rows[0].encryption_latched_at) {
-        throw new StoreConflictError("This workspace is end-to-end encrypted; plaintext operations are refused");
-      }
 
       const duplicate = await client.query<OperationRow>(
         `SELECT id, workspace_id, replica_id, project_id, event, server_sequence, created_at, payload_hash
@@ -1191,34 +618,23 @@ export class PgStore {
         // replica registered before projects existed.
         //
         // `event` is the single home of this operation's content: its payload is the
-        // transaction, whose changes[].afterContent are the file bodies -- or, for an
-        // encrypted workspace, the sealed envelope those bodies are inside. Nothing else
+        // transaction, whose changes[].afterContent are the file bodies. Nothing else
         // stores those bytes; mapOperation() reads the transaction back out of this
-        // column, and operation_files below indexes into it by path (or, when sealed, by
-        // the opaque per-operation token that stands in for one).
-        //
-        // retention_days is stamped from the plan in effect *now*, which is what makes a
-        // later downgrade unable to delete this row early: retention is a promise made when
-        // the row is written, not a property of whatever plan the workspace is on when the
-        // sweep eventually runs (BUILD_INSTRUCTIONS.md Phase 10).
+        // column, and operation_files below indexes into it by path.
         `INSERT INTO operations
           (id, workspace_id, event_id, client_sequence, server_sequence, replica_id, member_id,
-           actor_id, payload_hash, event, project_id, retention_days, sealed, key_epoch)
+           actor_id, payload_hash, event, project_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb,
-                 (SELECT project_id FROM replicas WHERE id = $6 AND workspace_id = $2), $11, $12, $13)
+                 (SELECT project_id FROM replicas WHERE id = $6 AND workspace_id = $2))
          RETURNING id, workspace_id, replica_id, project_id, event, server_sequence, created_at, payload_hash`,
         [
           transaction.id, identity.workspaceId, event.id, event.clientSequence, sequence, event.replicaId,
-          identity.memberId, identity.actorId, payloadHash, JSON.stringify(storedEvent),
-          PLAN_LIMITS[workspace.rows[0].plan].historyRetentionDays,
-          sealed, isSealedTransaction(transaction) ? transaction.sealed.epoch : null
+          identity.memberId, identity.actorId, payloadHash, JSON.stringify(storedEvent)
         ]
       );
       // A per-path index into the operation above, not a second copy of it: kind and the
       // two hashes are what a "who else touched this file" query needs, and the change
-      // itself is reachable from (workspace_id, operation_id, path). For a sealed
-      // operation the hashes are absent and `path` holds the opaque token instead -- the
-      // index keeps its shape, and stops being an index anyone here can read.
+      // itself is reachable from (workspace_id, operation_id, path).
       for (const file of files) {
         await client.query(
           `INSERT INTO operation_files
@@ -1228,157 +644,13 @@ export class PgStore {
         );
       }
       await client.query(
-        `UPDATE workspaces SET next_sequence = $2,
-                encryption_latched_at = CASE WHEN $3 AND encryption_latched_at IS NULL THEN now() ELSE encryption_latched_at END
-          WHERE id = $1`,
-        [identity.workspaceId, sequence, sealed]
+        "UPDATE workspaces SET next_sequence = $2 WHERE id = $1",
+        [identity.workspaceId, sequence]
       );
       await this.audit(client, identity.workspaceId, identity.memberId, event.replicaId, "operation.received", {
         operationId: transaction.id, eventId: event.id, serverSequence: sequence
       });
       return mapOperation(inserted.rows[0]!);
-    });
-  }
-
-  // -------------------------------------------------------------------------
-  // Workspace key distribution (docs/security.md#end-to-end-encryption)
-  //
-  // Everything below relays ciphertext between devices. The service picks no keys,
-  // holds no private key, and can open none of what it stores here -- its only jobs
-  // are to say who is eligible to receive a grant, and to keep a grant addressed to
-  // the public key the recipient actually registered.
-  // -------------------------------------------------------------------------
-
-  /**
-   * Records a device's X25519 public key. Write-once: a replica that already has one on
-   * file cannot swap it, because a swap would silently redirect every future grant --
-   * including the ones a rotation issues automatically -- to a key of the caller's
-   * choosing. Re-sending the same key is a no-op so a restarting daemon can be naive.
-   */
-  async registerDevicePublicKey(workspaceId: string, replicaId: string, publicKey: DevicePublicKey): Promise<void> {
-    const result = await this.pool.query(
-      `UPDATE replicas SET device_public_key = $3
-        WHERE id = $1 AND workspace_id = $2 AND (device_public_key IS NULL OR device_public_key = $3)
-        RETURNING id`,
-      [replicaId, workspaceId, publicKey]
-    );
-    if (result.rows[0]) return;
-    const existing = await this.pool.query<{ id: string }>("SELECT id FROM replicas WHERE id = $1 AND workspace_id = $2", [replicaId, workspaceId]);
-    if (!existing.rows[0]) throw new StoreUnauthorizedError("Replica is not registered in this workspace");
-    throw new StoreConflictError("This device already registered a different encryption key");
-  }
-
-  /**
-   * What a device needs to decide whether it may mint the workspace's first key, plus
-   * every epoch already wrapped to it. `keyHolders` counts *active* replicas holding at
-   * least one grant; a removed member's disabled replicas drop out of it, which is what
-   * makes a post-removal rotation stop granting them anything.
-   */
-  async getWorkspaceKeyState(workspaceId: string, replicaId: string): Promise<{ encrypted: boolean; keyHolders: number; grants: WorkspaceKeyGrant[] }> {
-    const [workspace, holders, grants] = await Promise.all([
-      this.pool.query<{ encryption_latched_at: Date | null }>("SELECT encryption_latched_at FROM workspaces WHERE id = $1", [workspaceId]),
-      this.pool.query<{ count: string }>(
-        `SELECT count(DISTINCT g.recipient_replica_id)
-           FROM workspace_key_grants g
-           JOIN replicas r ON r.id = g.recipient_replica_id
-          WHERE g.workspace_id = $1 AND r.disabled_at IS NULL`,
-        [workspaceId]
-      ),
-      this.pool.query<KeyGrantRow>(
-        `SELECT epoch, key_id, recipient_replica_id, wrapped, created_at
-           FROM workspace_key_grants
-          WHERE workspace_id = $1 AND recipient_replica_id = $2
-          ORDER BY epoch ASC`,
-        [workspaceId, replicaId]
-      )
-    ]);
-    if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
-    return {
-      encrypted: workspace.rows[0].encryption_latched_at !== null,
-      keyHolders: Number(holders.rows[0]!.count),
-      grants: grants.rows.map(mapKeyGrant)
-    };
-  }
-
-  /**
-   * Every active device with a registered key, and which epochs it already holds. A
-   * recipient with a non-empty `epochs` was approved by a human once (grants are only
-   * ever issued after the pairing fingerprint check), which is what lets a rotating
-   * device re-grant to it without asking again -- and why a recipient with no epochs is
-   * never auto-granted anything.
-   */
-  async listWorkspaceKeyRecipients(workspaceId: string): Promise<WorkspaceKeyRecipient[]> {
-    const result = await this.pool.query<{ id: string; name: string; actor_id: string; device_public_key: string; epochs: number[] | null }>(
-      `SELECT r.id, r.name, m.actor_id, r.device_public_key,
-              array_remove(array_agg(g.epoch ORDER BY g.epoch), NULL) AS epochs
-         FROM replicas r
-         JOIN members m ON m.id = r.member_id
-         LEFT JOIN workspace_key_grants g ON g.workspace_id = r.workspace_id AND g.recipient_replica_id = r.id
-        WHERE r.workspace_id = $1 AND r.disabled_at IS NULL AND m.disabled_at IS NULL AND r.device_public_key IS NOT NULL
-        GROUP BY r.id, r.name, m.actor_id, r.device_public_key
-        ORDER BY r.name`,
-      [workspaceId]
-    );
-    return result.rows.map((row) => ({
-      replicaId: row.id, replicaName: row.name, actorId: row.actor_id,
-      publicKey: row.device_public_key as DevicePublicKey, epochs: row.epochs ?? []
-    }));
-  }
-
-  /**
-   * Stores wrapped epoch keys. The recipient's public key is checked against the one on
-   * file rather than trusted from the request, so a grant can never be filed against a
-   * key the recipient did not register -- otherwise a caller could park a grant wrapped
-   * to itself and wait for the recipient's key to be "corrected" later.
-   *
-   * Re-issuing an epoch a device already holds is ignored rather than rejected: the
-   * daemon's sweep re-offers every epoch it holds on every sync, and making that a
-   * conflict would turn ordinary operation into a stream of errors.
-   */
-  async insertWorkspaceKeyGrants(
-    identity: Membership,
-    senderReplicaId: string | null,
-    grants: CreateWorkspaceKeyGrantsRequest["grants"],
-    options: { requireFirst?: boolean } = {}
-  ): Promise<{ stored: number }> {
-    if (identity.role === "viewer") throw new StoreUnauthorizedError("Viewer membership cannot grant workspace keys");
-    return this.transaction(async (client) => {
-      // `requireFirst` is how a device claims the right to mint the workspace's very
-      // first key. Two devices starting against a brand-new workspace at the same instant
-      // would otherwise each mint an epoch 0, and the two would be different keys under
-      // the same number -- a fork neither side could reconcile. Serializing on the
-      // workspace row turns that into one winner and one caller that learns to wait.
-      if (options.requireFirst) {
-        await client.query("SELECT id FROM workspaces WHERE id = $1 FOR UPDATE", [identity.workspaceId]);
-        const existing = await client.query("SELECT 1 FROM workspace_key_grants WHERE workspace_id = $1 LIMIT 1", [identity.workspaceId]);
-        if (existing.rows[0]) throw new StoreConflictError("This workspace already has a key holder");
-      }
-      let stored = 0;
-      for (const grant of grants) {
-        const recipient = await client.query<{ device_public_key: string | null }>(
-          `SELECT r.device_public_key FROM replicas r JOIN members m ON m.id = r.member_id
-            WHERE r.id = $1 AND r.workspace_id = $2 AND r.disabled_at IS NULL AND m.disabled_at IS NULL`,
-          [grant.recipientReplicaId, identity.workspaceId]
-        );
-        const registered = recipient.rows[0]?.device_public_key;
-        if (!registered) throw new StoreConflictError("Grant recipient is not an active device with a registered key");
-        if (registered !== grant.recipientPublicKey) throw new StoreConflictError("Grant recipient's registered key does not match");
-        const inserted = await client.query(
-          `INSERT INTO workspace_key_grants
-             (workspace_id, epoch, recipient_replica_id, key_id, recipient_public_key, sender_replica_id, wrapped)
-           VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-           ON CONFLICT (workspace_id, epoch, recipient_replica_id) DO NOTHING
-           RETURNING epoch`,
-          [identity.workspaceId, grant.epoch, grant.recipientReplicaId, grant.keyId, grant.recipientPublicKey, senderReplicaId, JSON.stringify(grant.wrapped)]
-        );
-        if (inserted.rows[0]) {
-          stored += 1;
-          await this.audit(client, identity.workspaceId, identity.memberId, senderReplicaId, "workspace_key.granted", {
-            epoch: grant.epoch, keyId: grant.keyId, recipientReplicaId: grant.recipientReplicaId
-          });
-        }
-      }
-      return { stored };
     });
   }
 
@@ -1389,45 +661,6 @@ export class PgStore {
     );
     if (!result.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
     return Number(result.rows[0].next_sequence);
-  }
-
-  /**
-   * The clamp on the way out is what makes auto-always a wall rather than a suggestion. A
-   * plan change writes the clamped tier back (see applySubscriptionState), but a grace
-   * period that lapses does not write anything until the sweep runs, and this is the value
-   * the daemon syncs its auto-apply policy from -- so it is clamped here too. Falling back
-   * to auto-if-clean rather than erroring is deliberate: losing the paid tier should cost
-   * the feature, not the workspace.
-   */
-  async getWorkspaceAutonomyTier(workspaceId: string): Promise<0 | 1 | 2> {
-    const result = await this.pool.query<{ autonomy_tier: number; plan: Plan }>(
-      `SELECT autonomy_tier, ${EFFECTIVE_PLAN_SQL} AS plan FROM workspaces WHERE id = $1`,
-      [workspaceId]
-    );
-    if (!result.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
-    return clampAutonomyTierToPlan(result.rows[0].autonomy_tier as 0 | 1 | 2, result.rows[0].plan);
-  }
-
-  /**
-   * Only the workspace owner may change the autonomy tier -- callers (http.ts) are
-   * expected to have already checked identity.role, this is a second gate at the
-   * data layer so the check can never be skipped by a new call site.
-   */
-  async setWorkspaceAutonomyTier(identity: Membership, tier: 0 | 1 | 2): Promise<0 | 1 | 2> {
-    if (identity.role !== "owner") throw new StoreUnauthorizedError("Only the workspace owner can change the autonomy tier");
-    return this.transaction(async (client) => {
-      const workspace = await client.query<{ plan: Plan }>(`SELECT ${EFFECTIVE_PLAN_SQL} AS plan FROM workspaces WHERE id = $1 FOR UPDATE`, [identity.workspaceId]);
-      if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
-      // The tier a plan unlocks is checked here rather than only at the route, for the
-      // same reason the owner check is: this is the single write path, so a new caller
-      // cannot reach a tier the workspace has not paid for by skipping a gate.
-      assertPlanAllowsAutonomyTier(workspace.rows[0].plan, AUTONOMY_TIER_NAMES[tier]);
-      const result = await client.query<{ autonomy_tier: number }>(
-        "UPDATE workspaces SET autonomy_tier = $2 WHERE id = $1 RETURNING autonomy_tier",
-        [identity.workspaceId, tier]
-      );
-      return result.rows[0]!.autonomy_tier as 0 | 1 | 2;
-    });
   }
 
   /**
@@ -1445,8 +678,8 @@ export class PgStore {
    * "cursor-too-old" instead, which callers must surface as a resync rather than a page.
    */
   async listOperations(workspaceId: string, cursor: number, limit: number): Promise<OperationPage> {
-    const workspace = await this.pool.query<{ plan: Plan; operations_pruned_through: string }>(
-      "SELECT plan, operations_pruned_through FROM workspaces WHERE id = $1",
+    const workspace = await this.pool.query<{ operations_pruned_through: string }>(
+      "SELECT operations_pruned_through FROM workspaces WHERE id = $1",
       [workspaceId]
     );
     if (!workspace.rows[0]) throw new StoreUnauthorizedError("Workspace is not available");
@@ -1455,7 +688,7 @@ export class PgStore {
       return {
         status: "cursor-too-old",
         resyncFrom: prunedThrough,
-        retentionDays: PLAN_LIMITS[workspace.rows[0].plan].historyRetentionDays
+        retentionDays: HISTORY_RETENTION_DAYS
       };
     }
     const result = await this.pool.query<OperationRow>(
@@ -1468,140 +701,6 @@ export class PgStore {
     );
     const items = result.rows.slice(0, limit).map(mapOperation);
     return { status: "ok", items, nextCursor: items.at(-1)?.serverSequence ?? cursor, hasMore: result.rows.length > limit };
-  }
-
-  async upsertTask(identity: Membership, event: TaskCreatedEvent | TaskUpdatedEvent): Promise<RemoteTask> {
-    const task = event.payload;
-    const result = await this.pool.query<TaskRow>(
-      `INSERT INTO tasks (id, workspace_id, event_id, replica_id, payload, updated_at)
-       VALUES ($1, $2, $3, $4, $5::jsonb, now())
-       ON CONFLICT (workspace_id, id) DO UPDATE
-         SET event_id = excluded.event_id, replica_id = excluded.replica_id, payload = excluded.payload, updated_at = now()
-       RETURNING id, workspace_id, event_id, replica_id, payload, updated_at`,
-      [task.id, identity.workspaceId, event.id, event.replicaId, JSON.stringify(task)]
-    );
-    return mapTask(result.rows[0]!);
-  }
-
-  async listTasks(workspaceId: string, after: string, limit: number): Promise<{ items: RemoteTask[]; nextCursor: string }> {
-    const result = await this.pool.query<TaskRow>(
-      `SELECT id, workspace_id, event_id, replica_id, payload, updated_at
-         FROM tasks
-        WHERE workspace_id = $1 AND updated_at > $2
-        ORDER BY updated_at ASC
-        LIMIT $3`,
-      [workspaceId, after, limit]
-    );
-    const items = result.rows.map(mapTask);
-    return { items, nextCursor: items.at(-1)?.updatedAt ?? after };
-  }
-
-  async upsertClaim(identity: Membership, event: ClaimCreatedEvent | ClaimReleasedEvent): Promise<RemoteClaim> {
-    const claim = event.payload;
-    const released = event.type === "claim.released";
-    const result = await this.pool.query<ClaimRow>(
-      `INSERT INTO claims (id, workspace_id, event_id, replica_id, payload, released_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, now())
-       ON CONFLICT (workspace_id, id) DO UPDATE
-         SET event_id = excluded.event_id, replica_id = excluded.replica_id, payload = excluded.payload,
-             released_at = excluded.released_at, updated_at = now()
-       RETURNING id, workspace_id, event_id, replica_id, payload, released_at, updated_at`,
-      [claim.id, identity.workspaceId, event.id, event.replicaId, JSON.stringify(claim), released ? new Date() : null]
-    );
-    return mapClaim(result.rows[0]!);
-  }
-
-  async listClaims(workspaceId: string, after: string, limit: number): Promise<{ items: RemoteClaim[]; nextCursor: string }> {
-    const result = await this.pool.query<ClaimRow>(
-      `SELECT id, workspace_id, event_id, replica_id, payload, released_at, updated_at
-         FROM claims
-        WHERE workspace_id = $1 AND updated_at > $2
-        ORDER BY updated_at ASC
-        LIMIT $3`,
-      [workspaceId, after, limit]
-    );
-    const items = result.rows.map(mapClaim);
-    return { items, nextCursor: items.at(-1)?.updatedAt ?? after };
-  }
-
-  async upsertHandoff(identity: Membership, event: HandoffRequestedEvent | HandoffRespondedEvent): Promise<RemoteHandoff> {
-    const handoff = event.payload;
-    const responded = event.type === "handoff.responded";
-    const result = await this.pool.query<HandoffRow>(
-      `INSERT INTO handoffs (id, workspace_id, event_id, replica_id, payload, responded_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, now())
-       ON CONFLICT (workspace_id, id) DO UPDATE
-         SET event_id = excluded.event_id, replica_id = excluded.replica_id, payload = excluded.payload,
-             responded_at = excluded.responded_at, updated_at = now()
-       RETURNING id, workspace_id, event_id, replica_id, payload, responded_at, updated_at`,
-      [handoff.id, identity.workspaceId, event.id, event.replicaId, JSON.stringify(handoff), responded ? new Date() : null]
-    );
-    return mapHandoff(result.rows[0]!);
-  }
-
-  async listHandoffs(workspaceId: string, after: string, limit: number): Promise<{ items: RemoteHandoff[]; nextCursor: string }> {
-    const result = await this.pool.query<HandoffRow>(
-      `SELECT id, workspace_id, event_id, replica_id, payload, responded_at, updated_at
-         FROM handoffs
-        WHERE workspace_id = $1 AND updated_at > $2
-        ORDER BY updated_at ASC
-        LIMIT $3`,
-      [workspaceId, after, limit]
-    );
-    const items = result.rows.map(mapHandoff);
-    return { items, nextCursor: items.at(-1)?.updatedAt ?? after };
-  }
-
-  async upsertIntent(identity: Membership, event: IntentPublishedEvent): Promise<RemoteIntent> {
-    const intent = event.payload;
-    const result = await this.pool.query<IntentRow>(
-      `INSERT INTO intents (id, workspace_id, event_id, replica_id, payload, updated_at)
-       VALUES ($1, $2, $3, $4, $5::jsonb, now())
-       ON CONFLICT (workspace_id, id) DO UPDATE
-         SET event_id = excluded.event_id, replica_id = excluded.replica_id, payload = excluded.payload, updated_at = now()
-       RETURNING id, workspace_id, event_id, replica_id, payload, updated_at`,
-      [intent.id, identity.workspaceId, event.id, event.replicaId, JSON.stringify(intent)]
-    );
-    return mapIntent(result.rows[0]!);
-  }
-
-  async listIntents(workspaceId: string, after: string, limit: number): Promise<{ items: RemoteIntent[]; nextCursor: string }> {
-    const result = await this.pool.query<IntentRow>(
-      `SELECT id, workspace_id, event_id, replica_id, payload, updated_at
-         FROM intents
-        WHERE workspace_id = $1 AND updated_at > $2
-        ORDER BY updated_at ASC
-        LIMIT $3`,
-      [workspaceId, after, limit]
-    );
-    const items = result.rows.map(mapIntent);
-    return { items, nextCursor: items.at(-1)?.updatedAt ?? after };
-  }
-
-  async recordValidation(identity: Membership, event: ValidationCompletedEvent): Promise<RemoteValidation> {
-    const validation = event.payload;
-    const result = await this.pool.query<ValidationRow>(
-      `INSERT INTO validations (id, workspace_id, event_id, replica_id, payload, created_at)
-       VALUES ($1, $2, $3, $4, $5::jsonb, now())
-       ON CONFLICT (workspace_id, id) DO UPDATE
-         SET event_id = excluded.event_id, replica_id = excluded.replica_id, payload = excluded.payload
-       RETURNING id, workspace_id, event_id, replica_id, payload, created_at`,
-      [validation.id, identity.workspaceId, event.id, event.replicaId, JSON.stringify(validation)]
-    );
-    return mapValidation(result.rows[0]!);
-  }
-
-  async listValidations(workspaceId: string, after: string, limit: number): Promise<{ items: RemoteValidation[]; nextCursor: string }> {
-    const result = await this.pool.query<ValidationRow>(
-      `SELECT id, workspace_id, event_id, replica_id, payload, created_at
-         FROM validations
-        WHERE workspace_id = $1 AND created_at > $2
-        ORDER BY created_at ASC
-        LIMIT $3`,
-      [workspaceId, after, limit]
-    );
-    const items = result.rows.map(mapValidation);
-    return { items, nextCursor: items.at(-1)?.createdAt ?? after };
   }
 
   async recordSessionStart(workspaceId: string, replicaId: string, cursor: number): Promise<void> {
@@ -1637,31 +736,6 @@ export class PgStore {
     return result.rows.map((row) => ({ replicaId: row.replica_id, actorId: row.actor_id, startedAt: new Date(row.started_at).toISOString() }));
   }
 
-  async listPresence(workspaceId: string): Promise<PresenceSummary[]> {
-    const result = await this.pool.query<{
-      replica_id: string; actor_id: string; project_id: string | null; started_at: Date | null; ended_at: Date | null; summary: { cursor?: number } | null;
-    }>(
-      `SELECT DISTINCT ON (r.id) r.id AS replica_id, m.actor_id, r.project_id, s.started_at, s.ended_at, s.summary
-         FROM replicas r
-         JOIN members m ON m.id = r.member_id
-         LEFT JOIN sessions s ON s.workspace_id = r.workspace_id AND s.replica_id = r.id
-        WHERE r.workspace_id = $1
-        ORDER BY r.id, s.started_at DESC NULLS LAST`,
-      [workspaceId]
-    );
-    return result.rows.map((row) => {
-      const lastSeenAt = row.ended_at ?? row.started_at;
-      return {
-        replicaId: row.replica_id,
-        actorId: row.actor_id,
-        status: row.started_at !== null && row.ended_at === null ? "online" : "offline",
-        lastSeenAt: lastSeenAt ? new Date(lastSeenAt).toISOString() : null,
-        cursor: typeof row.summary?.cursor === "number" ? row.summary.cursor : null,
-        projectId: row.project_id
-      };
-    });
-  }
-
   private async transaction<T>(body: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
     try {
@@ -1687,146 +761,6 @@ export class PgStore {
       [randomUUID(), workspaceId, memberId, replicaId, action, JSON.stringify(details)]
     );
   }
-
-  /**
-   * Shared-across-instances counterpart to the in-process rate limiter, for limits that are
-   * a security control rather than a courtesy (see migrations/012_rate_limits.sql).
-   *
-   * One statement, so concurrent requests on different instances cannot interleave a read
-   * and a write and both conclude they are under the limit. Returns false once the caller
-   * has spent its budget for the current window.
-   */
-  async takeRateLimit(bucket: string, maximum: number, windowSeconds: number): Promise<boolean> {
-    const result = await this.pool.query<{ count: number }>(
-      `INSERT INTO rate_limits (bucket, window_start, count) VALUES ($1, now(), 1)
-       ON CONFLICT (bucket) DO UPDATE SET
-         count = CASE WHEN now() - rate_limits.window_start >= make_interval(secs => $2)
-                      THEN 1 ELSE rate_limits.count + 1 END,
-         window_start = CASE WHEN now() - rate_limits.window_start >= make_interval(secs => $2)
-                             THEN now() ELSE rate_limits.window_start END
-       RETURNING count`,
-      [bucket, windowSeconds]
-    );
-    return (result.rows[0]?.count ?? 1) <= maximum;
-  }
-
-  /** Expired buckets carry no state worth keeping; without this the table grows per distinct IP. */
-  async pruneRateLimits(olderThanSeconds = 3_600): Promise<number> {
-    const result = await this.pool.query(
-      "DELETE FROM rate_limits WHERE window_start < now() - make_interval(secs => $1)",
-      [olderThanSeconds]
-    );
-    return result.rowCount ?? 0;
-  }
-
-  async pruneAuditEvents(olderThanDays: number): Promise<number> {
-    assertPositiveInteger(olderThanDays, "olderThanDays");
-    const result = await this.pool.query(
-      `DELETE FROM audit_events WHERE created_at < now() - ($1 || ' days')::interval RETURNING id`,
-      [olderThanDays]
-    );
-    return result.rowCount ?? result.rows.length;
-  }
-
-  /**
-   * Enforces PLAN_LIMITS[plan].historyRetentionDays across every workspace. Safe to run
-   * concurrently with ingest and with itself: each workspace is swept under its own row
-   * lock, and the watermark only ever moves forward.
-   *
-   * Requires a role with DELETE on operations, which the request-serving role deliberately
-   * does not have (assertRuntimePrivileges). Callers pass a privileged connection: the
-   * scheduled sweep in retention.ts, or `pnpm service:prune`.
-   */
-  async pruneOperationsByRetention(): Promise<RetentionSweepResult[]> {
-    const workspaces = await this.pool.query<{ id: string; plan: Plan }>("SELECT id, plan FROM workspaces ORDER BY id");
-    const results: RetentionSweepResult[] = [];
-    for (const workspace of workspaces.rows) {
-      results.push(await this.pruneWorkspaceOperations(workspace.id, workspace.plan));
-    }
-    return results;
-  }
-
-  private async pruneWorkspaceOperations(workspaceId: string, plan: Plan): Promise<RetentionSweepResult> {
-    const retentionDays = PLAN_LIMITS[plan].historyRetentionDays;
-    assertPositiveInteger(retentionDays, "historyRetentionDays");
-    return this.transaction(async (client) => {
-      const locked = await client.query<{ operations_pruned_through: string }>(
-        "SELECT operations_pruned_through FROM workspaces WHERE id = $1 FOR UPDATE",
-        [workspaceId]
-      );
-      const unchanged = { workspaceId, plan, retentionDays, deleted: 0 };
-      if (!locked.rows[0]) return { ...unchanged, prunedThrough: 0 };
-      const prunedThrough = Number(locked.rows[0].operations_pruned_through);
-      // Deleted by sequence, never directly by age. server_sequence is assigned under the
-      // workspace row lock while created_at is the inserting transaction's clock, so two
-      // concurrent ingests can commit with their timestamps inverted relative to their
-      // sequences. Deleting a prefix of the sequence keeps what remains a contiguous
-      // suffix, which is precisely what the watermark promises readers.
-      //
-      // Each row is measured against its *own* retention_days -- the window promised by the
-      // plan in effect when it was written -- rather than against the workspace's current
-      // plan. That is what makes a downgrade unable to delete history retroactively
-      // (BUILD_INSTRUCTIONS.md Phase 10): shrinking the window stops history being extended,
-      // it does not shorten what was already kept.
-      //
-      // The cutoff is therefore the sequence just below the oldest row that is *still* live,
-      // not the newest expired one. Those differ exactly when an expired row sits above a
-      // live one -- which per-row windows make possible and a single window does not -- and
-      // taking the newest expired sequence there would delete live rows underneath it.
-      // When nothing is live the whole table is expired and the cutoff is the highest
-      // sequence. COALESCE keeps a row that predates the column (none after 014's backfill)
-      // on the workspace's current window rather than treating NULL as expired.
-      const cutoff = await client.query<{ cutoff: string | null }>(
-        `SELECT COALESCE(
-                  (SELECT min(server_sequence) - 1 FROM operations
-                    WHERE workspace_id = $1
-                      AND created_at >= now() - (COALESCE(retention_days, $2) || ' days')::interval),
-                  (SELECT max(server_sequence) FROM operations WHERE workspace_id = $1)
-                ) AS cutoff`,
-        [workspaceId, retentionDays]
-      );
-      const cutoffSequence = Number(cutoff.rows[0]?.cutoff ?? 0);
-      if (cutoffSequence <= prunedThrough) return { ...unchanged, prunedThrough };
-      // operation_files rows follow via ON DELETE CASCADE.
-      const deleted = await client.query(
-        "DELETE FROM operations WHERE workspace_id = $1 AND server_sequence <= $2",
-        [workspaceId, cutoffSequence]
-      );
-      await client.query(
-        "UPDATE workspaces SET operations_pruned_through = $2 WHERE id = $1",
-        [workspaceId, cutoffSequence]
-      );
-      return { workspaceId, plan, retentionDays, deleted: deleted.rowCount ?? 0, prunedThrough: cutoffSequence };
-    });
-  }
-
-  async pruneEndedSessions(olderThanDays: number): Promise<number> {
-    assertPositiveInteger(olderThanDays, "olderThanDays");
-    const result = await this.pool.query(
-      `DELETE FROM sessions WHERE ended_at IS NOT NULL AND ended_at < now() - ($1 || ' days')::interval RETURNING id`,
-      [olderThanDays]
-    );
-    return result.rowCount ?? result.rows.length;
-  }
-}
-
-/**
- * Enforces the plan's seat cap inside the caller's transaction, so the count and the
- * INSERT that follows it cannot be separated by a concurrent redemption. Callers are
- * expected to hold FOR UPDATE on the workspace row first.
- */
-async function assertSeatAvailable(client: PoolClient, workspaceId: string, plan: Plan): Promise<void> {
-  const result = await client.query<{ count: string }>(
-    "SELECT count(*) FROM members WHERE workspace_id = $1 AND disabled_at IS NULL",
-    [workspaceId]
-  );
-  assertSeatCapAvailable(plan, Number(result.rows[0]!.count));
-}
-
-function assertPositiveInteger(value: number, name: string): void {
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error(`${name} must be a positive integer`);
-  }
 }
 
 export function safePoolConfig(connectionString: string): PoolConfig {
@@ -1846,11 +780,8 @@ type OperationRow = {
   workspace_id: string;
   replica_id: string;
   project_id: string | null;
-  /**
-   * The stored envelope; its payload is this operation's transaction, plaintext
-   * (`transaction.created`) or sealed (`transaction.sealed`).
-   */
-  event: TransactionCreatedEvent | SealedTransactionCreatedEvent;
+  /** The stored envelope; its payload is this operation's transaction. */
+  event: TransactionCreatedEvent;
   server_sequence: string;
   created_at: Date;
   payload_hash?: string;
@@ -1867,126 +798,9 @@ function mapOperation(row: OperationRow): StoredOperation {
     // Read out of the envelope rather than from a column of its own. jsonb canonicalizes
     // a value the same way wherever it is stored, so this is byte-for-byte what the
     // dropped operations.transaction column returned -- see the byte-identity assertion
-    // in store.integration.test.ts. For an encrypted workspace this is the sealed
-    // envelope, and it passes through this service without ever being opened.
+    // in store.integration.test.ts.
     transaction: row.event.payload as SyncedTransaction,
     serverSequence: Number(row.server_sequence),
-    createdAt: new Date(row.created_at).toISOString()
-  };
-}
-
-type KeyGrantRow = {
-  epoch: number;
-  key_id: string;
-  recipient_replica_id: string;
-  wrapped: WrappedKey;
-  created_at: Date;
-};
-
-function mapKeyGrant(row: KeyGrantRow): WorkspaceKeyGrant {
-  return {
-    epoch: row.epoch,
-    keyId: row.key_id,
-    recipientReplicaId: row.recipient_replica_id,
-    wrapped: row.wrapped,
-    createdAt: new Date(row.created_at).toISOString()
-  };
-}
-
-type TaskRow = {
-  id: string;
-  workspace_id: string;
-  event_id: string;
-  replica_id: string;
-  payload: Task;
-  updated_at: Date;
-};
-
-function mapTask(row: TaskRow): RemoteTask {
-  return {
-    eventId: row.event_id,
-    workspaceId: row.workspace_id,
-    senderReplicaId: row.replica_id,
-    task: row.payload,
-    updatedAt: new Date(row.updated_at).toISOString()
-  };
-}
-
-type ClaimRow = {
-  id: string;
-  workspace_id: string;
-  event_id: string;
-  replica_id: string;
-  payload: Claim;
-  released_at: Date | null;
-  updated_at: Date;
-};
-
-function mapClaim(row: ClaimRow): RemoteClaim {
-  return {
-    eventId: row.event_id,
-    workspaceId: row.workspace_id,
-    senderReplicaId: row.replica_id,
-    claim: row.payload,
-    released: row.released_at !== null,
-    updatedAt: new Date(row.updated_at).toISOString()
-  };
-}
-
-type HandoffRow = {
-  id: string;
-  workspace_id: string;
-  event_id: string;
-  replica_id: string;
-  payload: Handoff;
-  responded_at: Date | null;
-  updated_at: Date;
-};
-
-function mapHandoff(row: HandoffRow): RemoteHandoff {
-  return {
-    eventId: row.event_id,
-    workspaceId: row.workspace_id,
-    senderReplicaId: row.replica_id,
-    handoff: row.payload,
-    updatedAt: new Date(row.updated_at).toISOString()
-  };
-}
-
-type IntentRow = {
-  id: string;
-  workspace_id: string;
-  event_id: string;
-  replica_id: string;
-  payload: Intent;
-  updated_at: Date;
-};
-
-function mapIntent(row: IntentRow): RemoteIntent {
-  return {
-    eventId: row.event_id,
-    workspaceId: row.workspace_id,
-    senderReplicaId: row.replica_id,
-    intent: row.payload,
-    updatedAt: new Date(row.updated_at).toISOString()
-  };
-}
-
-type ValidationRow = {
-  id: string;
-  workspace_id: string;
-  event_id: string;
-  replica_id: string;
-  payload: Validation;
-  created_at: Date;
-};
-
-function mapValidation(row: ValidationRow): RemoteValidation {
-  return {
-    eventId: row.event_id,
-    workspaceId: row.workspace_id,
-    senderReplicaId: row.replica_id,
-    validation: row.payload,
     createdAt: new Date(row.created_at).toISOString()
   };
 }
@@ -2048,27 +862,6 @@ function generateInviteCode(): string {
   let code = "";
   for (const byte of bytes) code += INVITE_CODE_ALPHABET[byte % INVITE_CODE_ALPHABET.length];
   return code;
-}
-
-function sha256(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
-// XXXX-XXXX over Crockford base32 is 40 bits of entropy behind a 15-minute TTL and a
-// 10-attempts-per-minute-per-IP claim limit. 256 is divisible by the 32-symbol alphabet,
-// so the modulo below is uniform rather than biased toward the first symbols.
-function generatePairingCode(): string {
-  const bytes = randomBytes(8);
-  let code = "";
-  for (const [index, byte] of bytes.entries()) {
-    if (index === 4) code += "-";
-    code += PAIRING_CODE_ALPHABET[byte % PAIRING_CODE_ALPHABET.length];
-  }
-  return code;
-}
-
-function generateWorkspaceToken(): string {
-  return `${WORKSPACE_TOKEN_PREFIX}${randomBytes(32).toString("base64url")}`;
 }
 
 function isUniqueViolation(error: unknown): boolean {

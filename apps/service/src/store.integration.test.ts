@@ -1,10 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { EPOCH_CURSOR, isSealedTransaction, type HandoffRequestedEvent, type IntentPublishedEvent, type SealedTransactionCreatedEvent, type TransactionCreatedEvent } from "@crosscode/protocol";
+import type { TransactionCreatedEvent } from "@crosscode/protocol";
 import { contentHash } from "@crosscode/core";
 import { describe, expect, it } from "vitest";
 import { toRemoteOperation } from "./http.js";
-import { StoreConflictError, StoreUnauthorizedError, PgStore, type Membership, type OperationPage, type StoredOperation } from "./store.js";
-import { BillingLimitError, MAX_SELF_SERVE_WORKSPACES_PER_USER } from "./billing.js";
+import { StoreConflictError, StoreUnauthorizedError, PgStore, MAX_SELF_SERVE_WORKSPACES_PER_USER, type Membership, type OperationPage, type StoredOperation } from "./store.js";
 
 const databaseUrl = process.env.CROSSCODE_TEST_DATABASE_URL;
 
@@ -48,44 +47,13 @@ describe.skipIf(!databaseUrl)("PostgreSQL service store", () => {
       await expect(store.appendOperation(membership, makeEvent(membership, replica.replicaId, randomUUID(), 1)))
         .rejects.toBeInstanceOf(StoreConflictError);
 
-      const handoffId = randomUUID();
-      const handoffEvent = makeHandoffEvent(membership, replica.replicaId, handoffId);
-      const upsertedHandoff = await store.upsertHandoff(membership, handoffEvent);
-      expect(upsertedHandoff.handoff.id).toBe(handoffId);
-      const handoffPage = await store.listHandoffs(provisioned.workspaceId, EPOCH_CURSOR, 100);
-      expect(handoffPage.items.map((item) => item.handoff.id)).toContain(handoffId);
-
-      const intentId = randomUUID();
-      const intentEvent = makeIntentEvent(membership, replica.replicaId, intentId);
-      const upsertedIntent = await store.upsertIntent(membership, intentEvent);
-      expect(upsertedIntent.intent.id).toBe(intentId);
-      const intentPage = await store.listIntents(provisioned.workspaceId, EPOCH_CURSOR, 100);
-      expect(intentPage.items.map((item) => item.intent.id)).toContain(intentId);
-
       await store.recordSessionStart(provisioned.workspaceId, replica.replicaId, 3);
       const active = await store.listActiveSessions(provisioned.workspaceId);
       expect(active.map((session) => session.replicaId)).toContain(replica.replicaId);
-      const presenceWhileOnline = await store.listPresence(provisioned.workspaceId);
-      expect(presenceWhileOnline).toContainEqual(
-        expect.objectContaining({ replicaId: replica.replicaId, status: "online", cursor: 3 })
-      );
 
       await store.recordSessionEnd(provisioned.workspaceId, replica.replicaId, 5);
       const afterEnd = await store.listActiveSessions(provisioned.workspaceId);
       expect(afterEnd.map((session) => session.replicaId)).not.toContain(replica.replicaId);
-
-      // A durable summary (last-known cursor, replica identity, disconnect time) must remain
-      // queryable through a freshly constructed store, standing in for a service restart: the
-      // data lives in the sessions table, not in any in-process gateway state.
-      const restarted = new PgStore(databaseUrl!);
-      try {
-        const presenceAfterRestart = await restarted.listPresence(provisioned.workspaceId);
-        expect(presenceAfterRestart).toContainEqual(
-          expect.objectContaining({ replicaId: replica.replicaId, status: "offline", cursor: 5 })
-        );
-      } finally {
-        await restarted.close();
-      }
     } finally {
       if (workspaceId) {
         await store.pool.query("DELETE FROM audit_events WHERE workspace_id = $1", [workspaceId]);
@@ -161,8 +129,8 @@ describe.skipIf(!databaseUrl)("PostgreSQL service store", () => {
       expect(attributed.rows[0]?.project_id).toBe(first!.id);
 
       // The column being right is not enough -- the read paths a consumer uses have to
-      // return it. This asserts on what listOperations/listPresence hand back, which is
-      // what GET /v1/operations and GET /v1/presence serialize verbatim.
+      // return it. This asserts on what listOperations hands back, which is what
+      // GET /v1/operations serializes verbatim.
       const listed = items(await store.listOperations(owner.workspaceId, 0, 100)).find((item) => item.id === operationId);
       expect(listed?.projectId).toBe(first!.id);
       // The same value must survive the write path's own return, since that object is
@@ -171,26 +139,10 @@ describe.skipIf(!databaseUrl)("PostgreSQL service store", () => {
       expect(reingested.projectId).toBe(first!.id);
       expect(await store.assertReplicaOwnership(owner.workspaceId, membership.memberId, registered.replicaId)).toBe(first!.id);
 
-      await store.recordSessionStart(owner.workspaceId, registered.replicaId, 0);
-      const presence = await store.listPresence(owner.workspaceId);
-      expect(presence.find((session) => session.replicaId === registered.replicaId)?.projectId).toBe(first!.id);
       // A replica registered without a repository stays null, not undefined -- consumers
       // group those under "Unassigned".
       const bare = await store.registerReplica(ownerUserId, owner.workspaceId, `replica-${randomUUID()}`);
-      const bareSession = (await store.listPresence(owner.workspaceId)).find((session) => session.replicaId === bare.replicaId);
-      expect(bareSession).toBeDefined();
-      expect(bareSession!.projectId).toBeNull();
-
-      // attachReplicaToProject is the seam the pairing claim handler calls: it registers a
-      // replica without repository information, then attributes it in one call afterwards.
-      const paired = await store.registerReplica(ownerUserId, owner.workspaceId, `replica-${randomUUID()}`);
-      expect(paired.projectId).toBeNull();
-      expect(await store.attachReplicaToProject(owner.workspaceId, paired.replicaId, { repoRemote: remote })).toBe(first!.id);
-      expect(await store.attachReplicaToProject(owner.workspaceId, paired.replicaId, {})).toBeNull();
-      const linked = await store.pool.query<{ project_id: string | null }>(
-        "SELECT project_id FROM replicas WHERE id = $1", [paired.replicaId]
-      );
-      expect(linked.rows[0]?.project_id).toBe(first!.id);
+      expect(bare.projectId).toBeNull();
     } finally {
       for (const workspaceId of workspaceIds) {
         await store.pool.query("DELETE FROM audit_events WHERE workspace_id = $1", [workspaceId]);
@@ -200,34 +152,6 @@ describe.skipIf(!databaseUrl)("PostgreSQL service store", () => {
     }
   });
 });
-
-function makeHandoffEvent(membership: Membership, replicaId: string, id: string): HandoffRequestedEvent {
-  return {
-    id,
-    schemaVersion: 1,
-    workspaceId: membership.workspaceId,
-    replicaId,
-    actorId: membership.actorId,
-    type: "handoff.requested",
-    clientSequence: 1,
-    createdAt: new Date().toISOString(),
-    payload: { id, operationId: "operation-1", requestedBy: membership.actorId, status: "pending", createdAt: new Date().toISOString() }
-  };
-}
-
-function makeIntentEvent(membership: Membership, replicaId: string, id: string): IntentPublishedEvent {
-  return {
-    id,
-    schemaVersion: 1,
-    workspaceId: membership.workspaceId,
-    replicaId,
-    actorId: membership.actorId,
-    type: "intent.published",
-    clientSequence: 1,
-    createdAt: new Date().toISOString(),
-    payload: { id, actorId: membership.actorId, text: "Rename foo to bar", createdAt: new Date().toISOString() }
-  };
-}
 
 function makeEvent(membership: Membership, replicaId: string, id: string, clientSequence: number): TransactionCreatedEvent {
   return {
@@ -248,61 +172,6 @@ function makeEvent(membership: Membership, replicaId: string, id: string, client
     }
   };
 }
-
-describe.skipIf(!databaseUrl)("PostgreSQL durable rate limiting", () => {
-  // The in-memory limiter gives every instance its own budget. On a function platform that
-  // turns the pairing-claim throttle -- the brute-force defence over a 40-bit code space --
-  // into N x 10/min for N warm instances. These counters are shared instead.
-  it("spends one budget across callers, and keeps buckets independent", async () => {
-    const store = new PgStore(databaseUrl!);
-    try {
-      await store.migrate();
-      const bucket = `ip:198.51.100.7:claim:${randomUUID()}`;
-
-      let allowed = 0;
-      for (let attempt = 0; attempt < 13; attempt += 1) {
-        if (await store.takeRateLimit(bucket, 10, 60)) allowed += 1;
-      }
-      expect(allowed).toBe(10);
-
-      // A different address is untouched by that exhaustion.
-      expect(await store.takeRateLimit(`ip:203.0.113.9:claim:${randomUUID()}`, 10, 60)).toBe(true);
-    } finally {
-      await store.close();
-    }
-  });
-
-  it("holds the limit when the same bucket is spent concurrently", async () => {
-    const store = new PgStore(databaseUrl!);
-    try {
-      await store.migrate();
-      const bucket = `ip:198.51.100.8:claim:${randomUUID()}`;
-      // Simultaneous, the way separate serverless instances would arrive. A read-then-write
-      // implementation lets these interleave and overshoot; one statement cannot.
-      const verdicts = await Promise.all(
-        Array.from({ length: 25 }, () => store.takeRateLimit(bucket, 10, 60))
-      );
-      expect(verdicts.filter(Boolean).length).toBe(10);
-    } finally {
-      await store.close();
-    }
-  });
-
-  it("starts a fresh window once the old one has elapsed, and prunes spent buckets", async () => {
-    const store = new PgStore(databaseUrl!);
-    try {
-      await store.migrate();
-      const bucket = `ip:198.51.100.9:claim:${randomUUID()}`;
-      expect(await store.takeRateLimit(bucket, 1, 60)).toBe(true);
-      expect(await store.takeRateLimit(bucket, 1, 60)).toBe(false);
-      // A zero-length window is always already over, which is the boundary the CASE arms turn on.
-      expect(await store.takeRateLimit(bucket, 1, 0)).toBe(true);
-      expect(await store.pruneRateLimits(0)).toBeGreaterThan(0);
-    } finally {
-      await store.close();
-    }
-  });
-});
 
 describe.skipIf(!databaseUrl)("PostgreSQL self-serve workspace cap", () => {
   it("stops one account farming free workspaces, without touching the personal one", async () => {
@@ -325,7 +194,7 @@ describe.skipIf(!databaseUrl)("PostgreSQL self-serve workspace cap", () => {
       expect(await store.countOwnedSelfServeWorkspaces(userId)).toBe(MAX_SELF_SERVE_WORKSPACES_PER_USER);
 
       await expect(store.createWorkspace({ workspaceName: `over-${randomUUID()}`, userId, actorId }))
-        .rejects.toBeInstanceOf(BillingLimitError);
+        .rejects.toBeInstanceOf(StoreConflictError);
 
       // The personal workspace still resolves, so the account is not bricked by its own cap.
       const stillThere = await store.ensurePersonalWorkspace({ userId, actorId });
@@ -364,80 +233,7 @@ describe.skipIf(!databaseUrl)("PostgreSQL self-serve workspace cap", () => {
   });
 });
 
-describe.skipIf(!databaseUrl)("PostgreSQL plan limits", () => {
-  it("refuses the seat a plan does not have, and counts only active members", async () => {
-    const store = new PgStore(databaseUrl!);
-    try {
-      await store.migrate();
-      const owner = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId: randomUUID(), actorId: `owner-${randomUUID()}@example.com` });
-      // The default plan is `free`, whose seat cap is 5. The owner is seat one.
-      const second = await store.addMember({ workspaceId: owner.workspaceId, userId: randomUUID(), actorId: `b-${randomUUID()}@example.com` });
-      for (const label of ["c", "d", "e"]) {
-        await store.addMember({ workspaceId: owner.workspaceId, userId: randomUUID(), actorId: `${label}-${randomUUID()}@example.com` });
-      }
-
-      await expect(store.addMember({ workspaceId: owner.workspaceId, userId: randomUUID(), actorId: `f-${randomUUID()}@example.com` }))
-        .rejects.toThrow(/seat cap/);
-
-      // Removing someone frees their seat, because the count filters on disabled_at.
-      const identity: Membership = { memberId: owner.memberId, userId: "", actorId: "", workspaceId: owner.workspaceId, role: "owner" };
-      expect(await store.countActiveMembers(owner.workspaceId)).toBe(5);
-      await store.disableMember(identity, second.memberId);
-      expect(await store.countActiveMembers(owner.workspaceId)).toBe(4);
-      await expect(store.addMember({ workspaceId: owner.workspaceId, userId: randomUUID(), actorId: `e-${randomUUID()}@example.com` })).resolves.toBeDefined();
-    } finally {
-      await store.close();
-    }
-  });
-
-  it("refuses an autonomy tier the plan does not unlock, and allows the one it does", async () => {
-    const store = new PgStore(databaseUrl!);
-    try {
-      await store.migrate();
-      const owner = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId: randomUUID(), actorId: `owner-${randomUUID()}@example.com` });
-      const identity: Membership = { memberId: owner.memberId, userId: "", actorId: "", workspaceId: owner.workspaceId, role: "owner" };
-
-      // `free` unlocks always-ask and auto-if-clean, but not auto-always.
-      await expect(store.setWorkspaceAutonomyTier(identity, 0)).resolves.toBe(0);
-      await expect(store.setWorkspaceAutonomyTier(identity, 1)).resolves.toBe(1);
-      await expect(store.setWorkspaceAutonomyTier(identity, 2)).rejects.toThrow(/auto-always/);
-      expect(await store.getWorkspaceAutonomyTier(owner.workspaceId)).toBe(1);
-
-      await store.pool.query("UPDATE workspaces SET plan = 'unlimited' WHERE id = $1", [owner.workspaceId]);
-      await expect(store.setWorkspaceAutonomyTier(identity, 2)).resolves.toBe(2);
-    } finally {
-      await store.close();
-    }
-  });
-});
-
 describe.skipIf(!databaseUrl)("PostgreSQL revocation", () => {
-  it("revokes a paired device's token so it stops resolving, and disables its replica", async () => {
-    const store = new PgStore(databaseUrl!);
-    try {
-      await store.migrate();
-      const owner = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId: randomUUID(), actorId: `owner-${randomUUID()}@example.com` });
-      const identity: Membership = { memberId: owner.memberId, userId: "", actorId: "", workspaceId: owner.workspaceId, role: "owner" };
-      const minted = await store.createPairingCode(identity);
-      const claimed = await store.claimPairingCode({ code: minted.code, actorId: "agent", replicaName: `laptop-${randomUUID()}` });
-
-      // The token works before revocation.
-      expect((await store.resolveWorkspaceToken(claimed.token)).workspaceId).toBe(owner.workspaceId);
-      const [summary] = await store.listWorkspaceTokens(identity);
-      expect(summary?.revokedAt).toBeNull();
-
-      const revoked = await store.revokeWorkspaceToken(identity, summary!.id);
-      expect(revoked.revokedAt).not.toBeNull();
-
-      // ...and stops working on the very next call, with no expiry to wait out.
-      await expect(store.resolveWorkspaceToken(claimed.token)).rejects.toBeInstanceOf(StoreUnauthorizedError);
-      await expect(store.assertReplicaOwnership(owner.workspaceId, owner.memberId, claimed.replicaId)).rejects.toBeInstanceOf(StoreUnauthorizedError);
-      await expect(store.revokeWorkspaceToken(identity, summary!.id)).rejects.toBeInstanceOf(StoreConflictError);
-    } finally {
-      await store.close();
-    }
-  });
-
   it("removing a member ends their access and takes their devices with them", async () => {
     const store = new PgStore(databaseUrl!);
     try {
@@ -446,17 +242,13 @@ describe.skipIf(!databaseUrl)("PostgreSQL revocation", () => {
       const identity: Membership = { memberId: owner.memberId, userId: "", actorId: "", workspaceId: owner.workspaceId, role: "owner" };
       const memberUserId = randomUUID();
       const member = await store.addMember({ workspaceId: owner.workspaceId, userId: memberUserId, actorId: `m-${randomUUID()}@example.com` });
-      const memberIdentity = await store.resolveMembership(memberUserId, owner.workspaceId);
-      const minted = await store.createPairingCode(memberIdentity);
-      const claimed = await store.claimPairingCode({ code: minted.code, actorId: "agent", replicaName: `laptop-${randomUUID()}` });
-      expect((await store.resolveWorkspaceToken(claimed.token)).memberId).toBe(member.memberId);
+      const replica = await store.registerReplica(memberUserId, owner.workspaceId, `laptop-${randomUUID()}`);
 
       const removed = await store.disableMember(identity, member.memberId);
       expect(removed.disabledAt).not.toBeNull();
 
       await expect(store.resolveMembership(memberUserId, owner.workspaceId)).rejects.toBeInstanceOf(StoreUnauthorizedError);
-      await expect(store.resolveWorkspaceToken(claimed.token)).rejects.toBeInstanceOf(StoreUnauthorizedError);
-      await expect(store.assertReplicaOwnership(owner.workspaceId, member.memberId, claimed.replicaId)).rejects.toBeInstanceOf(StoreUnauthorizedError);
+      await expect(store.assertReplicaOwnership(owner.workspaceId, member.memberId, replica.replicaId)).rejects.toBeInstanceOf(StoreUnauthorizedError);
       expect((await store.listMembers(identity)).find((entry) => entry.memberId === member.memberId)?.disabledAt).not.toBeNull();
     } finally {
       await store.close();
@@ -484,22 +276,6 @@ describe.skipIf(!databaseUrl)("PostgreSQL revocation", () => {
     }
   });
 
-  it("refuses revocation and removal to a non-owner", async () => {
-    const store = new PgStore(databaseUrl!);
-    try {
-      await store.migrate();
-      const owner = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId: randomUUID(), actorId: `owner-${randomUUID()}@example.com` });
-      const memberUserId = randomUUID();
-      await store.addMember({ workspaceId: owner.workspaceId, userId: memberUserId, actorId: `m-${randomUUID()}@example.com` });
-      const memberIdentity = await store.resolveMembership(memberUserId, owner.workspaceId);
-
-      await expect(store.listWorkspaceTokens(memberIdentity)).rejects.toBeInstanceOf(StoreUnauthorizedError);
-      await expect(store.revokeWorkspaceToken(memberIdentity, randomUUID())).rejects.toBeInstanceOf(StoreUnauthorizedError);
-      await expect(store.disableMember(memberIdentity, owner.memberId)).rejects.toBeInstanceOf(StoreUnauthorizedError);
-    } finally {
-      await store.close();
-    }
-  });
 });
 
 describe.skipIf(!databaseUrl)("PostgreSQL project keys", () => {
@@ -611,10 +387,10 @@ describe.skipIf(!databaseUrl)("PostgreSQL operation content storage", () => {
       // And the same for the object appendOperation returns, which is what the WebSocket
       // fan-out broadcasts immediately after ingest.
       expect(JSON.stringify(toRemoteOperation(stored))).toBe(JSON.stringify(toRemoteOperation(listed)));
-      // `transaction` is the sealed/plaintext union now. This test ingests a plaintext
-      // operation deliberately, so narrowing here is an assertion about that, not a cast
-      // that would quietly pass if the shape changed.
-      if (isSealedTransaction(listed.transaction)) throw new Error("Expected a plaintext operation");
+      // `transaction` is still the protocol's sealed/plaintext union. This test ingests a
+      // plaintext operation deliberately, so narrowing here is an assertion about that,
+      // not a cast that would quietly pass if the shape changed.
+      if ("sealed" in listed.transaction) throw new Error("Expected a plaintext operation");
       expect(listed.transaction.changes[0]?.afterContent).toBe(body);
     } finally {
       if (workspaceId) {
@@ -626,145 +402,3 @@ describe.skipIf(!databaseUrl)("PostgreSQL operation content storage", () => {
   });
 });
 
-describe.skipIf(!databaseUrl)("PostgreSQL end-to-end encryption", () => {
-  it("stores a sealed operation as ciphertext, latches the workspace, and never sees a path", async () => {
-    const store = new PgStore(databaseUrl!);
-    const userId = randomUUID();
-    try {
-      await store.migrate();
-      const provisioned = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId, actorId: `owner-${randomUUID()}@example.com` });
-      const membership = await store.resolveMembership(userId, provisioned.workspaceId);
-      const replica = await store.registerReplica(userId, provisioned.workspaceId, `replica-${randomUUID()}`);
-
-      const sealedId = randomUUID();
-      const sealed = makeSealedEvent(membership, replica.replicaId, sealedId, 1);
-      const stored = await store.appendOperation(membership, sealed);
-      expect(stored.id).toBe(sealedId);
-      // Idempotent retry, the same as the plaintext path.
-      expect((await store.appendOperation(membership, sealed)).serverSequence).toBe(stored.serverSequence);
-
-      // operation_files is the per-path index into the operation; for a sealed one it
-      // holds the opaque token instead of a path, and no hash of anything.
-      const files = await store.pool.query<{ path: string; before_hash: string | null; after_hash: string | null }>(
-        "SELECT path, before_hash, after_hash FROM operation_files WHERE workspace_id = $1 AND operation_id = $2",
-        [provisioned.workspaceId, sealedId]
-      );
-      expect(files.rows).toEqual([{ path: "a".repeat(64), before_hash: null, after_hash: null }]);
-
-      // operations.event is the single home of content since migration 013, so it is the
-      // one row that has to be ciphertext for the claim on the privacy page to hold.
-      const rows = await store.pool.query<{ sealed: boolean; key_epoch: number; event: unknown }>(
-        "SELECT sealed, key_epoch, event FROM operations WHERE workspace_id = $1 AND id = $2",
-        [provisioned.workspaceId, sealedId]
-      );
-      expect(rows.rows[0]).toMatchObject({ sealed: true, key_epoch: 4 });
-      expect(JSON.stringify(rows.rows[0]!.event)).not.toContain("secret-plan.md");
-
-      // The latch: this workspace has sent ciphertext, so plaintext is refused from here
-      // on -- there is no code path back, deliberately.
-      await expect(store.appendOperation(membership, makeEvent(membership, replica.replicaId, randomUUID(), 2)))
-        .rejects.toBeInstanceOf(StoreConflictError);
-      const state = await store.getWorkspaceKeyState(provisioned.workspaceId, replica.replicaId);
-      expect(state.encrypted).toBe(true);
-    } finally {
-      await store.pool.query("DELETE FROM audit_events WHERE workspace_id IN (SELECT workspace_id FROM members WHERE user_id = $1)", [userId]);
-      await store.pool.query("DELETE FROM workspaces WHERE id IN (SELECT workspace_id FROM members WHERE user_id = $1)", [userId]);
-      await store.close();
-    }
-  });
-
-  it("relays key grants between devices, serializes the first key, and drops a removed member's devices", async () => {
-    const store = new PgStore(databaseUrl!);
-    const ownerUser = randomUUID();
-    const memberUser = randomUUID();
-    try {
-      await store.migrate();
-      const provisioned = await store.provisionAdmin({ workspaceName: `test-${randomUUID()}`, userId: ownerUser, actorId: `owner-${randomUUID()}@example.com` });
-      const owner = await store.resolveMembership(ownerUser, provisioned.workspaceId);
-      const added = await store.addMember({ workspaceId: provisioned.workspaceId, userId: memberUser, actorId: `member-${randomUUID()}@example.com` });
-      const teammate = await store.resolveMembership(memberUser, provisioned.workspaceId);
-
-      const ownerKey = "A".repeat(43);
-      const teammateKey = "B".repeat(43);
-      const ownerReplica = await store.registerReplica(ownerUser, provisioned.workspaceId, `owner-${randomUUID()}`, { devicePublicKey: ownerKey });
-      const teammateReplica = await store.registerReplica(memberUser, provisioned.workspaceId, `mate-${randomUUID()}`, { devicePublicKey: teammateKey });
-
-      // A device key is write-once: re-sending the same one is fine, replacing it is not,
-      // because a replacement would redirect every future grant to a key of the caller's
-      // choosing without anyone re-confirming a fingerprint.
-      await store.registerDevicePublicKey(provisioned.workspaceId, ownerReplica.replicaId, ownerKey);
-      await expect(store.registerDevicePublicKey(provisioned.workspaceId, ownerReplica.replicaId, "C".repeat(43)))
-        .rejects.toBeInstanceOf(StoreConflictError);
-
-      // Nobody holds a key yet, so exactly one caller may establish the first one.
-      expect((await store.getWorkspaceKeyState(provisioned.workspaceId, ownerReplica.replicaId)).keyHolders).toBe(0);
-      await store.insertWorkspaceKeyGrants(owner, ownerReplica.replicaId, [grant(0, ownerReplica.replicaId, ownerKey)], { requireFirst: true });
-      await expect(store.insertWorkspaceKeyGrants(teammate, teammateReplica.replicaId, [grant(0, teammateReplica.replicaId, teammateKey)], { requireFirst: true }))
-        .rejects.toBeInstanceOf(StoreConflictError);
-
-      // A grant must match the recipient's registered key, or it is useless to them and a
-      // way to park one addressed to somebody else's.
-      await expect(store.insertWorkspaceKeyGrants(owner, ownerReplica.replicaId, [grant(0, teammateReplica.replicaId, ownerKey)]))
-        .rejects.toBeInstanceOf(StoreConflictError);
-
-      await store.insertWorkspaceKeyGrants(owner, ownerReplica.replicaId, [grant(0, teammateReplica.replicaId, teammateKey)]);
-      // Re-offering an epoch the recipient already holds is ignored, not an error: the
-      // daemon re-offers everything it holds on every sweep.
-      expect((await store.insertWorkspaceKeyGrants(owner, ownerReplica.replicaId, [grant(0, teammateReplica.replicaId, teammateKey)])).stored).toBe(0);
-
-      const teammateState = await store.getWorkspaceKeyState(provisioned.workspaceId, teammateReplica.replicaId);
-      expect(teammateState.grants.map((entry) => entry.epoch)).toEqual([0]);
-      expect(teammateState.keyHolders).toBe(2);
-
-      // Rotation: a second epoch reaches the devices already holding one.
-      await store.insertWorkspaceKeyGrants(owner, ownerReplica.replicaId, [grant(1, ownerReplica.replicaId, ownerKey), grant(1, teammateReplica.replicaId, teammateKey)]);
-      expect((await store.listWorkspaceKeyRecipients(provisioned.workspaceId)).find((entry) => entry.replicaId === teammateReplica.replicaId)?.epochs).toEqual([0, 1]);
-
-      // Removing the member retires their devices, so the next rotation has nowhere to
-      // send them a key -- which is the whole mechanism behind "rotate after a departure".
-      await store.disableMember(owner, added.memberId);
-      expect((await store.listWorkspaceKeyRecipients(provisioned.workspaceId)).map((entry) => entry.replicaId)).toEqual([ownerReplica.replicaId]);
-      await expect(store.insertWorkspaceKeyGrants(owner, ownerReplica.replicaId, [grant(2, teammateReplica.replicaId, teammateKey)]))
-        .rejects.toBeInstanceOf(StoreConflictError);
-      expect((await store.getWorkspaceKeyState(provisioned.workspaceId, ownerReplica.replicaId)).keyHolders).toBe(1);
-    } finally {
-      await store.pool.query("DELETE FROM audit_events WHERE workspace_id IN (SELECT workspace_id FROM members WHERE user_id = $1)", [ownerUser]);
-      await store.pool.query("DELETE FROM workspaces WHERE id IN (SELECT workspace_id FROM members WHERE user_id = $1)", [ownerUser]);
-      await store.close();
-    }
-  });
-});
-
-function grant(epoch: number, recipientReplicaId: string, recipientPublicKey: string) {
-  return {
-    epoch,
-    keyId: epoch.toString(16).padStart(16, "0"),
-    recipientReplicaId,
-    recipientPublicKey,
-    wrapped: {
-      version: 1 as const,
-      algorithm: "X25519-HKDF-SHA256-AES-256-GCM" as const,
-      senderPublicKey: "S".repeat(43),
-      nonce: "AAAAAAAAAAAAAAAA",
-      ciphertext: "Zm9vYmFyYmF6"
-    }
-  };
-}
-
-function makeSealedEvent(membership: Membership, replicaId: string, id: string, clientSequence: number): SealedTransactionCreatedEvent {
-  return {
-    id,
-    schemaVersion: 1,
-    workspaceId: membership.workspaceId,
-    replicaId,
-    actorId: membership.actorId,
-    type: "transaction.sealed",
-    clientSequence,
-    createdAt: new Date().toISOString(),
-    payload: {
-      id,
-      sealed: { version: 1, algorithm: "AES-256-GCM", epoch: 4, keyId: "0123456789abcdef", nonce: "AAAAAAAAAAAAAAAA", ciphertext: "Zm9vYmFyYmF6" },
-      changes: [{ pathToken: "a".repeat(64), kind: "modify" }]
-    }
-  };
-}
