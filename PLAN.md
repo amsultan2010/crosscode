@@ -180,13 +180,13 @@ starting Phase 4; port the algorithm, not the code.
 - [ ] **Verify:** fresh machine, link to syncing in under 60s, typing only the two given lines
 
 ### 6 — Agent surface
-- [ ] The `crosscode` skill — what's happening in the background · how to resolve a conflict · when to do nothing
-- [ ] 4 MCP tools, conflicts piggybacked on every response
+- [x] The `crosscode` skill — what's happening in the background · how to resolve a conflict · when to do nothing
+- [x] 4 MCP tools, conflicts piggybacked on every response
 - [ ] Claude Code + Codex hooks firing before file edits
 - [ ] **Verify:** two live agent sessions on one repo; neither mentions Crosscode until a real conflict, which the receiving agent resolves unprompted
 
 ### 7 — Docs + harden
-- [ ] Rewrite `README.md` and `docs/{architecture,protocol,onboarding-contracts,mcp-clients,install-prompt}.md` — all describe the deleted architecture
+- [x] Rewrite `README.md` and `docs/{architecture,protocol,onboarding-contracts,mcp-clients,install-prompt}.md` — all describe the deleted architecture
 - [ ] Large-repo watcher performance; binary and large files
 - [ ] Battery/CPU measured over a real workday
 - [ ] Retention job; resync under bad networks

@@ -148,12 +148,6 @@ importers:
 
   apps/mcp-server:
     dependencies:
-      '@crosscode/core':
-        specifier: workspace:*
-        version: link:../../packages/core
-      '@crosscode/daemon':
-        specifier: workspace:*
-        version: link:../daemon
       '@crosscode/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

@@ -1,108 +1,146 @@
-import { execFile } from "node:child_process";
-import { mkdir, chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { daemonConnectionSchema } from "@crosscode/protocol";
-import { DaemonClient } from "../../daemon/src/client.js";
-import { daemonConnectionPath } from "../../daemon/src/runtime.js";
-import { startDaemon, type RunningDaemon } from "../../daemon/src/index.js";
-import { mcpTools } from "./index.js";
-
-const exec = promisify(execFile);
-const directories: string[] = [];
-const daemons: RunningDaemon[] = [];
-const clients: Client[] = [];
-const spawnedDaemonPids: number[] = [];
+import { connectToDaemon, DaemonUnavailableError } from "./daemon-api.js";
+import { callSyncTool } from "./index.js";
+import { startFakeDaemon, sampleConflict, type FakeDaemon } from "./fake-daemon.js";
+import { TOOL_NAMES } from "./tool-catalog.js";
 
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const tsxBin = join(repoRoot, "node_modules", ".bin", "tsx");
 const mcpMain = join(repoRoot, "apps/mcp-server/src/main.ts");
 
+const daemons: FakeDaemon[] = [];
+const clients: Client[] = [];
+
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close()));
   await Promise.all(daemons.splice(0).map((daemon) => daemon.close()));
-  for (const pid of spawnedDaemonPids.splice(0)) { try { process.kill(pid, "SIGTERM"); } catch {} }
-  await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
-async function initRepo(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "crosscode-mcp-"));
-  directories.push(root);
-  await exec("git", ["init", "-q", root]);
-  await exec("git", ["-C", root, "config", "user.email", "test@example.com"]);
-  await exec("git", ["-C", root, "config", "user.name", "Test"]);
-  await writeFile(join(root, "a.txt"), "one\n");
-  await exec("git", ["-C", root, "add", "."]);
-  await exec("git", ["-C", root, "commit", "-qm", "initial"]);
-  return root;
+async function fakeDaemon(conflicts: ReturnType<typeof sampleConflict>[] = []): Promise<FakeDaemon> {
+  const daemon = await startFakeDaemon({ conflicts });
+  daemons.push(daemon);
+  return daemon;
 }
 
-async function writeConnectionFile(path: string, connection: { pid: number; port: number; secret: string; startedAt: string }): Promise<void> {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  await chmod(dirname(path), 0o700);
-  await writeFile(path, JSON.stringify(daemonConnectionSchema.parse(connection)), { mode: 0o600 });
+async function apiFor(daemon: FakeDaemon) {
+  process.env.CROSSCODE_DAEMON_URL = daemon.url;
+  process.env.CROSSCODE_DAEMON_SECRET = daemon.secret;
+  return connectToDaemon();
 }
 
-describe("MCP daemon boundary", () => {
-  it("maps tools through the authenticated HTTP client", async () => {
-    const root = await initRepo();
-    const daemon = await startDaemon(root, { workspaceId: "w", replicaId: "r", actorId: "a" });
-    daemons.push(daemon);
-    const tools = mcpTools(DaemonClient.from({ pid: process.pid, port: daemon.port, secret: daemon.secret, startedAt: new Date().toISOString() }));
+async function stdioClient(daemon: FakeDaemon): Promise<Client> {
+  const transport = new StdioClientTransport({
+    command: tsxBin,
+    args: [mcpMain],
+    cwd: repoRoot,
+    env: { ...process.env, CROSSCODE_DAEMON_URL: daemon.url, CROSSCODE_DAEMON_SECRET: daemon.secret } as Record<string, string>,
+    stderr: "inherit"
+  });
+  const client = new Client({ name: "crosscode-mcp-test-client", version: "0.1.0" });
+  clients.push(client);
+  await client.connect(transport);
+  return client;
+}
 
-    const expectedRoot = (await exec("git", ["-C", root, "rev-parse", "--show-toplevel"])).stdout.trim();
-    await expect(tools.get_workspace_state()).resolves.toMatchObject({ root: expectedRoot });
+function textOf(result: unknown): Record<string, unknown> {
+  const content = (result as { content: Array<{ text: string }> }).content;
+  return JSON.parse(content[0]!.text) as Record<string, unknown>;
+}
+
+describe("tool catalog", () => {
+  it("is exactly the four tools the plan allows", () => {
+    expect([...TOOL_NAMES]).toEqual(["status", "conflicts", "resolve", "pause"]);
+  });
+});
+
+describe("the four tools", () => {
+  it("reports status from the daemon", async () => {
+    const result = await callSyncTool(await apiFor(await fakeDaemon()), "status", {});
+    expect(result.status).toMatchObject({ branch: "main", connected: true, paused: false });
+    expect(result.conflicts).toEqual([]);
+    expect(result.attention).toBeUndefined();
   });
 
-  it("serves a standards-compliant MCP server over stdio: real initialize, tools/list, and tools/call", async () => {
-    const root = await initRepo();
-    const daemon = await startDaemon(root, { workspaceId: "w", replicaId: "r", actorId: "a" });
-    daemons.push(daemon);
-    const connectionPath = await daemonConnectionPath(root);
-    await writeConnectionFile(connectionPath, { pid: process.pid, port: daemon.port, secret: daemon.secret, startedAt: new Date().toISOString() });
+  it("lists conflicts with the three merge sides", async () => {
+    const daemon = await fakeDaemon([sampleConflict("src/a.ts")]);
+    const result = await callSyncTool(await apiFor(daemon), "conflicts", {});
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0]).toMatchObject({ path: "src/a.ts", ours: "ours\n", theirs: "theirs\n", ancestor: "base\n" });
+  });
 
-    const transport = new StdioClientTransport({ command: tsxBin, args: [mcpMain], cwd: root, stderr: "inherit" });
-    const client = new Client({ name: "crosscode-mcp-test-client", version: "0.1.0" });
-    clients.push(client);
-    await client.connect(transport);
+  it("resolves a conflict with the agent's merged content and stops reporting it", async () => {
+    const daemon = await fakeDaemon([sampleConflict("src/a.ts", "c1")]);
+    const result = await callSyncTool(await apiFor(daemon), "resolve", { conflictId: "c1", content: "merged\n" });
+    expect(daemon.resolved).toEqual([{ conflictId: "c1", content: "merged\n" }]);
+    expect(result.resolved).toBe("c1");
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("pauses and resumes, and answers with the new state", async () => {
+    const daemon = await fakeDaemon();
+    const api = await apiFor(daemon);
+    expect((await callSyncTool(api, "pause", { paused: true })).status).toMatchObject({ paused: true });
+    expect((await callSyncTool(api, "pause", { paused: false })).status).toMatchObject({ paused: false });
+    expect(daemon.paused).toEqual([{ paused: true }, { paused: false }]);
+  });
+});
+
+describe("conflicts piggyback on every response", () => {
+  // The whole design rests on this: an agent only looks at anything when it is invoked, so
+  // a conflict that lands while it is idle has to ride out on the next response of any tool.
+  it("puts a pending conflict in the response of a tool call that never asked for one", async () => {
+    const daemon = await fakeDaemon([sampleConflict("src/auth.ts")]);
+    const api = await apiFor(daemon);
+
+    for (const call of [
+      () => callSyncTool(api, "status", {}),
+      () => callSyncTool(api, "pause", { paused: false })
+    ]) {
+      const result = await call();
+      expect(result.conflicts.map((conflict) => conflict.path)).toEqual(["src/auth.ts"]);
+      expect(result.attention).toContain("src/auth.ts");
+      expect(result.attention).toContain("resolve");
+    }
+  });
+
+  it("appears on a conflict that arrived between two calls", async () => {
+    const daemon = await fakeDaemon();
+    const api = await apiFor(daemon);
+    expect((await callSyncTool(api, "status", {})).conflicts).toEqual([]);
+
+    daemon.conflicts = [sampleConflict("src/late.ts")];
+
+    expect((await callSyncTool(api, "status", {})).conflicts.map((conflict) => conflict.path)).toEqual(["src/late.ts"]);
+  });
+});
+
+describe("no daemon", () => {
+  it("reports one actionable error instead of starting anything", async () => {
+    delete process.env.CROSSCODE_DAEMON_URL;
+    delete process.env.CROSSCODE_DAEMON_SECRET;
+    await expect(connectToDaemon("/")).rejects.toThrow(DaemonUnavailableError);
+  });
+});
+
+describe("over real MCP stdio", () => {
+  it("lists exactly four tools and piggybacks a conflict onto a status call", async () => {
+    const client = await stdioClient(await fakeDaemon([sampleConflict("src/auth.ts")]));
 
     const { tools } = await client.listTools();
-    const toolNames = tools.map((tool) => tool.name).sort();
-    expect(toolNames).toEqual(["get_workspace_state"]);
-    const stateTool = tools.find((tool) => tool.name === "get_workspace_state")!;
-    expect(stateTool.inputSchema.type).toBe("object");
+    expect(tools.map((tool) => tool.name).sort()).toEqual(["conflicts", "pause", "resolve", "status"]);
 
-    const statusResult = await client.callTool({ name: "get_workspace_state", arguments: {} });
-    const status = JSON.parse((statusResult.content as Array<{ type: string; text: string }>)[0]!.text) as { root: string };
-    const expectedRoot = (await exec("git", ["-C", root, "rev-parse", "--show-toplevel"])).stdout.trim();
-    expect(status.root).toBe(expectedRoot);
+    const status = textOf(await client.callTool({ name: "status", arguments: {} }));
+    expect((status.conflicts as Array<{ path: string }>).map((conflict) => conflict.path)).toEqual(["src/auth.ts"]);
+    expect(status.attention).toContain("src/auth.ts");
   }, 20_000);
 
-  it("auto-bootstraps identity and spawns its own daemon when neither exists yet, so a fresh checkout works with zero manual setup", async () => {
-    const root = await initRepo();
-    const connectionPath = await daemonConnectionPath(root);
-    await expect(readFile(connectionPath, "utf8")).rejects.toThrow();
-
-    const transport = new StdioClientTransport({ command: tsxBin, args: [mcpMain], cwd: root, stderr: "inherit" });
-    const client = new Client({ name: "crosscode-mcp-bootstrap-test-client", version: "0.1.0" });
-    clients.push(client);
-    await client.connect(transport);
-
-    const statusResult = await client.callTool({ name: "get_workspace_state", arguments: {} });
-    const status = JSON.parse((statusResult.content as Array<{ type: string; text: string }>)[0]!.text) as { root: string; branch?: string };
-    const expectedRoot = (await exec("git", ["-C", root, "rev-parse", "--show-toplevel"])).stdout.trim();
-    expect(status.root).toBe(expectedRoot);
-
-    // The MCP server spawned a real, independent daemon process (not one this test started)
-    // and it wrote its own connection descriptor -- confirm one now exists and track its pid
-    // so it can be torn down after the test.
-    const connection = daemonConnectionSchema.parse(JSON.parse(await readFile(connectionPath, "utf8")));
-    expect(connection.pid).not.toBe(process.pid);
-    spawnedDaemonPids.push(connection.pid);
+  it("rejects arguments that do not match the contract", async () => {
+    const client = await stdioClient(await fakeDaemon());
+    const result = await client.callTool({ name: "resolve", arguments: { conflictId: "c1" } });
+    expect(result.isError).toBe(true);
   }, 20_000);
 });

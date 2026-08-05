@@ -1,81 +1,38 @@
-# MCP client configuration
+# Agent setup: MCP, the skill, and hooks
 
-`apps/mcp-server` is a standards-compliant Model Context Protocol server built on
-`@modelcontextprotocol/sdk`. It speaks MCP over stdio and proxies tool calls to the
-local Crosscode daemon for the current worktree.
+`crosscode start` installs all three of these for you. This page is what it installs, for
+anyone configuring a client by hand or using one `start` does not write.
 
-## The short version
+MCP is the baseline: it is what makes every agent work. The skill teaches an agent what to
+do with it. Hooks are a bonus for Claude Code and Codex, and everything degrades cleanly
+where they do not exist.
 
-```bash
-npm install -g @crosscode/cli
-crosscode start
-```
+## The MCP server
 
-`crosscode start` writes the entry for you, alongside signing you in and starting
-the daemon: `.mcp.json` for Claude Code by default, or `--mcp cursor` /
-`--mcp gemini` / `--mcp opencode`. Everything below is what it writes, for anyone
-configuring a client by hand or using Codex CLI, whose TOML config `start` does not
-touch.
+`apps/mcp-server` speaks MCP over stdio and forwards tool calls to the local Crosscode
+daemon for the current checkout. It takes no arguments and discovers the checkout from its
+working directory, so every client must launch it with `cwd` set to the checkout root.
 
-`@crosscode/cli` is not on npm yet, so the two commands above do not work until it
-is published. Until then, build it from a clone and install the tarball, as
-described under Packaging in the README.
+It never starts a daemon. If there is no daemon for the checkout, every tool answers with
+`DAEMON_UNAVAILABLE` and a hint to run `crosscode start`.
 
-Without a global install, `npx --yes @crosscode/cli start` does the same thing, and
-writes an `npx`-based MCP command because npm's cache is not somewhere a config may
-point at long-term.
+### Claude Code
 
-## What runs, and when
-
-You do not need to start the daemon yourself. On first connection, the MCP server
-calls `ensureDaemonRunning` (`apps/mcp-server/src/bootstrap.ts`): if no daemon is
-already listening for the worktree, it writes a local replica identity if one
-doesn't exist yet, spawns the daemon as a detached background process, and waits
-for it to come up before serving any tool calls. If `CROSSCODE_SERVICE_URL` is set
-in the server's `env` but the worktree has no logged-in Supabase session yet,
-bootstrap fails fast with an explicit error asking you to log in first rather
-than guessing at a fix. From an agent, resolve that with `crosscode start --email
-<e> --password <p>`, the headless sign-in (`crosscode login --email <e> --password
-<p>`), or a pairing code (`crosscode join --pair <code>`). Not the browser flow,
-which needs a TTY and a human. The daemon keeps running in the background after the
-MCP client disconnects, so it survives individual agent sessions.
-
-That bootstrap reads the raw `CROSSCODE_SERVICE_URL` rather than falling back to
-the hosted default, which is what lets a fresh MCP install run local-only without
-being forced through a login. `crosscode start` does not change this. It is the
-explicit opt-in to the hosted service, while an MCP client connecting is implicit,
-and treating the compiled-in default as "a service is configured" would turn every
-local-only checkout into a login prompt. A worktree set up by
-`crosscode start` already holds a session, so it is unaffected either way.
-
-The server takes no arguments; it discovers the repository from its working
-directory, so each client must launch it with `cwd` set to the worktree root.
-
-## Claude Code
-
-Add a project- or user-scoped server entry, for example in `.mcp.json` at the
-worktree root:
+`.mcp.json` at the checkout root:
 
 ```json
 {
   "mcpServers": {
-    "crosscode": {
-      "command": "crosscode-mcp",
-      "args": []
-    }
+    "crosscode": { "command": "crosscode-mcp", "args": [] }
   }
 }
 ```
 
-Or register it with the CLI from the worktree root:
+Or `claude mcp add crosscode -- crosscode-mcp`.
 
-```bash
-claude mcp add crosscode -- crosscode-mcp
-```
+### Codex CLI
 
-## Codex CLI
-
-Add a server entry to `~/.codex/config.toml`:
+`~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.crosscode]
@@ -83,80 +40,25 @@ command = "crosscode-mcp"
 args = []
 ```
 
-Codex CLI spawns MCP servers with the working directory of the Codex session, so
-run Codex from the worktree root (or the directory it operates in) so the server
-can find the local daemon connection descriptor.
+Codex spawns MCP servers with the working directory of the Codex session, so start Codex
+from the checkout root.
 
-## OpenCode
+### Cursor, Gemini CLI, OpenCode
 
-Add a server entry to `opencode.json` (project or global config):
+Cursor uses `.cursor/mcp.json`, Gemini CLI uses `.gemini/settings.json`, and both take the
+same `mcpServers` block as Claude Code. OpenCode uses `opencode.json`:
 
 ```json
 {
   "mcp": {
-    "crosscode": {
-      "type": "local",
-      "command": ["crosscode-mcp"],
-      "enabled": true
-    }
+    "crosscode": { "type": "local", "command": ["crosscode-mcp"], "enabled": true }
   }
 }
 ```
 
-## Gemini CLI
+### Running from source
 
-Add a server entry to `.gemini/settings.json` (project) or `~/.gemini/settings.json`
-(user):
-
-```json
-{
-  "mcpServers": {
-    "crosscode": {
-      "command": "crosscode-mcp",
-      "args": []
-    }
-  }
-}
-```
-
-## Cursor
-
-Add a server entry to `.cursor/mcp.json` at the worktree root (project-scoped) or
-`~/.cursor/mcp.json` (available in every project):
-
-```json
-{
-  "mcpServers": {
-    "crosscode": {
-      "command": "crosscode-mcp",
-      "args": []
-    }
-  }
-}
-```
-
-## Without a global install
-
-`npx` works anywhere the short command does, and is what `crosscode start` writes
-when Crosscode isn't installed durably. Pin the version so an agent session cannot
-be moved to a new major release underneath you:
-
-```json
-{
-  "command": "npx",
-  "args": ["-y", "--package", "@crosscode/cli@0.1.0", "crosscode-mcp"]
-}
-```
-
-On Windows, use `crosscode mcp` instead of the `crosscode-mcp` bin. Both published
-bins are the same file and tell themselves apart by the name they were invoked
-under; npm's Windows `.cmd` shims pass the resolved script path instead, so that
-name is not available there.
-
-## Running from source
-
-A clone of this repository runs the same server through `tsx`, with `cwd` set to
-the worktree you want Crosscode to manage:
+A clone of this repository runs the same server through `tsx`:
 
 ```json
 {
@@ -166,69 +68,104 @@ the worktree you want Crosscode to manage:
 }
 ```
 
-`/absolute/path/to/crosscode` is wherever you cloned this repository (after
-`pnpm install`); `/absolute/path/to/your/project` is the Git repository you want
-Crosscode to watch. This is the setup for working on Crosscode itself. To use it,
-install from npm.
-
-All configs above are transcribed from each client's own published MCP
-documentation and config schema (stdio server registration under an
-`mcpServers`/`mcp_servers` block); the Claude Code, Cursor, Gemini CLI, and
-OpenCode shapes are additionally what `crosscode start` writes and what its tests
-assert.
-
 ## Available tools
 
-The list below is generated by `pnpm --filter @crosscode/mcp-server generate:docs`
-from `apps/mcp-server/src/tool-catalog.ts`, the same module the server uses to
-answer `tools/list`. Regenerate it after changing
-any tool's description or input schema. See BUILD_INSTRUCTIONS.md section 13 for
-the capability this tool surface implements. Tool input schemas are generated from
-the Zod request schemas in `packages/protocol`, so `tools/list` always reflects the
-daemon's actual request validation.
+Four, and there will not be a fifth. The list below is generated by
+`pnpm --filter @crosscode/mcp-server generate:docs` from
+`apps/mcp-server/src/tool-catalog.ts`, the same module that answers `tools/list`. Input
+schemas come from the Zod schemas in `packages/protocol/src/sync.ts`.
 
 <!-- BEGIN GENERATED TOOL CATALOG (apps/mcp-server/src/generate-tool-docs.ts) -->
 
-- **`get_workspace_state`**: Read the local daemon's workspace status: HEAD, branch, dirty state, and pending counts. Call this first to orient before claiming tasks, checking scope, or capturing changes.
-- **`list_tasks`**: List tasks known to the local daemon. Call before claim_task to see if your work is already tracked, or after claim_task to confirm it registered.
-- **`claim_task`**: Create a task, optionally scoped to a set of paths, so other agents can see what you're about to work on. Call before editing; use claim_scope afterward for finer-grained path claims tied to this task.
-- **`claim_scope`**: Advertise a path claim against an existing task so other agents avoid the same files. Call after claim_task and before editing. check_change_scope is how other agents (and you) read these claims back.
-- **`publish_intent`**: Capture the current working-tree edits as a durable transaction tagged with a general intent. This is the default of the three capture variants (publish_intent / submit_change_summary / announce_interface_change); use it when the change is neither a specific summary nor an interface change. Call after making edits.
-- **`check_change_scope`**: Check whether a set of paths overlaps existing claims or pending remote proposals before editing. Call this before writing to files to avoid colliding with another agent's claimed scope or an in-flight proposal.
-- **`submit_change_summary`**: Capture the current working-tree edits as a durable transaction tagged as a change summary, for reporting what was done. One of three capture variants (publish_intent / submit_change_summary / announce_interface_change); call after edits, in place of publish_intent when you're summarizing completed work rather than stating intent.
-- **`list_remote_proposals`**: List remote operations that are proposed and awaiting local review. Call periodically to discover incoming changes that may need request_validation or a response via submit_semantic_review.
-- **`request_handoff`**: Request a handoff of a proposed operation to another participant for review. Call after publish_intent, submit_change_summary, or announce_interface_change has produced an operation you want someone else to accept or decline.
-- **`announce_interface_change`**: Capture the current working-tree edits as a durable transaction tagged as an interface change. One of three capture variants (publish_intent / submit_change_summary / announce_interface_change); use this instead of the others when the edit changes a public API or contract other agents depend on.
-- **`request_validation`**: Run a named validation profile and return its results. Call after making edits, before requesting a handoff or creating a checkpoint, to confirm the change is sound.
-- **`create_checkpoint`**: Create a Git checkpoint of the current worktree without moving HEAD. Call after edits have been validated, to durably snapshot progress without committing to a branch.
-- **`list_pending_semantic_reviews`**: List semantic reviews awaiting this agent's judgment: ambiguous change bundles the daemon needs reasoned about before it can proceed. Call periodically; each entry's requestId is answered with submit_semantic_review.
-- **`submit_semantic_review`**: Submit this agent's semantic review for a pending requestId: classification, confidence, affected symbols, evidence, invariants to preserve, an optional proposed resolution, and whether it requires human approval. Call only after list_pending_semantic_reviews surfaces a requestId needing judgment.
-- **`inspect_proposal`**: Fetch a proposed operation and a human-readable analysis of it. Call on an operationId from list_remote_proposals before diff_proposal or accept_proposal/reject_proposal, to understand what a proposal contains.
-- **`diff_proposal`**: Get the per-path diff for a proposed operation: base/local/proposed content, classification, risk, and dependents. Call after inspect_proposal and before deciding to accept_proposal or reject_proposal, especially when requiresApproval or risk looks high.
-- **`list_proposal_artifacts`**: List conflict artifacts recorded for a proposed operation. Call when diff_proposal shows conflicting or unmergeable changes, to see what the daemon captured about the conflict before you accept_proposal or reject_proposal.
-- **`accept_proposal`**: Accept a proposed operation, applying it locally; pass reviewApprovals when a path required semantic-review sign-off. Call after inspecting it with inspect_proposal/diff_proposal. This is the terminal counterpart to reject_proposal.
-- **`reject_proposal`**: Reject a proposed operation, discarding it without applying it locally. Call after inspecting it with inspect_proposal/diff_proposal. This is the terminal counterpart to accept_proposal.
-- **`publish_branch`**: Publish accepted changes to a branch by running the named validation profile and pushing/committing the result; requires confirm: true since this is not easily reversible. Call request_validation first if you want a dry look at validation independent of publishing, and pass dryRun: true here to preview without publishing.
-- **`get_workspace_autonomy`**: Read this workspace's autonomy tier (0=always_ask, 1=auto_if_clean, 2=auto_always), which controls how eagerly the daemon auto-applies incoming proposals without an explicit accept_proposal call.
-- **`set_workspace_autonomy`**: Set this workspace's autonomy tier (0=always_ask, 1=auto_if_clean, 2=auto_always); owner/admin only, and tier >= 1 requires semantic review (externalAiReview) already enabled for the workspace. Auto-apply always still runs through the same approval gates as accept_proposal -- this never bypasses them.
+- **`status`**: Crosscode sync status for this checkout: branch, connected, paused, and who else is working on what. Read-only, and nothing here is worth reporting to the user unless they asked.
+- **`conflicts`**: List unresolved sync conflicts. Each carries ours/theirs/ancestor text for a 3-way merge. A conflicted file is frozen -- neither sent nor received -- until it is resolved.
+- **`resolve`**: Resolve one conflict with your merged file content. The content is written to disk and republished to the team. Merge it yourself; only ask the user when the two changes genuinely contradict each other.
+- **`pause`**: Pause or resume syncing for this checkout. Pause only when the user asks, or around a rebase, bisect, or bulk rewrite. Always resume afterwards.
 
 <!-- END GENERATED TOOL CATALOG -->
 
-## Resources
+## Conflicts ride on every response
 
-The server also exposes an MCP resource, `crosscode://guidance/tool-sequencing`,
-with agent-readable guidance on how the tools above relate to each other. The same
-content is in `apps/mcp-server/src/resources.ts`. Any MCP client can read it
-via `resources/list` and `resources/read` to learn the intended call sequence
-without needing this doc.
+Every response from every tool carries a `conflicts` array — including `status` and `pause`,
+which nobody would call to ask about conflicts — plus an `attention` line when it is
+non-empty:
 
-`list_pending_semantic_reviews` and `submit_semantic_review` are how the AI
-semantic reviewer (BUILD_INSTRUCTIONS.md section 12) is delegated to the
-connected agent instead of an external AI provider: `list_pending_semantic_reviews`
-takes no arguments and returns the pending review bundles awaiting judgment
-(`GET /v1/semantic-reviews/pending`); `submit_semantic_review` takes a `requestId`
-plus the same fields as `packages/core/src/semantic-review.ts`'s
-`semanticReviewSchema` (`classification`, `confidence`, `affectedSymbols`,
-`evidence`, `invariantsToPreserve`, an optional `proposedResolution`, and
-`requiresHumanApproval`) and forwards them to
-`POST /v1/semantic-reviews/:requestId/submit`.
+```json
+{
+  "status": { "branch": "main", "connected": true, "paused": false, "cursor": 41,
+              "pendingConflicts": 1, "peers": [] },
+  "conflicts": [{ "id": "c-91", "path": "src/auth.ts", "ours": "…", "theirs": "…",
+                  "ancestor": "…", "binary": false, "peer": "bob" }],
+  "attention": "1 unresolved Crosscode conflict: src/auth.ts. Merge it from its ours/theirs/ancestor text and call `resolve`. …"
+}
+```
+
+This is the reason the design works. An agent only looks at anything when it is invoked, so
+a conflict arriving while it is idle would sit unseen until someone thought to ask. Riding
+out on every response means the agent trips over it on its next call, whatever that call
+was for.
+
+## The skill
+
+[`skills/crosscode/SKILL.md`](../skills/crosscode/SKILL.md) is one skill, not a suite. It
+tells the agent what is happening in the background, how to resolve a conflict, and — the
+part that matters most — when to do nothing. An agent that narrates sync activity to its
+user has broken the product.
+
+`crosscode start` copies it into the agent's skills directory (`.claude/skills/crosscode/`
+for Claude Code). For any other agent, point it at the file or paste its contents into
+whatever instructions file that agent reads.
+
+## Pre-edit hooks
+
+The hook runs before a file edit and tells the agent about a conflict on that exact file
+*before* it writes over it. Without a hook the agent still finds out on its next tool call;
+the hook just moves the moment earlier. It is the same binary as the MCP server, invoked as
+`crosscode hook`.
+
+It reads the client's hook payload as JSON on stdin (or takes a path as its argument), and:
+
+- No conflict on that path, no daemon, or a payload it does not recognize → exit 0, no
+  output. It never blocks an edit it has nothing to say about.
+- A conflict on that path → exit 2 with the explanation on stderr, plus Claude Code's
+  structured `hookSpecificOutput` form on stdout. Both spellings mean "deny this edit and
+  tell the agent why".
+
+### Claude Code
+
+`.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [{ "type": "command", "command": "crosscode hook" }]
+      }
+    ]
+  }
+}
+```
+
+### Codex CLI
+
+Codex's hook configuration lives in `~/.codex/config.toml` and its pre-edit event has moved
+between releases, so `crosscode start` writes the entry only for versions it recognizes and
+leaves the file alone otherwise. The command is the same `crosscode hook`, and the payload
+parser looks for the file path in the shapes Codex has used (`tool_input`, `input`,
+`arguments`, or a bare `path`), so the entry does not need updating when the field moves.
+
+Where a client has no pre-edit hook at all, MCP alone covers it. That is the intended
+degradation, not a gap.
+
+### From a clone
+
+The hook is a subcommand of the MCP entrypoint, so a source checkout runs it as:
+
+```bash
+node_modules/.bin/tsx apps/mcp-server/src/main.ts hook
+```
+
+The installed `crosscode hook` spelling is what `crosscode start` writes into agent
+configs.
