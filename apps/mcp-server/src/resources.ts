@@ -13,12 +13,12 @@ agent can pick the right tool and call order without reading external docs.
 
 ## Before editing anything
 
-1. \`get_workspace_state\` — orient yourself: HEAD, branch, dirty state, pending counts.
-2. \`claim_task\` — create (or find via \`list_tasks\`) a task for the work you're about
+1. \`get_workspace_state\`: orient yourself: HEAD, branch, dirty state, pending counts.
+2. \`claim_task\`: create (or find via \`list_tasks\`) a task for the work you're about
    to do, optionally scoped to paths.
-3. \`claim_scope\` — advertise a finer-grained path claim against that task so other
+3. \`claim_scope\`: advertise a finer-grained path claim against that task so other
    agents know to avoid those files.
-4. \`check_change_scope\` — check the paths you're about to touch against existing
+4. \`check_change_scope\`: check the paths you're about to touch against existing
    claims and pending remote proposals. Call this right before writing, not just
    once at the start of a session.
 
@@ -26,10 +26,10 @@ agent can pick the right tool and call order without reading external docs.
 
 After making edits, capture them as a durable transaction with exactly one of:
 
-- \`publish_intent\` — default variant; use when the change isn't specifically a
+- \`publish_intent\`: the default variant. Use it when the change isn't specifically a
   summary of finished work or an interface change.
-- \`submit_change_summary\` — use when reporting what was done, after the fact.
-- \`announce_interface_change\` — use when the edit changes a public API or contract
+- \`submit_change_summary\`: use when reporting what was done, after the fact.
+- \`announce_interface_change\`: use when the edit changes a public API or contract
   other agents depend on. Prefer this over the other two whenever it applies, since
   it's what other agents watch for before relying on your interfaces.
 
@@ -38,20 +38,20 @@ daemon and other agents use that tag to decide how much scrutiny the change need
 
 ## Validation and checkpoints
 
-- \`request_validation\` — run a named validation profile after edits, before
+- \`request_validation\`: run a named validation profile after edits, before
   handing off or checkpointing, to confirm the change is sound.
-- \`create_checkpoint\` — snapshot the worktree with a Git checkpoint (without
+- \`create_checkpoint\`: snapshot the worktree with a Git checkpoint (without
   moving HEAD) once validated.
 
 ## Handoff and remote-review lifecycle
 
-- \`list_remote_proposals\` — poll for operations proposed by other agents/replicas
+- \`list_remote_proposals\`: poll for operations proposed by other agents/replicas
   that are awaiting local review.
-- \`request_handoff\` — after publishing an intent/summary/interface-change, ask
+- \`request_handoff\`: after publishing an intent/summary/interface-change, ask
   another participant to accept or decline the resulting operation.
-- \`list_pending_semantic_reviews\` — poll for ambiguous change bundles the daemon
+- \`list_pending_semantic_reviews\`: poll for ambiguous change bundles the daemon
   needs this agent's judgment on before it can proceed.
-- \`submit_semantic_review\` — answer a pending review's \`requestId\` with a
+- \`submit_semantic_review\`: answer a pending review's \`requestId\` with a
   classification, confidence, affected symbols, evidence, invariants to preserve,
   an optional proposed resolution, and whether it requires human approval.
 
@@ -60,12 +60,12 @@ daemon and other agents use that tag to decide how much scrutiny the change need
 Once \`list_remote_proposals\` surfaces an operationId, resolve it fully through MCP
 without needing shell access to the CLI:
 
-1. \`inspect_proposal\` — fetch the operation and a human-readable analysis of it.
-2. \`diff_proposal\` — see the per-path diff, classification, risk, and dependents.
-3. \`list_proposal_artifacts\` — if the diff shows conflicts, see what the daemon
+1. \`inspect_proposal\`: fetch the operation and a human-readable analysis of it.
+2. \`diff_proposal\`: see the per-path diff, classification, risk, and dependents.
+3. \`list_proposal_artifacts\`: if the diff shows conflicts, see what the daemon
    captured about them.
 4. \`accept_proposal\` (applies it locally; pass \`reviewApprovals\` if a path needed
-   semantic-review sign-off) or \`reject_proposal\` (discards it) — exactly one of
+   semantic-review sign-off) or \`reject_proposal\` (discards it). Exactly one of
    these two is the terminal step for a given proposal.
 
 ## Publishing

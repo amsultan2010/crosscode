@@ -1,33 +1,33 @@
-# Crosscode — Build Instructions & Roadmap
+# Crosscode: build instructions and roadmap
 
-This document is a living reference: **current status** and **the plan**. It is deliberately not a full spec — implementation detail lives in the code and in `docs/architecture.md`, `docs/protocol.md`, `docs/mcp-clients.md`, `docs/security.md`, `README.md`, and `AGENTS.md`. Read those for how things work; read this for what's done and what's next.
+This document is a living reference: **current status** and **the plan**. It is not a full spec. Implementation detail lives in the code and in `docs/architecture.md`, `docs/protocol.md`, `docs/mcp-clients.md`, `docs/security.md`, `README.md`, and `AGENTS.md`. Read those for how things work; read this for what's done and what's next.
 
 ## What Crosscode is
 
-A local-first coordination layer for people and coding agents working in separate checkouts of the same Git repo. A daemon watches filesystem/Git activity, captures edits as durable transactions, and exchanges them through a coordination service. Remote work always arrives as a reviewable proposal — never auto-written into a checkout — and Git remains the durable history/publishing layer.
+A local-first coordination layer for people and coding agents working in separate checkouts of the same Git repo. A daemon watches filesystem/Git activity, captures edits as durable transactions, and exchanges them through a coordination service. Remote work always arrives as a reviewable proposal, never auto-written into a checkout, and Git remains the durable history/publishing layer.
 
-**Framing (2026-08-04).** The value proposition is *collaboration*, not collision defence. Coding together still works like emailing a `.docx` around: separate copies, no visibility into anyone else's work, a merge at the end. Google Docs fixed that for writing; Crosscode moves code toward it. Pitch what the team gains — seeing each other's work as it lands, taking a change with one command instead of a pull-request round trip — not what they are protected from. Overwrites are a real failure mode the safety model handles, but they are rare, and leading with them sells a defence against something most teams have not been bitten by. It also stops one deliberate step short of live editing: the accept step stays, because live typing into someone else's working tree is the one thing you do not want in code. Full product framing: `README.md`. Agent-facing contract (capability ladder, trust model, CLI/MCP-first positioning): `AGENTS.md`.
+**Framing (2026-08-04).** The value proposition is *collaboration*, not collision defence. Coding together still works like emailing a `.docx` around: separate copies, no visibility into anyone else's work, a merge at the end. Google Docs fixed that for writing; Crosscode moves code toward it. Pitch what the team gains rather than what they are protected from: seeing each other's work as it lands, taking a change with one command instead of a pull-request round trip. Overwrites are a real failure mode the safety model handles, but they are rare, and leading with them sells a defence against something most teams have not been bitten by. It also stops one step short of live editing. The accept step stays, because live typing into someone else's working tree is the thing you do not want in code. Full product framing: `README.md`. Agent-facing contract (capability ladder, trust model, CLI/MCP-first positioning): `AGENTS.md`.
 
-**Product-surface decision (2026-08-02): Crosscode is a CLI-first product.** The product surface is the daemon, the MCP server, and the CLI. The website is a landing page, sign-up/sign-in (including the `crosscode login` callback page), and the generated docs — nothing else lives behind auth. Two consequences, both deliberate:
+**Product-surface decision (2026-08-02): Crosscode is a CLI-first product.** The product surface is the daemon, the MCP server, and the CLI. The website is a landing page, sign-up/sign-in (including the `crosscode login` callback page), and the generated docs. Nothing else lives behind auth. Two consequences:
 
 - **There is no web dashboard**, and no web UI for teams, invites, settings, onboarding, analytics, or a live feed. The multi-tenant backend is untouched: workspaces, memberships, invites, pairing codes, roles, RLS, presence, and billing all still exist in `apps/service` and in the SQL migrations. They are reached from the CLI and the HTTP API. "Deleted" applies to the browser UI, never to the service.
 - **There is no editor extension.** Editors and agents integrate through MCP, which is the one integration contract.
 
-**Product-scope decision (2026-08-01, reaffirmed and sharpened 2026-08-04): Crosscode is for shared projects whose team members all run coding agents.** That is the audience — not "anyone with agents."
+**Product-scope decision (2026-08-01, reaffirmed and sharpened 2026-08-04): Crosscode is for shared projects whose team members all run coding agents.** That is the audience, not "anyone with agents."
 
 Two situations count, and only these two:
 
 1. **Several people on one project, all of them running agents.** The primary case, and what every feature is shaped for: invites, roles, seats, presence, claims, handoffs, per-workspace autonomy policy. This is why the product exists.
-2. **One person working alone *right now* on a project they share with others**, whose teammates simply aren't coding today. Still the same case — the repository is shared, their agents will land work on it again, and the proposals waiting on return are exactly what Crosscode makes safe.
+2. **One person working alone *right now* on a project they share with others**, whose teammates simply aren't coding today. Still the same case: the repository is shared, their agents will land work on it again, and the proposals waiting on return are exactly what Crosscode makes safe.
 
-**Explicitly out of scope:** a repository only one person will ever touch. There is nothing to coordinate with, and plain Git is the better tool. Do not frame the product, the free tier, or the marketing site around solo use — "you don't need a team" is the wrong message, and was briefly live on the landing page in error (corrected 2026-08-04).
+**Explicitly out of scope:** a repository only one person will ever touch. There is nothing to coordinate with, and plain Git is the better tool. Do not frame the product, the free tier, or the marketing site around solo use. "You don't need a team" is the wrong message, and was briefly live on the landing page in error (corrected 2026-08-04).
 
 One person running several of their *own* agents in parallel worktrees is a real coordination problem, but it is not the wedge and must not lead the messaging: it converts poorly into the team product and describes a user who can often get by without us. Design free tier and messaging around "your team's agents are colliding," not "useful even completely alone." 
 
 **Fundamental rules** (unchanged, non-negotiable):
 
 1. The local filesystem is always authoritative for local work.
-2. Remote operations arrive as proposals and are never automatically applied without a policy decision (see the autonomy-slider plan below — "automatic" is now a configurable policy, not a removal of this rule).
+2. Remote operations arrive as proposals and are never automatically applied without a policy decision (see the autonomy-slider plan below, where "automatic" is a configurable policy rather than a removal of this rule).
 3. Every materialization re-checks the local base and creates a checkpoint first.
 4. High-risk/critical changes always require explicit approval regardless of any policy setting.
 
@@ -54,18 +54,18 @@ The website sits beside this, not inside it: it originates accounts (sign-up/sig
 
 | App | What it is |
 | --- | --- |
-| `apps/daemon` | The per-worktree daemon — the sole local authority for capture, checkpoints, materialization, and sync (`pnpm daemon`). |
+| `apps/daemon` | The per-worktree daemon, the sole local authority for capture, checkpoints, materialization, and sync (`pnpm daemon`). |
 | `apps/cli` | The local CLI over the daemon's loopback HTTP API, plus login/join/init (`pnpm crosscode <command>`). |
 | `apps/mcp-server` | The standards-compliant MCP server agents connect to; bootstraps the daemon on first connection (`pnpm mcp`). |
 | `apps/service` | The multi-tenant coordination service: Supabase-Postgres operations, auth, workspaces, memberships, invites, pairing codes, projects, billing, audit (`pnpm service`). No UI. |
 | `apps/docs-site` | The website: landing page, auth pages (sign-up, sign-in, password reset, `/auth/cli.html`), and the docs pages generated from the root `docs/*.md` (`pnpm docs:dev` / `docs:build`). |
 
-## Authentication — `crosscode login`
+## Authentication: `crosscode login`
 
 This is a frozen contract. The CLI side and the site side are implemented against it independently and neither may renegotiate it.
 
 - `crosscode login` with no flags and a TTY present starts a loopback HTTP server on `127.0.0.1` on an ephemeral port with the route `/callback`, and generates a 32-character random `state`.
-- It opens the browser at `${WEB_URL}/auth/cli.html?port=<port>&state=<state>`, where `WEB_URL` comes from `--web <url>`, else `CROSSCODE_WEB_URL`, else the deprecated `CROSSCODE_DASHBOARD_URL` (still read so setups predating the dashboard's removal keep working; it prints a one-time notice on **stderr**, never stdout, so `--json` output stays a single parseable line), else the hosted default `DEFAULT_WEB_URL` in `apps/daemon/src/hosted.ts`. Both the CLI and the MCP server resolve the environment half through `configuredWebUrl()` in `apps/daemon/src/browser-login.ts` — the precedence chain lives in one place. Now that a hosted default exists, `WEB_URL_REQUIRED` is no longer reachable: bare `crosscode login` targets the hosted site.
+- It opens the browser at `${WEB_URL}/auth/cli.html?port=<port>&state=<state>`, where `WEB_URL` comes from `--web <url>`, else `CROSSCODE_WEB_URL`, else the deprecated `CROSSCODE_DASHBOARD_URL` (still read so setups predating the dashboard's removal keep working; it prints a one-time notice on **stderr**, never stdout, so `--json` output stays a single parseable line), else the hosted default `DEFAULT_WEB_URL` in `apps/daemon/src/hosted.ts`. Both the CLI and the MCP server resolve the environment half through `configuredWebUrl()` in `apps/daemon/src/browser-login.ts`, so the precedence chain lives in one place. Now that a hosted default exists, `WEB_URL_REQUIRED` is no longer reachable: bare `crosscode login` targets the hosted site.
 - `/auth/cli.html` is a page on the marketing site. If the visitor is not signed in it renders the normal sign-in form. After a successful Supabase sign-in it POSTs JSON to `http://127.0.0.1:<port>/callback`:
 
   ```jsonc
@@ -76,110 +76,126 @@ This is a frozen contract. The CLI side and the site side are implemented agains
     "user": { "id": "…", "email": "…" } }
   ```
 
-  then renders "You're signed in — return to your terminal."
+  then renders "You're signed in. Return to your terminal."
 - The CLI's loopback server answers the CORS preflight so the fetch from the site succeeds: `OPTIONS /callback` → `Access-Control-Allow-Origin: *`, `Access-Control-Allow-Methods: POST, OPTIONS`, `Access-Control-Allow-Headers: content-type`.
 - A mismatched or missing `state` fails with the error code `LOGIN_STATE_MISMATCH`. No callback within 300 seconds fails with `LOGIN_TIMEOUT`, whose hint points at `--email`/`--password` or `--no-browser`.
-- `--no-browser` prints the URL instead of opening it. `--email <e> --password <p>` keeps the existing headless path, which is what agents and CI use. There is deliberately **no** `CROSSCODE_TOKEN` environment variable.
+- `--no-browser` prints the URL instead of opening it. `--email <e> --password <p>` keeps the existing headless path, which is what agents and CI use. There is **no** `CROSSCODE_TOKEN` environment variable.
 - On success the session is persisted through the existing daemon config writer (the mode-`0600` `<git-dir>/crosscode/config.json`). Tokens are never printed to stdout and never appear in `--json` output. `crosscode login --json` emits `{"value":{"userId":"…","email":"…"}}`.
 
-Threat model for this flow — why loopback-only, why `state`, why nothing is printed — is in `docs/security.md`.
+The threat model for this flow is in `docs/security.md`: why loopback-only, why `state`, and why nothing is printed.
 
 ## Current status
 
-**Core coordination engine — complete and tested.** Per-worktree daemon (SQLite event log, hidden Git checkpoints, crash-safe materialization, Git-transition detection), a Supabase-Postgres-backed coordination service (authenticated sync, live WebSocket fan-out, audit log), deterministic conflict classification plus an AST-based TypeScript dependency graph, validation-gated publish, and a real (non-mock) AI semantic reviewer (`AgentDelegatedReviewer`, delegates to the workspace member's own connected MCP agent — no external AI provider). Auto-triggers at classification time, not just on demand. See `docs/architecture.md` for the full design and `README.md`'s "What works today" for the exact feature list.
+**Core coordination engine: complete and tested.** Per-worktree daemon (SQLite event log, hidden Git checkpoints, crash-safe materialization, Git-transition detection), a Supabase-Postgres-backed coordination service (authenticated sync, live WebSocket fan-out, audit log), deterministic conflict classification plus an AST-based TypeScript dependency graph, validation-gated publish, and a real (non-mock) AI semantic reviewer (`AgentDelegatedReviewer`, delegates to the workspace member's own connected MCP agent, with no external AI provider). Auto-triggers at classification time, not only on demand. See `docs/architecture.md` for the full design and `README.md`'s "What works today" for the exact feature list.
 
-**Agent-first surface pass — complete (2026-08-01).** Four parallel workstreams closed the gap between "supports agents" and "designed for agents to prefer":
+**Agent-first surface pass: complete (2026-08-01).** Four parallel workstreams closed the gap between "supports agents" and "designed for agents to prefer":
 
 - **CLI** rewritten on `commander`: proper `--help`, a `commands --json` machine-readable catalog, structured `{error: {code, message, hint}}` errors, JSON-first output preserved throughout. (`apps/cli`)
-- **MCP server** now self-describing: workflow-sequencing resources, tool descriptions that explain *when* to call each tool relative to others, a generated tool catalog as the single source of truth for `docs/mcp-clients.md`, and — closing a real gap found during review — MCP tools for the full proposal lifecycle (`accept_proposal`, `reject_proposal`, `publish_branch`, `diff_proposal`, `inspect_proposal`, `list_proposal_artifacts`) that previously only existed as CLI commands. An agent can now do the entire workflow through MCP alone, no shell access required. (`apps/mcp-server`)
+- **MCP server** now self-describing: workflow-sequencing resources, tool descriptions that explain *when* to call each tool relative to others, a generated tool catalog as the single source of truth for `docs/mcp-clients.md`, and, closing a gap found during review, MCP tools for the full proposal lifecycle (`accept_proposal`, `reject_proposal`, `publish_branch`, `diff_proposal`, `inspect_proposal`, `list_proposal_artifacts`) that previously only existed as CLI commands. An agent can now do the entire workflow through MCP alone, no shell access required. (`apps/mcp-server`)
 - **Website** now agent-crawlable: HTML pages generate from the root `docs/*.md` at build time (single source of truth, no more hand-transcribed drift), plus `llms.txt`/`llms-full.txt` and raw `.md` served directly. (`apps/docs-site`)
 - **Root `AGENTS.md`** created as the file coding agents auto-load: capability ladder, MCP trust model, and the CLI/MCP-first workflow contract, moved out of this document.
 
-**Daemon test flakiness — fixed (2026-08-01).** Root causes were: `DaemonClient`'s HTTP request timeout was a hardcoded 3s (too tight for a real daemon under load — also a latent production fragility, not just a test artifact — now 10s); vitest ran daemon-spawning integration/e2e tests with unbounded fork concurrency, so real child daemon processes starved each other for CPU (now capped at `maxForks: 4`); and the heaviest test cases in `process.test.ts`/`three-participant.e2e.test.ts` had tighter per-test timeouts than lighter cases in the same files — an inverted budget, not just contention — now rebalanced to match real cost.
+**Daemon test flakiness: fixed (2026-08-01).** Root causes were: `DaemonClient`'s HTTP request timeout was a hardcoded 3s, too tight for a real daemon under load and a latent production fragility rather than only a test artifact (now 10s); vitest ran daemon-spawning integration/e2e tests with unbounded fork concurrency, so real child daemon processes starved each other for CPU (now capped at `maxForks: 4`); and the heaviest test cases in `process.test.ts`/`three-participant.e2e.test.ts` had tighter per-test timeouts than lighter cases in the same files, an inverted budget rather than contention, now rebalanced to match real cost.
 
-**CLI-only pass — merged (2026-08-02).** The web dashboard was deleted outright and the product re-centred on the CLI. Four parallel workstreams, merged together with zero conflicts:
+**CLI-only pass: merged (2026-08-02).** The web dashboard was deleted outright and the product re-centred on the CLI. Four parallel workstreams, merged together with zero conflicts:
 
 - **Website reduced** to landing + auth + docs. `apps/docs-site/dashboard/` is gone (~4,400 lines: dashboard, onboarding, spotlight tour, analytics, settings, invite redemption, live-feed WebSocket client and their tests). In its place, `apps/docs-site/auth/` serves `signin`, `signup`, `reset`, and the `cli.html` login-callback page. (`apps/docs-site`)
 - **`crosscode login` became a browser flow** against the frozen contract above, with `--no-browser` and `--email`/`--password` preserved as the headless paths agents and CI use. New `apps/daemon/src/browser-login.ts` owns the loopback server, `state` check, CORS preflight, and timeout. (`apps/cli`, `apps/daemon`, `apps/mcp-server`)
-- **VS Code extension deleted** along with its build wiring — root `build` script, `pnpm-workspace.yaml` build allowances for `@vscode/vsce-sign` and `keytar`, and 2,078 lines of lockfile. (`apps/vscode-extension`, removed)
+- **VS Code extension deleted** along with its build wiring: root `build` script, `pnpm-workspace.yaml` build allowances for `@vscode/vsce-sign` and `keytar`, and 2,078 lines of lockfile. (`apps/vscode-extension`, removed)
 - **Docs rewritten CLI-first** across `README.md`, this file, `AGENTS.md`, `CONTRIBUTING.md`, and `docs/`. (`docs/`)
 
-What did **not** change, deliberately: the coordination service and every migration. Workspaces, memberships, invites, pairing codes, roles, RLS, presence, and billing are all still there and still tested — they lost their browser UI, not their existence. Known residue from this pass is tracked in [`docs/status/2026-08-02-cli-only-pass.md`](./docs/status/2026-08-02-cli-only-pass.md).
+What did **not** change: the coordination service and every migration. Workspaces, memberships, invites, pairing codes, roles, RLS, presence, and billing are all still there and still tested. They lost their browser UI, not their existence. Known residue from this pass is tracked in [`docs/status/2026-08-02-cli-only-pass.md`](./docs/status/2026-08-02-cli-only-pass.md).
 
-**Verification baseline (re-measured 2026-08-04).** Treat the numbers below as a dated observation, not a spec — run the commands rather than trusting the transcription. This paragraph sat at "25 files / 231 tests" for two days after the real figures moved, which is exactly the failure mode of hand-copied counts.
+**Verification baseline (re-measured 2026-08-04).** Treat the numbers below as a dated observation, not a spec, and run the commands rather than trusting the transcription. This paragraph sat at "25 files / 231 tests" for two days after the real figures moved, which is the failure mode of hand-copied counts.
 
-- `pnpm build` — `tsc --noEmit` under `strict`, then `scripts/build.mjs` bundles the three entrypoints to `dist/`. Passes.
-- `pnpm test` — **32 files passed, 8 skipped (40); 369 tests passed, 39 skipped (408)**. The skips are the PostgreSQL-gated suites, which deliberately get no `CROSSCODE_TEST_DATABASE_URL` here.
-- `pnpm test:postgres` — **8 files, 39 tests, none skipped.** Suites are discovered by the gate they read, and the run fails if a selected test reports as skipped rather than passed. `live-coordination.integration.test.ts` is still occasionally flaky under CPU contention (it timed out on one run against a plain Postgres 16 container, and passed on a rerun and on an unmodified tree); the 2026-08-01 flakiness work reduced this class of failure but has not eliminated it.
-- `pnpm docs:build` — passes; emits the landing page, four auth pages, and eight docs pages.
-- `docker build -f apps/service/Dockerfile -t crosscode-service .` — passes, and the container refuses to start without `DATABASE_URL`, as intended.
+- `pnpm build`: `tsc --noEmit` under `strict`, then `scripts/build.mjs` bundles the three entrypoints to `dist/`. Passes.
+- `pnpm test`: **32 files passed, 8 skipped (40); 369 tests passed, 39 skipped (408)**. The skips are the PostgreSQL-gated suites, which get no `CROSSCODE_TEST_DATABASE_URL` here.
+- `pnpm test:postgres`: **8 files, 39 tests, none skipped.** Suites are discovered by the gate they read, and the run fails if a selected test reports as skipped rather than passed. `live-coordination.integration.test.ts` is still occasionally flaky under CPU contention (it timed out on one run against a plain Postgres 16 container, and passed on a rerun and on an unmodified tree); the 2026-08-01 flakiness work reduced this class of failure but has not eliminated it.
+- `pnpm docs:build`: passes, emitting the landing page, four auth pages, and eight docs pages.
+- `docker build -f apps/service/Dockerfile -t crosscode-service .`: passes, and the container refuses to start without `DATABASE_URL`, as intended.
 
 Node 24 is required (`engines.node`); the repo pins it and CI runs it.
 
-**Distribution and hosting — the two things standing between this and a working stranger install (2026-08-04).** Both are operational, not code:
+**Distribution and hosting, the two things standing between this and a working stranger install (2026-08-04).** Both are operational, not code:
 
-1. **`@crosscode/cli` is not published.** The package builds, packs, and installs — `npm pack` yields `dist/` + README + LICENSE, both bins run outside the repo on nothing but Node 24, and `npx <tarball>` resolves the default bin — but the npm token in the environment is expired (`401` on `npm whoami`), and `npm login` needs an interactive session. Every install path in `README.md`, `docs/install-prompt.md`, `docs/mcp-clients.md`, and the marketing site is already written for the published package, so they are wrong until someone runs `npm publish` (which needs the `@crosscode` scope to exist on the account).
-2. **The hosted API is deployed but broken.** `https://www.getcrosscode.dev/api/v1/*` answers `500 FUNCTION_INVOCATION_FAILED`: `ERR_MODULE_NOT_FOUND` for `@crosscode/service/src/serverless.ts`. The workspace package's `exports` point at TypeScript source, which Vercel's function tracer copies as-is and Node then refuses to load from `node_modules`. It needs `@crosscode/service` to emit JavaScript (or the function to be bundled) plus a redeploy; the DNS/URL half is fixed in this pass — `DEFAULT_SERVICE_URL` named an `api.` subdomain that was never created, so every unflagged `login`/`signup` resolved to a nonexistent host, and it is now the site origin with `/v1/*` rewritten into the function.
+1. **`@crosscode/cli` is not published.** The package builds, packs, and installs: `npm pack` yields `dist/` + README + LICENSE, both bins run outside the repo on nothing but Node 24, and `npx <tarball>` resolves the default bin. But the npm token in the environment is expired (`401` on `npm whoami`), and `npm login` needs an interactive session. Every install path in `README.md`, `docs/install-prompt.md`, `docs/mcp-clients.md`, and the marketing site is already written for the published package, so they are wrong until someone runs `npm publish` (which needs the `@crosscode` scope to exist on the account).
+2. **The hosted API is deployed but broken.** `https://www.getcrosscode.dev/api/v1/*` answers `500 FUNCTION_INVOCATION_FAILED`: `ERR_MODULE_NOT_FOUND` for `@crosscode/service/src/serverless.ts`. The workspace package's `exports` point at TypeScript source, which Vercel's function tracer copies as-is and Node then refuses to load from `node_modules`. It needs `@crosscode/service` to emit JavaScript (or the function to be bundled) plus a redeploy. The DNS/URL half is fixed in this pass: `DEFAULT_SERVICE_URL` named an `api.` subdomain that was never created, so every unflagged `login`/`signup` resolved to a nonexistent host, and it is now the site origin with `/v1/*` rewritten into the function.
 
 Until (2) is fixed, `crosscode start` completes locally and signs in against Supabase (which is live), but sync against the hosted service fails.
 
-**Phases 8/9/10 v1 — implemented (2026-08-02).** Invite-by-code/link, self-serve workspace creation, the autonomy slider, and a billing placeholder all landed together against the same hosted Supabase project this repo already used for dev. Detail and remaining gaps are under each phase below — none is fully "done" against its original exit criteria yet, but each has a working v1.
+**Phases 8/9/10 v1: implemented (2026-08-02).** Invite-by-code/link, self-serve workspace creation, the autonomy slider, and a billing placeholder all landed together against the same hosted Supabase project this repo already used for dev. Detail and remaining gaps are under each phase below. None is fully "done" against its original exit criteria yet, but each has a working v1.
 
-**Billing v2 — implemented (2026-08-04).** Phase 10's placeholder became a real Stripe
+**Billing v2: implemented (2026-08-04).** Phase 10's placeholder became a real Stripe
 implementation: monthly/annual prices with annual as the default, `crosscode billing
 upgrade|cancel|portal`, a signature-verified webhook, and a defined subscription lifecycle
 whose governing rule is *never destroy, never hard-block*. See Phase 10 below for the
 decisions and what is still outstanding (chiefly: the Stripe account itself).
 
+**End-to-end encryption of file payloads: implemented (2026-08-04).** A workspace key
+generated on a member's machine seals every file payload before it leaves: contents, paths,
+diffs, content hashes, and the change intent recorded with a transaction. The service stores
+an opaque AES-256-GCM blob in `operations.event` plus one HMAC `pathToken` per changed file,
+which is all it ever used the per-file rows for. Sealing lives in `apps/daemon/src/sealing.ts`
+and is kept out of `@crosscode/core`, which the service links, so the service cannot decrypt
+even by accident.
+
+The claim stops at the file payload, and every doc now says so. Task titles, claim targets,
+published intent text, handoff notes, and validation output are stored in the clear, and
+they can contain paths and descriptions of what someone is working on. The sealed envelope
+is reusable for them, and closing that gap is outstanding work. Until it lands, no copy
+anywhere may say or imply "we can't see anything". `docs/security.md#end-to-end-encryption`
+is the design, `docs/privacy.md` is the user-facing statement, and `docs/protocol.md` is the
+wire format.
+
 ## The plan
 
 Three initiatives, in this order. Each is a precondition for the next in practice (tiers need something to meter; the autonomy slider is most valuable once a hosted service makes teams easy to form).
 
-### Phase 8 — Hosted multi-tenant coordination service + frictionless team setup (v1 shipped)
+### Phase 8: hosted multi-tenant coordination service and frictionless team setup (v1 shipped)
 
-**Problem:** the multiplayer feature — the actual point of the product — currently requires a team to stand up their own Supabase project, run migrations, and have an admin run `service:provision` with a service-role key to invite each member by email. That's not frictionless, and it undercuts the "open a folder, invite your team" vision.
+**Problem:** the multiplayer feature is the point of the product, and it currently requires a team to stand up their own Supabase project, run migrations, and have an admin run `service:provision` with a service-role key to invite each member by email. That's not frictionless, and it undercuts the "open a folder, invite your team" vision.
 
-**What's already there to build on:** the coordination service already does multi-tenant workspace isolation — every table is scoped by `workspace_id` with Postgres RLS as defense-in-depth, and Supabase Auth already handles member identity. The gap is *who operates the service* and *how people join*, not the underlying data model.
+**What's already there to build on:** the coordination service already does multi-tenant workspace isolation. Every table is scoped by `workspace_id` with Postgres RLS as defense-in-depth, and Supabase Auth already handles member identity. The gap is *who operates the service* and *how people join*, not the underlying data model.
 
 **Scope:**
 - Crosscode runs one hosted, multi-tenant instance of the coordination service (you operate the Supabase project; teams no longer run their own).
-- Self-serve workspace creation: opening a folder and connecting an agent creates a workspace against the hosted service automatically — no `service:provision`/admin step for the common case. Self-hosting stays available for teams who want it.
-- Invite-by-code/link: a workspace owner generates a short-lived invite (`POST /v1/invites`), a teammate redeems it with `crosscode join --invite <code>` or `POST /v1/invites/:code/redeem`. There is no web redemption page — see the product-surface decision above.
-- Reading workspace state — presence, tasks, claims, proposals, validation — is `crosscode status --json`, the equivalent MCP tools, and the existing REST/`/v1/stream` endpoints. There is deliberately no browser read model and no server-side aggregation endpoint.
+- Self-serve workspace creation: opening a folder and connecting an agent creates a workspace against the hosted service automatically, with no `service:provision` or admin step for the common case. Self-hosting stays available for teams who want it.
+- Invite-by-code/link: a workspace owner generates a short-lived invite (`POST /v1/invites`), a teammate redeems it with `crosscode join --invite <code>` or `POST /v1/invites/:code/redeem`. There is no web redemption page; see the product-surface decision above.
+- Reading workspace state (presence, tasks, claims, proposals, validation) is `crosscode status --json`, the equivalent MCP tools, and the existing REST/`/v1/stream` endpoints. There is no browser read model and no server-side aggregation endpoint.
 
-**Real cost of this decision:** taking on hosting/ops/billing liability for other people's workspace metadata (proposals, diffs, task descriptions — not raw source unless proposals pass through) starting now, not deferred. Confirmed as the right tradeoff (2026-08-01) because it's what actually makes team setup frictionless — self-host-only doesn't solve the problem.
+**Real cost of this decision:** taking on hosting/ops/billing liability for other people's workspace metadata (proposals, diffs, and task descriptions, not raw source unless proposals pass through) starting now, not deferred. Confirmed as the right tradeoff (2026-08-01) because it is what makes team setup frictionless; self-host-only does not solve the problem.
 
 **Exit criteria:** a user creates an account, a workspace exists with zero manual service setup, they generate an invite, a teammate redeems it with one command, and both are coordinating through the same workspace within minutes.
 
-**Shipped (v1):** self-serve `crosscode signup` (with an optional `--invite <code>`), invite create/list/revoke (`POST/GET/DELETE /v1/invites`) and redeem (`crosscode join --invite`, `POST /v1/invites/:code/redeem`), and self-serve `POST /v1/workspaces`. All running against the same Supabase project this repo already used for dev — "hosted" here means the code path exists and works against a real project, not that a separate production deployment/ops setup has been stood up yet.
+**Shipped (v1):** self-serve `crosscode signup` (with an optional `--invite <code>`), invite create/list/revoke (`POST/GET/DELETE /v1/invites`) and redeem (`crosscode join --invite`, `POST /v1/invites/:code/redeem`), and self-serve `POST /v1/workspaces`. All running against the same Supabase project this repo already used for dev. "Hosted" here means the code path exists and works against a real project, not that a separate production deployment has been stood up.
 
-**Onboarding (per [`docs/onboarding-contracts.md`](./docs/onboarding-contracts.md)).** Onboarding is the CLI: create an account on the site or with `crosscode signup`, `crosscode login`, `crosscode init`, `crosscode join`. Signup auto-provisions a personal workspace (Contract C), so nothing gates on creating a team. The pairing-code flow (Contract A) survives as a way to attach a checkout to a workspace without a login at all — mint with `POST /v1/pairing-codes`, redeem with `crosscode join --pair <code>`.
+**Onboarding (per [`docs/onboarding-contracts.md`](./docs/onboarding-contracts.md)).** Onboarding is the CLI: create an account on the site or with `crosscode signup`, `crosscode login`, `crosscode init`, `crosscode join`. Signup auto-provisions a personal workspace (Contract C), so nothing gates on creating a team. The pairing-code flow (Contract A) survives as a way to attach a checkout to a workspace without a login at all: mint with `POST /v1/pairing-codes`, redeem with `crosscode join --pair <code>`.
 
-**One command to first value — `crosscode start` (2026-08-04).** Those steps are all still there, but a five-command setup is where a first-time user is lost, not at any one of the five. `crosscode start` is the path through them: init, sign in or sign up, attach to the account's personal workspace, start the daemon, register the MCP server. It adds no capability on purpose — it is the ordering plus the defaults that make every flag optional, and each step is idempotent, so re-running it in a configured checkout reports state rather than setting up twice. Implementation is `apps/cli/src/start.ts` (orchestration) and `apps/cli/src/mcp-config.ts` (client registration).
+**One command to first value, `crosscode start` (2026-08-04).** Those steps are all still there, but a five-command setup is where a first-time user is lost, not at any one of the five. `crosscode start` is the path through them: init, sign in or sign up, attach to the account's personal workspace, start the daemon, register the MCP server. It adds no capability on purpose. What it contributes is the ordering plus the defaults that make every flag optional, and each step is idempotent, so re-running it in a configured checkout reports state rather than setting up twice. Implementation is `apps/cli/src/start.ts` (orchestration) and `apps/cli/src/mcp-config.ts` (client registration).
 
 Three decisions worth not relitigating:
 
-- **The MCP bootstrap's raw `CROSSCODE_SERVICE_URL` read stays raw.** `apps/mcp-server/src/bootstrap.ts` deliberately does not call `resolveDefaultServiceUrl()`, because the compiled-in hosted default would make that variable always set — which would turn every fresh MCP install into a forced login and make every pre-existing local-only checkout start demanding one. `crosscode start` is an explicit opt-in a person ran; an MCP client connecting is implicit. Different questions, different answers. A worktree that went through `start` already holds a session, so it is unaffected either way.
-- **Both published bins point at `dist/cli.js`**, which dispatches on the name it was invoked under. npm only auto-resolves `npx <package>` when every `bin` entry names one file (or one is named after the package), and `@crosscode/cli`'s unscoped name is `cli` — so two distinct bin targets made `npx @crosscode/cli start` fail with "could not determine executable to run". Windows `.cmd` shims lose the invoked name, so `crosscode mcp` is the portable spelling and is what `start` writes into an MCP config there.
+- **The MCP bootstrap's raw `CROSSCODE_SERVICE_URL` read stays raw.** `apps/mcp-server/src/bootstrap.ts` deliberately does not call `resolveDefaultServiceUrl()`, because the compiled-in hosted default would make that variable always set, which would turn every fresh MCP install into a forced login and make every pre-existing local-only checkout start demanding one. `crosscode start` is an explicit opt-in a person ran; an MCP client connecting is implicit. A worktree that went through `start` already holds a session, so it is unaffected either way.
+- **Both published bins point at `dist/cli.js`**, which dispatches on the name it was invoked under. npm only auto-resolves `npx <package>` when every `bin` entry names one file (or one is named after the package), and `@crosscode/cli`'s unscoped name is `cli`, so two distinct bin targets made `npx @crosscode/cli start` fail with "could not determine executable to run". Windows `.cmd` shims lose the invoked name, so `crosscode mcp` is the portable spelling and is what `start` writes into an MCP config there.
 - **MCP registration covers the JSON-configured clients only** (Claude Code, Cursor, Gemini CLI, OpenCode). Codex CLI's `~/.codex/config.toml` is a global file holding model, approval, and sandbox settings, and merging TOML into it without a TOML parser risks corrupting settings unrelated to us; those three lines stay a manual step in `docs/mcp-clients.md`.
 
-### Phase 9 — Autonomy slider (auto-apply vs. always-approve) (v1 shipped)
+### Phase 9: autonomy slider, auto-apply vs. always-approve (v1 shipped)
 
 **Problem:** today, every proposal requires an explicit `accept`. Some users want that; some want closer to real-time (Google-Docs-adjacent) sync and are fine trusting validation + semantic review to catch what a human eye would've caught.
 
-**Scope:** a per-workspace (or per-path) policy setting on top of the existing accept/reject flow — not a rewrite of it. A proposal is still created, classified, and validated identically; the policy controls whether `accept` fires automatically. Discrete tiers, not a continuous slider, because "how automatic" needs to map to testable conditions:
+**Scope:** a per-workspace (or per-path) policy setting on top of the existing accept/reject flow, not a rewrite of it. A proposal is still created, classified, and validated identically; the policy controls whether `accept` fires automatically. Discrete tiers, not a continuous slider, because "how automatic" needs to map to testable conditions:
 
 1. **Always ask** (today's behavior, default).
-2. **Auto-apply if clean** — no path/claim overlap, validation passes, classified `independent` or `likely-compatible`.
-3. **Auto-apply always** — everything except what Fundamental Rule 4 forbids (high/critical risk always requires approval, no exceptions, no policy override).
+2. **Auto-apply if clean**: no path/claim overlap, validation passes, classified `independent` or `likely-compatible`.
+3. **Auto-apply always**: everything except what Fundamental Rule 4 forbids (high/critical risk always requires approval, no exceptions, no policy override).
 
-**Dependency:** tier 2+ should require semantic review to be enabled for the workspace — auto-apply is trusting the reviewer to catch what a human would've, so it shouldn't be available below the tier that includes review. This also gives the pricing tiers below a natural feature boundary.
+**Dependency:** tier 2+ should require semantic review to be enabled for the workspace. Auto-apply trusts the reviewer to catch what a human would have, so it should not be available below the tier that includes review. This also gives the pricing tiers below a natural feature boundary.
 
 **Exit criteria:** a workspace can configure its autonomy tier, tier 2/3 proposals materialize without a human calling `accept`, Fundamental Rule 4 is provably never bypassed regardless of tier, and switching tiers takes effect without restarting the daemon.
 
-**Shipped (v1):** `workspaces.autonomy_tier` (0/1/2), `GET/PUT /v1/workspace/autonomy` (owner-only to set), `crosscode workspace autonomy get|set` plus matching MCP tools, and the daemon's existing local `autoApplyRisk` mechanism extended to also honor the workspace's synced tier — refreshed on each sync cycle, no daemon restart required. Every auto-apply attempt still routes through the same unchanged `accept()` → `assertApplicable`/`assertChangeApplicable` gate, which is the sole enforcement point for Fundamental Rule 4; a dedicated regression test proves a critical-risk proposal is never auto-applied at tier 2. One known gap: tier ≥1 requiring semantic review enabled is currently enforced client-side in the daemon (against the committed `.crosscode/config.yaml`), not server-side in the `PUT` handler, because the service has no visibility into that git-committed file — worth revisiting once review policy has a service-side home.
+**Shipped (v1):** `workspaces.autonomy_tier` (0/1/2), `GET/PUT /v1/workspace/autonomy` (owner-only to set), `crosscode workspace autonomy get|set` plus matching MCP tools, and the daemon's existing local `autoApplyRisk` mechanism extended to also honor the workspace's synced tier, refreshed on each sync cycle with no daemon restart required. Every auto-apply attempt still routes through the same unchanged `accept()` → `assertApplicable`/`assertChangeApplicable` gate, which is the sole enforcement point for Fundamental Rule 4; a dedicated regression test proves a critical-risk proposal is never auto-applied at tier 2. One known gap: tier ≥1 requiring semantic review enabled is currently enforced client-side in the daemon (against the committed `.crosscode/config.yaml`), not server-side in the `PUT` handler, because the service has no visibility into that git-committed file. Worth revisiting once review policy has a service-side home.
 
-### Phase 10 — Tiered pricing & billing (Stripe implemented; account setup pending)
+### Phase 10: tiered pricing and billing (Stripe implemented; account setup pending)
 
 **Billing provider:** Stripe. `StripeBillingProvider` (`apps/service/src/stripe.ts`) implements
 the `BillingProvider` interface against Stripe's REST API; `StubBillingProvider` remains the
@@ -191,34 +207,34 @@ running at a loss; it is not the optimization target.
 
 **Metering axes.** Two candidate axes were considered and rejected as walls:
 
-- **Semantic review calls/month** — *rejected.* It reads like the direct cost driver, but
+- **Semantic review calls/month**: *rejected.* It reads like the direct cost driver, but
   review is delegated to the workspace member's own already-connected MCP agent and never
   leaves their machine, so it costs Crosscode nothing. Metering it would mean adding a
   network round-trip before every local review purely to bill for it. Uncapped on every
-  plan, free included — and marketable: unlimited AI conflict review, on your own agent,
+  plan, free included, and marketable: unlimited AI conflict review, on your own agent,
   code never leaves your machine.
-- **Seats** — *rejected below Team.* A workspace gets more valuable the more people are in
+- **Seats**: *rejected below Team.* A workspace gets more valuable the more people are in
   it, and the invite/pairing flow is the growth loop. Charging per head below the org tier
   taxes exactly the behaviour we want. Seat caps stay only as abuse guards.
 
 The axes actually used:
 
-- **History retention** — bounds `operations`, the only table that grows without limit.
+- **History retention**: bounds `operations`, the only table that grows without limit.
   This is the real cost governor.
-- **Autonomy tier availability** — auto-always (Phase 9) is the "I trust it now" moment,
-  which is the honest point to ask for money.
-- **Org controls** — SSO, audit export, SLA. What organizations actually buy.
+- **Autonomy tier availability**: auto-always (Phase 9) is the "I trust it now" moment,
+  which is the right point to ask for money.
+- **Org controls**: SSO, audit export, SLA. What organizations buy.
 
 **Tiers:**
 
 | Tier | Monthly | Annual | Seats | History | Autonomy | Org controls |
 | --- | --- | --- | --- | --- | --- | --- |
-| Free | $0 | $0 | 5 | 7 days | always-ask, auto-if-clean | — |
-| Essential | $2.50/mo | $25/yr | 10 | 30 days | all | — |
-| Pro | $5.00/mo | $50/yr | 25 | 90 days | all | — |
-| Unlimited | $7.50/mo | $75/yr | unlimited | 365 days | all | — |
+| Free | $0 | $0 | 5 | 7 days | always-ask, auto-if-clean | none |
+| Essential | $2.50/mo | $25/yr | 10 | 30 days | all | none |
+| Pro | $5.00/mo | $50/yr | 25 | 90 days | all | none |
+| Unlimited | $7.50/mo | $75/yr | unlimited | 365 days | all | none |
 | Team | $5.00/seat/mo | $50/seat/yr | unlimited | 365 days | all | SSO, audit export, SLA |
-| Student | $2.50/mo | $25/yr | 25 (Pro-level) | 90 days (Pro-level) | all | — |
+| Student | $2.50/mo | $25/yr | 25 (Pro-level) | 90 days (Pro-level) | all | none |
 
 Annual is twelve months for the price of ten on every row. Semantic review is unlimited on
 every row, so it is not a column. Limits live in `PLAN_LIMITS` and prices in `PLAN_PRICING`,
@@ -226,12 +242,12 @@ both in `apps/service/src/billing.ts`; the Stripe Price ids that back them are d
 configuration (`CROSSCODE_STRIPE_PRICES`), never committed.
 
 Student tier requires real verification (e.g. SheerID or `.edu`-gated flow) to avoid resale
-abuse, which does not exist yet — so `POST /v1/workspace/billing/checkout` **refuses
+abuse, and it does not exist yet, so `POST /v1/workspace/billing/checkout` **refuses
 `student` outright** (403) rather than selling Pro's limits at Essential's price to anyone
 who asks. It stays an out-of-band grant until the verification flow lands.
 
 **Deliberate tradeoff:** Unlimited ($7.50) has unlimited seats, so it undercuts Team from
-two seats up. That is intended under a user-count objective — Team is differentiated by org
+two seats up. That is intended under a user-count objective: Team is differentiated by org
 controls, not seat count. Revisit by changing numbers in `PLAN_PRICING`/`PLAN_LIMITS` if the
 economics ever stop working.
 
@@ -268,8 +284,8 @@ defenses, each covered by a test in `apps/service/src/stripe.test.ts` and `http.
    → 404, not a weakened check. `main.ts` requires the secret whenever a Stripe key is set.
 2. **Signature verified over the raw bytes, before parsing.** `verifyStripeSignature()`
    recomputes HMAC-SHA256 over `<timestamp>.<body>` and compares constant-time against every
-   `v1=` entry (there are several during a secret rotation). A malformed header — no `t`, no
-   `v1` — is a refusal, not a fall-through. An unsigned body never reaches `JSON.parse`, let
+   `v1=` entry (there are several during a secret rotation). A malformed header with no `t`
+   or no `v1` is a refusal, not a fall-through. An unsigned body never reaches `JSON.parse`, let
    alone a write.
 3. **Replay is bounded to five minutes** by the signed timestamp's tolerance, checked in both
    directions, and then to *once* by `billing_events`, which records Stripe's event id.
@@ -277,21 +293,21 @@ defenses, each covered by a test in `apps/service/src/stripe.test.ts` and `http.
    retried rather than swallowed.
 4. **The event is a signal, not a fact.** The handler takes the subscription id out of the
    body and re-reads that subscription's authoritative state from Stripe before writing.
-   Out-of-order delivery, redelivery, and replay therefore all converge on the same write —
+   Out-of-order delivery, redelivery, and replay therefore all converge on the same write, so
    a stale "upgraded to pro" event that arrives after a cancellation cannot resurrect the
    plan. The workspace is resolved from the database's own customer/subscription mapping;
    `client_reference_id`/`metadata` are consulted only when no mapping exists yet, and only
    if they parse as a workspace id. A workspace that cancelled and bought again has a dead
    subscription still emitting for a while, so `applySubscriptionState` additionally refuses
    any event about a subscription that is not the workspace's current one while that current
-   one is live — otherwise a delayed final invoice for the old subscription would take the
+   one is live. Otherwise a delayed final invoice for the old subscription would take the
    plan the user just paid for straight back off them.
 
 #### Lifecycle decisions
 
 Previously undefined; the only stated requirement was that downgrade and cancellation must
 not destroy workspace data. The rule underneath all of them is **never destroy, never
-hard-block** — a plan change costs a capability, never access or history.
+hard-block**. A plan change costs a capability, never access or history.
 
 `workspaces.plan` is the *effective* plan and the single thing every limit is enforced
 against. `workspaces.billing_plan` is what is being paid for. They differ only during a
@@ -309,7 +325,7 @@ waits on a sweep.
   retroactively deletes what was already promised.
 
   This is where this workstream met the retention one (#35), which shipped first and swept
-  against the current plan — so a Pro→Essential downgrade would have deleted 60 days of
+  against the current plan, so a Pro→Essential downgrade would have deleted 60 days of
   history the workspace had been promised. Reconciling the two needed more than swapping the
   column in, because #35's cursor watermark depends on deletion removing a *prefix* of the
   sequence, and per-row windows let an expired row sit above a live one. The cutoff is
@@ -325,20 +341,20 @@ waits on a sweep.
   payment clears the deadline and restores everything.
 - **Auto-always on downgrade** → clamped to auto-if-clean, never an error. Clamped on the
   write path (`autonomy_tier = LEAST(autonomy_tier, …)`) and again on the read path
-  (`getWorkspaceAutonomyTier`), which is what the daemon syncs its policy from — so a grace
+  (`getWorkspaceAutonomyTier`), which is what the daemon syncs its policy from, so a grace
   period that lapses between sweeps cannot leave a workspace auto-applying on a plan that no
-  longer unlocks it. This closed a real hole: before, a downgrade left `autonomy_tier = 2`
+  longer unlocks it. This closed a hole: before, a downgrade left `autonomy_tier = 2`
   set and only *new writes* were gated.
 - **Who pays** → the workspace, not the person. The Stripe customer is keyed by workspace id
   and the subscription belongs to the workspace; `billing_owner_member_id` is a label for
   receipts and display. When that member leaves, `disableMember` reassigns it to the
-  longest-tenured remaining active owner and audits the change — the subscription is not
+  longest-tenured remaining active owner and audits the change. The subscription is not
   touched, and a workspace can never lose its last owner anyway.
 - **Team per-seat proration** → the subscription quantity tracks the active member count.
   `reconcileSeatQuantity` runs after an invite redemption or a member removal and lets Stripe
   compute the mid-cycle credit or charge (`proration_behavior: create_prorations`); there is
-  deliberately no arithmetic on our side. It never throws — nobody should be unable to remove
-  a member because Stripe is unreachable — and a missed call self-corrects on the next
+  no arithmetic on our side. It never throws, because nobody should be unable to remove a
+  member just because Stripe is unreachable, and a missed call self-corrects on the next
   membership or plan change.
 
 `pnpm service:billing-sweep` (`apps/service/src/billing-sweep.ts`) writes lapsed grace
@@ -347,27 +363,27 @@ only for making the stored plan agree with what is already being enforced.
 
 **Configuration** (all secrets, supplied by the host): `CROSSCODE_STRIPE_SECRET_KEY`,
 `CROSSCODE_STRIPE_WEBHOOK_SECRET`, `CROSSCODE_STRIPE_PRICES` (one JSON object mapping each
-plan/interval to its Stripe Price id — one secret rather than ten variables, because ten is
-what makes an operator get one wrong and only find out at checkout),
+plan/interval to its Stripe Price id, so one secret rather than ten variables, because ten
+variables is what makes an operator get one wrong and only find out at checkout),
 `CROSSCODE_STRIPE_SUCCESS_URL`, and optionally `CROSSCODE_STRIPE_CANCEL_URL`,
 `CROSSCODE_STRIPE_PORTAL_RETURN_URL`, `CROSSCODE_STRIPE_API_VERSION`. Setting none of them
 leaves the service with no billing surface at all, which is the right shape for a
 self-hoster.
 
-**Design intent:** the free tier should comfortably fit a real small team (see the product-scope decision above) rather than tease them into upgrading — 5 seats is a whole team, not a trial. The first real friction point should be growing past that team, wanting a longer history to look back through, or wanting conflicts to auto-resolve, never an artificial cap.
+**Design intent:** the free tier should comfortably fit a real small team (see the product-scope decision above) rather than tease them into upgrading. 5 seats is a whole team, not a trial. The first real friction point should be growing past that team, wanting a longer history to look back through, or wanting conflicts to auto-resolve, never an artificial cap.
 
 **Exit criteria:** Stripe account exists and is wired to workspace creation/upgrade; each tier's caps are enforced server-side (not just UI-hidden); student verification flow works; downgrade/cancellation doesn't destroy workspace data.
 
-**Shipped (v1, placeholder — 2026-08-02):** `workspaces.plan` (free/essential/pro/unlimited/team/student) plus then-unused `stripe_customer_id`/`stripe_subscription_id` columns, a `usage_counters` table metering semantic review calls/month, a `BillingProvider` interface with a `StubBillingProvider`, and `assertSeatCapAvailable`/`assertSemanticReviewCallAvailable`/`assertPlanAllowsAutonomyTier` enforcement helpers plus a read-only `crosscode billing status` that reports the plan's `historyRetentionDays`. `assertPlanAllowsAutonomyTier` and `assertSeatCapAvailable` are enforced end-to-end in `apps/service/src/store.ts` — the former on the autonomy-tier write path, the latter inside the transaction that adds a member — and both answer `402`.
+**Shipped (v1, placeholder, 2026-08-02):** `workspaces.plan` (free/essential/pro/unlimited/team/student) plus then-unused `stripe_customer_id`/`stripe_subscription_id` columns, a `usage_counters` table metering semantic review calls/month, a `BillingProvider` interface with a `StubBillingProvider`, and `assertSeatCapAvailable`/`assertSemanticReviewCallAvailable`/`assertPlanAllowsAutonomyTier` enforcement helpers plus a read-only `crosscode billing status` that reports the plan's `historyRetentionDays`. `assertPlanAllowsAutonomyTier` and `assertSeatCapAvailable` are enforced end-to-end in `apps/service/src/store.ts`, the former on the autonomy-tier write path and the latter inside the transaction that adds a member, and both answer `402`.
 
-**Shipped (v2, real provider — 2026-08-04):** `StripeBillingProvider` against the existing
+**Shipped (v2, real provider, 2026-08-04):** `StripeBillingProvider` against the existing
 `BillingProvider` seam, with monthly and annual prices and annual as the default everywhere;
 `crosscode billing upgrade|cancel|portal` over three owner-only service routes; the
 signature-verified, idempotent, replay-safe webhook described above; and the full lifecycle
 above, backed by migration `012_billing_lifecycle.sql` (grace-period and subscription state
 on `workspaces`, a `billing_events` replay ledger, `operations.retention_days`) plus
 `apps/service/src/billing-lifecycle.integration.test.ts`, which exercises each decision
-against real PostgreSQL — including that the members, history, and settings are all still
+against real PostgreSQL, including that the members, history, and settings are all still
 there afterwards.
 
 Stripe is reached with `fetch` and `node:crypto` rather than the official SDK. The provider
@@ -394,7 +410,7 @@ must refuse.
   workspace comes from `ensurePersonalWorkspace()` and is deliberately not counted.
 - Rate limiting is two-layered: a coarse pre-auth per-IP ceiling (3000/min) as a flood
   guard, and the real quota charged per authenticated identity (600/min, 30/min for replica
-  registration) in `verifyToken`/`authenticate`. Per-IP alone was wrong in both directions —
+  registration) in `verifyToken`/`authenticate`. Per-IP alone was wrong in both directions:
   too loose for one abusive account, and too tight for an office or CI fleet behind one NAT
   address, where daemons throttled each other. `POST /v1/pairing-codes/claim` stays per-IP
   at 10/min: it is unauthenticated, so there is no identity to charge, and that limit is the
@@ -406,21 +422,20 @@ must refuse.
 `workspaces.operations_pruned_through`. `GET /v1/operations` answers a cursor below that
 watermark with an explicit `cursor-too-old` resync status (`410 Gone` for daemons that
 predate it) instead of a truncated page, and the daemon adopts the watermark and reports
-the gap — see docs/protocol.md. The sweep runs on a service-side interval configured with
-`CROSSCODE_RETENTION_DATABASE_URL` (the request-serving role deliberately cannot delete
-operations); `pnpm service:prune` runs it manually. Content is also no longer stored
+the gap; see docs/protocol.md. The sweep runs on a service-side interval configured with
+`CROSSCODE_RETENTION_DATABASE_URL` (the request-serving role cannot delete operations); `pnpm service:prune` runs it manually. Content is also no longer stored
 twice: `operations.event` is the single home of a transaction's file bodies, and
 `operation_files` is a per-path index into it.
 
 `assertSemanticReviewCallAvailable` is deliberately left unwired rather than pending: semantic review is delegated to the member's own MCP agent and never reaches the service, so there is no per-call cost to meter, and wiring it would mean adding a network round-trip before every local review purely to bill for it (see the comment above `incrementSemanticReviewUsage` in `apps/service/src/billing.ts`). Every plan now carries an unlimited cap for it, so it can never fire.
 
-### Phase 11 — Pairing a checkout to an account (backend v1 shipped)
+### Phase 11: pairing a checkout to an account (backend v1 shipped)
 
 **Problem:** nothing linked a local MCP/daemon install to a cloud account, so the first
 thing a new user did was set up a team they didn't have yet.
 
 **Shape:** signup auto-provisions a personal workspace, and a one-time pairing code binds
-a local checkout to it — verified, not assumed. Explicit team creation is an ordinary
+a local checkout to it, verified rather than assumed. Explicit team creation is an ordinary
 later action, never a gate. The frozen contracts live in `docs/onboarding-contracts.md`.
 
 **Shipped (backend v1, Contracts A and C):**
@@ -430,7 +445,7 @@ later action, never a gate. The frozen contracts live in `docs/onboarding-contra
 - `GET /v1/pairing-codes/:pairingId` (Supabase JWT + workspace header) → `{ status, claimedAt, replicaId, actorId }`
   where status is `pending | claimed | expired`. Whoever minted the code polls this to
   confirm the claim.
-- `POST /v1/pairing-codes/claim` — **unauthenticated**, the code is the credential. Returns
+- `POST /v1/pairing-codes/claim`: **unauthenticated**, the code is the credential. Returns
   `{ workspaceId, replicaId, token, projectId }`, where `token` is a `ccw_` workspace
   service token and `projectId` is null until the projects workstream populates it.
   Claiming is a single atomic conditional UPDATE; already-claimed, expired, and unknown
@@ -439,7 +454,7 @@ later action, never a gate. The frozen contracts live in `docs/onboarding-contra
 - Workspace service tokens (`ccw_` + 32 random bytes base64url, SHA-256 hashed in
   `workspace_tokens`): the bearer auth now accepts either a Supabase JWT or one of these.
   A `ccw_` token resolves to its own workspace and reaches only the daemon ingest/read
-  surface — it is rejected on `/v1/workspaces`, `/v1/memberships`, `/v1/invites`, and
+  surface. It is rejected on `/v1/workspaces`, `/v1/memberships`, `/v1/invites`, and
   `/v1/pairing-codes`, so a terminal-side credential can never act as the user.
 - Contract C: `workspaces.is_personal` / `members.is_personal`, and a user with zero
   memberships is auto-provisioned a personal workspace plus an owner membership on their
@@ -452,7 +467,7 @@ later action, never a gate. The frozen contracts live in `docs/onboarding-contra
   still requires a Supabase session).
 
 Migration `009_pairing.sql` adds `pairing_codes` and `workspace_tokens`, and narrows
-`members.user_id` from globally UNIQUE to unique per workspace — the old constraint capped
+`members.user_id` from globally UNIQUE to unique per workspace. The old constraint capped
 every account at one workspace for life, which Contract C's "personal workspace now, team
 later" flow cannot live with.
 
@@ -462,7 +477,7 @@ includes `apps/service/src/pairing.integration.test.ts`.
 
 **Not in this workstream:** projects (Contract B), delivered separately as Phase 12.
 
-### Phase 12 — Projects (repository entity) (backend shipped)
+### Phase 12: projects, the repository entity (backend shipped)
 
 Until now `workspaces` was the only container, so there was no way to attribute
 activity to the repository it came from. A **project** is a repository inside a workspace,
@@ -481,8 +496,8 @@ otherwise (see Contract B in `docs/onboarding-contracts.md`).
 `projectId`, so a daemon is attributed to its repository at registration time. The daemon
 reports both automatically from the checkout it was started in.
 
-**`projectId` on the existing read paths.** Storing the attribution is only half of it —
-consumers group activity per project, so every read path that carries a replica or an
+**`projectId` on the existing read paths.** Storing the attribution is only half of it.
+Consumers group activity per project, so every read path that carries a replica or an
 operation carries a nullable `projectId` too:
 
 | Path | Field |
@@ -493,16 +508,16 @@ operation carries a nullable `projectId` too:
 | `/v1/stream` presence frame | `presence.projectId` (`presenceUpdateSchema`) |
 | `POST /v1/replicas` | `projectId` |
 
-Null everywhere means "unattributed" — pre-projects data, or a replica that reported no
-repository — and consumers group those under "Unassigned". The presence frame carries it
+Null everywhere means "unattributed", meaning pre-projects data or a replica that reported
+no repository, and consumers group those under "Unassigned". The presence frame carries it
 because a consumer merges live updates into the `GET /v1/presence` snapshot; without it a
 replica that connects after the initial load would silently lose its attribution.
 
 **Schema (`010_projects.sql`):** a `projects` table with two partial unique indexes
 (`(workspace_id, repo_remote)` when a remote exists, `(workspace_id, repo_root)` when it
-does not — a plain `UNIQUE` would treat NULL remotes as distinct and allow unlimited
+does not, since a plain `UNIQUE` would treat NULL remotes as distinct and allow unlimited
 duplicates), plus nullable `project_id` columns on `replicas` and `operations`. Backfill is
-deliberately skipped: NULL means "recorded before projects existed", and consumers group
+skipped: NULL means "recorded before projects existed", and consumers group
 those under "Unassigned". `operations.project_id` is derived server-side from the sending
 replica, never from the client.
 
@@ -514,11 +529,12 @@ case-sensitive.
 ## Non-goals (still true)
 
 - A new code editor/IDE, or a replacement Git host/implementation.
-- Character-by-character CRDT/OT live editing — proposals stay reviewable units, even at the most automatic autonomy tier.
+- Character-by-character CRDT/OT live editing. Proposals stay reviewable units, even at the most automatic autonomy tier.
 - Automatic force-push, rebase, reset, or commit on a user's active branch, ever.
 - A web UI for coordination work. Materializing a change into a working tree requires local filesystem access, which a browser does not have (Fundamental Rule 1); accept/reject/publish are daemon-only, and the rest of the surface follows the CLI-first decision above.
 - An editor extension for any editor. MCP is the one integration contract.
-- Deep bespoke integrations with every commercial agent — MCP is the one contract.
+- Any server-side feature that has to read file content: workspace-wide search, server-rendered diffs, a web review UI. Each would break end-to-end encryption, so it does not get built server-side.
+- Deep bespoke integrations with every commercial agent. MCP is the one contract.
 
 ## Where implementation detail lives
 

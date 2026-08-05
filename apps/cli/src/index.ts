@@ -54,10 +54,10 @@ function describeCheckout(checkout: CheckoutResult): string {
     const monthlyYear = checkout.monthlyEquivalentCents * 12;
     const saving = monthlyYear - checkout.priceCents;
     return saving > 0
-      ? `${moved} Annual is two months free — ${formatCents(saving)} less than ${formatCents(checkout.monthlyEquivalentCents)}/month. Pass --monthly to bill monthly instead.`
+      ? `${moved} Annual is two months free, ${formatCents(saving)} less than ${formatCents(checkout.monthlyEquivalentCents)}/month. Pass --monthly to bill monthly instead.`
       : moved;
   }
-  return `${moved} Annual billing is ${formatCents(checkout.monthlyEquivalentCents * 10)}/year — two months free; drop --monthly to switch.`;
+  return `${moved} Annual billing is ${formatCents(checkout.monthlyEquivalentCents * 10)}/year, two months free. Drop --monthly to switch.`;
 }
 
 async function confirm(prompt: string): Promise<boolean> {

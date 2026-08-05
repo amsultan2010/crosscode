@@ -4,7 +4,11 @@ This is the text meant to be copy-pasted directly into a coding agent's chat (Cl
 Code, Codex CLI, OpenCode, Cursor, or any other MCP-capable agent). The agent has
 shell and file-edit access in the current project, so it can complete every step
 itself with no manual work from the person pasting it. This exact text is also what
-the marketing site's "Install" button copies to the clipboard — keep both in sync.
+the marketing site's "Install" button copies to the clipboard, so keep both in sync.
+
+`@crosscode/cli` is not on npm yet, so the `npx` lines below fail with a 404 until it is
+published. The prompt is written for the published package and needs no edit when that
+lands.
 
 ## The prompt
 
@@ -12,12 +16,12 @@ the marketing site's "Install" button copies to the clipboard — keep both in s
 Set up Crosscode for this project. Crosscode keeps everyone working on this
 codebase in sync: a local daemon watches Git and filesystem activity and exposes
 itself to you (my coding agent) as an MCP server, so you can see what my teammates
-and their agents are doing in their own checkouts, and they can see what we do here
-— within seconds, instead of at pull-request time. Their work arrives as proposals
-we review, never as writes into our files. Do the following:
+and their agents are doing in their own checkouts, and they can see what we do here,
+within seconds instead of at pull-request time. Their work arrives as proposals we
+review, never as writes into our files. Do the following:
 
 1. Check that Node 24 or newer is available (`node --version`). If it is not, stop
-   and tell me — everything below needs it.
+   and tell me, because everything below needs it.
 2. From this project's Git root, run:
 
    ```
@@ -30,8 +34,8 @@ we review, never as writes into our files. Do the following:
    Code (`.mcp.json`) by default; pass `--mcp cursor`, `--mcp gemini`, or
    `--mcp opencode` if I use one of those instead.
 3. `--no-browser` makes it print a sign-in URL instead of trying to open a browser
-   you cannot see. Show me that URL and wait — I have to open it and sign in (or
-   create an account) before the command finishes. Do not try to sign in for me,
+   you cannot see. Show me that URL and wait. I have to open it and sign in, or
+   create an account, before the command finishes. Do not try to sign in for me,
    and do not ask me for my password.
 4. If I say I would rather not use a browser at all, run it headlessly instead:
    `npx --yes @crosscode/cli start --email <my email> --password <my password>`,
@@ -55,13 +59,13 @@ after step 5, then restart as above.
   `@crosscode/cli` package, whose `dist/` bundle carries the CLI, the daemon, and
   the MCP server. Node 24 is the only requirement.
 - The MCP entry `start` writes points at `npx` when Crosscode is not installed
-  durably, and at the short `crosscode-mcp` command when it is — see
+  durably, and at the short `crosscode-mcp` command when it is. See
   `resolveMcpLaunch` in `apps/cli/src/mcp-config.ts`. Suggest
   `npm install -g @crosscode/cli` to anyone who will use it daily: agent sessions
   then launch from a stable path instead of re-resolving through npm's cache.
-- `--no-browser` is deliberate. An agent has no browser, and the default flow would
-  otherwise open a tab nobody is looking at; `crosscode start` refuses to try when
-  it has no TTY rather than hanging on one.
+- `--no-browser` is there because an agent has no browser, and the default flow would
+  otherwise open a tab nobody is looking at. `crosscode start` refuses to try when it
+  has no TTY rather than hanging on one.
 - Codex CLI's MCP config is TOML (`~/.codex/config.toml`) and `start` does not
   write it, because merging TOML into a global file holding model, approval, and
   sandbox settings is not something to do without a TOML parser. Codex users add
