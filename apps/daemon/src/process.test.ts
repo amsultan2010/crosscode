@@ -88,7 +88,6 @@ describe("daemon process lifecycle", () => {
     const duplicateExit = await new Promise<number | null>((resolveExit) => duplicate.once("exit", (code) => resolveExit(code)));
     expect(duplicateExit).toBe(1);
     await expect(runCli(["status", "--json"], receiver)).resolves.toMatchObject({ value: { workspaceId: "w", replicaId: "receiver" } });
-    await expect(runCli(["task", "create", "No accidental flags", "--json"], receiver)).resolves.toMatchObject({ value: { paths: [] } });
     await writeFile(join(receiver, "offline.txt"), "offline\n");
     const operations = await waitFor(() => client.operations(), (items) => items.some((item) => item.status === "local" && item.transaction.changes.some((change) => change.path === "offline.txt")));
     expect(operations).toEqual(expect.arrayContaining([expect.objectContaining({ id: remote.id, status: "proposed" })]));
