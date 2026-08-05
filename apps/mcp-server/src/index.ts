@@ -6,59 +6,18 @@ import {
   ListToolsRequestSchema,
   ReadResourceRequestSchema
 } from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
-import { pathOverlaps } from "@crosscode/core";
 import { DaemonClient } from "../../daemon/src/client.js";
 import { VERSION } from "../../daemon/src/version.js";
 import { ensureDaemonRunning } from "./bootstrap.js";
 import { mcpResources } from "./resources.js";
-import { mcpToolCatalog, submitSemanticReviewInputSchema, toolInputSchemas, type ToolName } from "./tool-catalog.js";
+import { mcpToolCatalog, toolInputSchemas, type ToolName } from "./tool-catalog.js";
 
 export function mcpTools(client: DaemonClient) {
   return {
     get_workspace_state: () => client.status(),
-    list_tasks: () => client.tasks(),
-    claim_task: (input: { title: string; paths?: string[] }) => client.createTask({ title: input.title, paths: input.paths }),
-    claim_scope: (input: { taskId: string; target: string }) => client.createClaim({ taskId: input.taskId, target: input.target, kind: "path", mode: "exclusive-preferred" }),
     publish_intent: (input: { intent: string }) => client.capture(input.intent),
-    check_change_scope: async (input: { paths: string[] }) => {
-      const [claims, operations] = await Promise.all([
-        client.claims().catch(() => [] as Awaited<ReturnType<typeof client.claims>>),
-        client.operations()
-      ]);
-      const overlaps: Array<{ path: string; with: "claim" | "operation"; target: string; ownerId?: string; operationId?: string }> = [];
-      for (const path of input.paths) {
-        for (const claim of claims) {
-          if (pathOverlaps(path, claim.target)) overlaps.push({ path, with: "claim", target: claim.target, ownerId: claim.ownerId });
-        }
-        for (const operation of operations) {
-          if (operation.status !== "proposed") continue;
-          for (const change of operation.transaction.changes) {
-            if (pathOverlaps(path, change.path)) overlaps.push({ path, with: "operation", target: change.path, operationId: operation.id });
-          }
-        }
-      }
-      return { clear: overlaps.length === 0, overlaps };
-    },
     submit_change_summary: (input: { summary: string }) => client.capture(input.summary, "summary"),
-    list_remote_proposals: async () => (await client.operations()).filter((operation) => operation.status === "proposed"),
-    request_handoff: (input: { operationId: string; note?: string }) => client.requestHandoff(input),
-    announce_interface_change: (input: { intent: string }) => client.capture(input.intent, "interface-change"),
-    request_validation: (input: { profile: string }) => client.validate(input.profile),
-    create_checkpoint: () => client.checkpoint(),
-    list_pending_semantic_reviews: () => client.pendingSemanticReviews(),
-    submit_semantic_review: ({ requestId, ...review }: z.infer<typeof submitSemanticReviewInputSchema>) =>
-      client.submitSemanticReview(requestId, review),
-    inspect_proposal: (input: { operationId: string }) => client.analyze(input.operationId),
-    diff_proposal: (input: { operationId: string }) => client.diff(input.operationId),
-    list_proposal_artifacts: (input: { operationId: string }) => client.artifacts(input.operationId),
-    accept_proposal: (input: { operationId: string; reviewApprovals?: Record<string, string> }) =>
-      client.accept(input.operationId, input.reviewApprovals ? { reviewApprovals: input.reviewApprovals } : undefined),
-    reject_proposal: (input: { operationId: string }) => client.reject(input.operationId),
-    publish_branch: (input: { branch: string; profile: string; message?: string; dryRun?: boolean; confirm: true }) =>
-      client.publish({ branch: input.branch, profile: input.profile, message: input.message, dryRun: input.dryRun }),
-    get_workspace_autonomy: () => client.workspaceAutonomy(),
-    set_workspace_autonomy: (input: { tier: 0 | 1 | 2 }) => client.setWorkspaceAutonomy(input.tier)
+    announce_interface_change: (input: { intent: string }) => client.capture(input.intent, "interface-change")
   };
 }
 

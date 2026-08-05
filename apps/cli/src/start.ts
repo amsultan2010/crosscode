@@ -29,7 +29,6 @@ export type StartOptions = {
   email?: string;
   password?: string;
   web?: string;
-  service?: string;
   /** false when --no-browser was passed: print the sign-in URL instead of opening it. */
   browser?: boolean;
   /** false when --no-mcp was passed. */
@@ -62,7 +61,7 @@ export async function start(directory: string, options: StartOptions = {}): Prom
   }
 
   let config = await ensureInitialized(directory, report);
-  const serviceUrl = options.service ?? config.service?.url ?? resolveDefaultServiceUrl();
+  const serviceUrl = config.service?.url ?? resolveDefaultServiceUrl();
 
   config = await ensureSignedIn(directory, config, { ...options, serviceUrl }, report);
   config = await ensureWorkspace(directory, config, report);
@@ -137,7 +136,7 @@ async function ensureSignedIn(
       );
     }
     report(`Signing in to ${options.serviceUrl} as ${email}…`);
-    const { config: updated, user } = await login(directory, { email, password, serviceUrl: options.serviceUrl });
+    const { config: updated, user } = await login(directory, { email, password });
     return adoptAccountIdentity(directory, updated, user.email);
   }
 
@@ -154,7 +153,6 @@ async function ensureSignedIn(
   report("Opening your browser to sign in or create an account…");
   const { config: updated, user } = await browserLogin(directory, {
     webUrl: resolveWebUrl(options.web),
-    serviceUrl: options.serviceUrl,
     openBrowser: options.browser !== false,
     onUrl: (url) => report(options.browser === false ? `Open this URL to sign in:\n${url}` : `Opening ${url}`)
   });

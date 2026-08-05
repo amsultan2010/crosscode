@@ -75,7 +75,7 @@ describe("crosscode login", () => {
     try {
       // --no-browser prints the URL instead of opening one, which is also how a test (or
       // a remote shell) learns the ephemeral port and state to post back to.
-      const pending = runCli(["login", "--no-browser", "--web", "http://web.test", "--service", "http://127.0.0.1:8788"], root);
+      const pending = runCli(["login", "--no-browser", "--web", "http://web.test"], root);
       const url = await waitFor(() => printed.join("").match(/http:\/\/web\.test\/auth\/cli\.html\?\S+/)?.[0]);
       const parameters = new URL(url).searchParams;
       const response = await fetch(`http://127.0.0.1:${parameters.get("port")}/callback`, {
@@ -268,39 +268,6 @@ describe("crosscode devices / members", () => {
     expect(names).toContain("devices revoke");
     expect(names).toContain("members list");
     expect(names).toContain("members remove");
-  });
-
-  it("lists retained checkpoints, which the daemon has always exposed but the CLI could not reach", async () => {
-    const commands = (await runCli(["commands"])).value as Array<{ command: string }>;
-    expect(commands.map((entry) => entry.command)).toContain("checkpoint list");
-  });
-});
-
-describe("crosscode key / pair", () => {
-  it("exposes the whole workspace-key surface, so nothing about encryption needs a web UI", async () => {
-    const commands = (await runCli(["commands"])).value as Array<{ command: string }>;
-    const names = commands.map((entry) => entry.command);
-    for (const name of ["pair", "key status", "key init", "key export", "key import", "key devices", "key approve", "key rotate", "key forget"]) {
-      expect(names).toContain(name);
-    }
-  });
-
-  it("refuses to grant, rotate, or forget a key noninteractively without an explicit flag", async () => {
-    const root = await repo();
-    // vitest runs with no TTY, which is exactly the agent/CI case being asserted: each of
-    // these either hands out the workspace key or destroys access to it, so the caller has
-    // to say so in the command rather than be prompted -- and it must never silently
-    // proceed just because there was nobody to ask.
-    expect(process.stdout.isTTY).toBeFalsy();
-    await expect(runCli(["key", "rotate"], root)).rejects.toThrow(/requires confirmation/);
-    await expect(runCli(["key", "forget"], root)).rejects.toThrow(/requires confirmation/);
-  });
-
-  it("reports a missing keyring as an actionable state rather than a crash", async () => {
-    const root = await repo();
-    // A checkout that has never synced holds no keyring. The message has to say what to
-    // run next, because this is also what a restored-from-backup machine hits.
-    await expect(runCli(["key", "status"], root)).rejects.toThrow(/no workspace keyring/i);
   });
 });
 

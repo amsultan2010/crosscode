@@ -10,9 +10,7 @@ import { DaemonClient, DaemonUnavailableError } from "../../daemon/src/client.js
 import { BrowserLoginError, openInBrowser, resolveWebUrl } from "../../daemon/src/browser-login.js";
 import { SupabaseConfigError } from "../../daemon/src/supabase-client.js";
 import {
-  approveKeyDevice, browserLogin, exportWorkspaceKey, forgetWorkspaceKey, importWorkspaceKey, initWorkspaceKey,
-  listKeyDevices, login, logout, readDaemonConfig, redeemInvite, redeemPairingCode, rotateWorkspaceKey,
-  serviceRequest, signup, startPairing, workspaceKeyStatus, writeDaemonConfig
+  browserLogin, login, logout, readDaemonConfig, redeemInvite, serviceRequest, signup, writeDaemonConfig
 } from "../../daemon/src/runtime.js";
 import { VERSION } from "../../daemon/src/version.js";
 import { CliError } from "./errors.js";
@@ -108,10 +106,6 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
     return {};
   }
 
-  if (command === "validate" && args.includes("--")) {
-    throw new CliError("UNTRUSTED_VALIDATION_ARGS", "Validation commands must come from trusted .crosscode/config.yaml profiles", "Add the command to a profile in .crosscode/config.yaml and run `crosscode validate --profile <name>`.");
-  }
-
   // --json is a purely presentational, position-independent flag handled by
   // main(); strip it before commander sees it so it never has to be declared
   // on every subcommand or fought over positionally.
@@ -135,17 +129,15 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
     .option("--email <email>", "account email; with --password, signs in headlessly instead of opening a browser (or set CROSSCODE_EMAIL)")
     .option("--password <password>", "account password for the headless sign-in (or set CROSSCODE_PASSWORD)")
     .option("--web <url>", "base URL of the crosscode website hosting the sign-in page (or set CROSSCODE_WEB_URL)")
-    .option("--service <url>", "coordination service URL to record for this checkout")
     .option("--no-browser", "print the sign-in URL instead of opening a browser, for remote shells and CI")
     .option("--mcp <client>", `MCP client to register with: ${MCP_CLIENTS.join(", ")}`, "claude")
     .option("--no-mcp", "skip MCP client registration")
-    .action(async (options: { email?: string; password?: string; web?: string; service?: string; browser?: boolean; mcp?: string | boolean }) => {
+    .action(async (options: { email?: string; password?: string; web?: string; browser?: boolean; mcp?: string | boolean }) => {
       result = {
         value: await start(directory, {
           email: options.email,
           password: options.password,
           web: options.web,
-          service: options.service,
           browser: options.browser,
           mcp: options.mcp === false ? false : parseMcpClient(typeof options.mcp === "string" ? options.mcp : "claude"),
           // stderr, not stdout: --json output has to stay a single parseable object.
@@ -170,37 +162,17 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
   program
     .command("join")
     .description("join a workspace")
-    .argument("[workspaceId]", "workspace id (or use --workspace / --invite / --pair)")
+    .argument("[workspaceId]", "workspace id (or use --workspace / --invite)")
     .option("--workspace <id>", "workspace id")
     .option("--invite <code>", "invite code (alternative to --workspace)")
-    .option("--pair <code>", "one-time pairing code minted by the service (XXXX-XXXX); no login required")
-    .option("--service <url>", "service URL, when pairing before any login")
-    .option("--replica-name <name>", "name to register this machine under when pairing")
-    .action(async (positional: string | undefined, options: { workspace?: string; invite?: string; pair?: string; service?: string; replicaName?: string }) => {
-      if (options.pair) {
-        const paired = await redeemPairingCode(directory, options.pair, { serviceUrl: options.service, replicaName: options.replicaName });
-        // Never echo the workspace token: it is a bearer credential, and it is already
-        // persisted to the 0600 config file the daemon reads.
-        //
-        // deviceFingerprint is not a secret and is meant to be read out loud: whoever ran
-        // `crosscode pair` sees the same string, and comparing them is what proves the
-        // coordination service relayed this device's real encryption key rather than one
-        // of its own. The workspace key arrives once they confirm.
-        result = {
-          value: {
-            workspaceId: paired.workspaceId, replicaId: paired.replicaId, actorId: paired.actorId, paired: true,
-            ...(paired.deviceFingerprint ? { deviceFingerprint: paired.deviceFingerprint } : {})
-          }
-        };
-        return;
-      }
+    .action(async (positional: string | undefined, options: { workspace?: string; invite?: string }) => {
       if (options.invite) {
         result = { value: await redeemInvite(directory, options.invite) };
         return;
       }
       const settings = await readDaemonConfig(directory);
       const workspaceId = options.workspace ?? positional;
-      if (!workspaceId) throw new CliError("USAGE_ERROR", "Usage: crosscode join --workspace <workspaceId> | --invite <code> | --pair <code>", "Run `crosscode login` first for --workspace/--invite; --pair needs no login.");
+      if (!workspaceId) throw new CliError("USAGE_ERROR", "Usage: crosscode join --workspace <workspaceId> | --invite <code>", "Run `crosscode login` first.");
       const updated = { ...settings, workspaceId };
       await writeDaemonConfig(directory, updated);
       result = { value: updated };
@@ -213,11 +185,9 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
     .option("--password <password>", "account password for the headless sign-in (or set CROSSCODE_PASSWORD)")
     .option("--web <url>", "base URL of the crosscode website hosting the sign-in page (or set CROSSCODE_WEB_URL)")
     .option("--no-browser", "print the sign-in URL instead of opening a browser, for remote shells and CI")
-    .option("--service <url>", "coordination service URL to record for this checkout")
-    .action(async (options: { email?: string; password?: string; web?: string; browser?: boolean; service?: string }) => {
+    .action(async (options: { email?: string; password?: string; web?: string; browser?: boolean }) => {
       const email = options.email ?? process.env.CROSSCODE_EMAIL;
       const password = options.password ?? process.env.CROSSCODE_PASSWORD;
-      const serviceUrl = options.service;
       if (email || password) {
         if (!email || !password) {
           throw new CliError(
@@ -226,7 +196,7 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
             "Pass both flags (or set CROSSCODE_EMAIL and CROSSCODE_PASSWORD), or drop them to sign in in a browser."
           );
         }
-        const { user } = await login(directory, { email, password, serviceUrl });
+        const { user } = await login(directory, { email, password });
         result = { value: { userId: user.id, email: user.email } };
         return;
       }
@@ -241,7 +211,6 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
       }
       const { user } = await browserLogin(directory, {
         webUrl: resolveWebUrl(options.web),
-        serviceUrl,
         openBrowser: options.browser !== false,
         // stderr, not stdout: --json output has to stay a single parseable object.
         onUrl: (url) => process.stderr.write(options.browser === false ? `Open this URL to sign in:\n${url}\n` : `Opening ${url}\n`)
@@ -255,11 +224,9 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
     .option("--email <email>", "account email")
     .option("--password <password>", "account password")
     .option("--invite <code>", "invite code to redeem after signing up")
-    .option("--service <url>", "service URL")
-    .action(async (options: { email?: string; password?: string; invite?: string; service?: string }) => {
+    .action(async (options: { email?: string; password?: string; invite?: string }) => {
       let email = options.email ?? process.env.CROSSCODE_EMAIL;
       let password = options.password ?? process.env.CROSSCODE_PASSWORD;
-      const serviceUrl = options.service;
       if ((!email || !password) && process.stdout.isTTY) {
         const rl = createInterface({ input: process.stdin, output: process.stdout });
         if (!email) email = await rl.question("Email: ");
@@ -267,9 +234,9 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
         rl.close();
       }
       if (!email || !password) {
-        throw new CliError("USAGE_ERROR", "Usage: crosscode signup --email <email> --password <password> [--invite <code>] [--service <url>] (or set CROSSCODE_EMAIL/CROSSCODE_PASSWORD)", "Set CROSSCODE_EMAIL and CROSSCODE_PASSWORD to sign up without a terminal prompt.");
+        throw new CliError("USAGE_ERROR", "Usage: crosscode signup --email <email> --password <password> [--invite <code>] (or set CROSSCODE_EMAIL/CROSSCODE_PASSWORD)", "Set CROSSCODE_EMAIL and CROSSCODE_PASSWORD to sign up without a terminal prompt.");
       }
-      const updated = await signup(directory, { email, password, invite: options.invite, serviceUrl });
+      const updated = await signup(directory, { email, password, invite: options.invite });
       result = { value: { workspaceId: updated.workspaceId, actorId: updated.actorId, service: { url: updated.service!.url, loggedIn: true } } };
     });
 
@@ -291,173 +258,6 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
     .description("show workspace and daemon status")
     .action(async () => {
       result = { value: await (await client()).status() };
-    });
-
-  const workspace = program.command("workspace").description("manage workspace-level settings");
-  const autonomy = workspace.command("autonomy").description("get or set this workspace's autonomy tier (0=always_ask, 1=auto_if_clean, 2=auto_always)");
-  autonomy
-    .command("get")
-    .description("show the current autonomy tier")
-    .action(async () => {
-      result = { value: await (await client()).workspaceAutonomy() };
-    });
-  autonomy
-    .command("set")
-    .description("set the autonomy tier (owner/admin only)")
-    .argument("<tier>", "0, 1, or 2")
-    .action(async (tierArg: string) => {
-      if (!/^[0-2]$/.test(tierArg)) throw new CliError("USAGE_ERROR", "Usage: crosscode workspace autonomy set <0|1|2>", "The tier is 0=always_ask, 1=auto_if_clean, or 2=auto_always; run `crosscode workspace autonomy get` to see the current one.");
-      result = { value: await (await client()).setWorkspaceAutonomy(Number(tierArg) as 0 | 1 | 2) };
-    });
-
-  const checkpoint = program
-    .command("checkpoint")
-    .description("create a checkpoint")
-    .option("--message <message>", "checkpoint message")
-    .action(async (options: { message?: string }) => {
-      result = { value: await (await client()).checkpoint(options.message) };
-    });
-  checkpoint
-    .command("list")
-    .description("list the checkpoints this daemon still retains")
-    .action(async () => {
-      result = { value: await (await client()).checkpoints() };
-    });
-  checkpoint
-    .command("inspect")
-    .description("inspect a checkpoint")
-    .argument("[ref]", "checkpoint ref")
-    .action(async (ref: string | undefined) => {
-      result = { value: await (await client()).inspectCheckpoint(ref ?? "") };
-    });
-  checkpoint
-    .command("restore")
-    .description("restore a path from a checkpoint")
-    .argument("[ref]", "checkpoint ref")
-    .argument("[path]", "path to restore")
-    .action(async (ref: string | undefined, path: string | undefined) => {
-      result = { value: await (await client()).restoreCheckpoint(ref ?? "", path ?? "") };
-    });
-
-  const task = program.command("task").description("manage tasks");
-  task
-    .command("create")
-    .description("create a task")
-    .argument("[title]", "task title")
-    .option("--path <path>", "path claimed by the task")
-    .action(async (title: string | undefined, options: { path?: string }) => {
-      result = { value: await (await client()).createTask({ title: title ?? "", paths: options.path ? [options.path] : [] }) };
-    });
-
-  const claim = program.command("claim").description("manage claims");
-  claim
-    .command("path")
-    .description("claim a path for a task")
-    .argument("[target]", "path to claim")
-    .option("--task <taskId>", "task id")
-    .action(async (target: string | undefined, options: { task?: string }) => {
-      result = { value: await (await client()).createClaim({ taskId: options.task ?? "", kind: "path", target: target ?? "", mode: "exclusive-preferred" }) };
-    });
-
-  program
-    .command("intent")
-    .description("publish an intent")
-    .argument("[text]", "intent text")
-    .option("--task <taskId>", "task id")
-    .action(async (text: string | undefined, options: { task?: string }) => {
-      result = { value: await (await client()).publishIntent({ text: text ?? "", taskId: options.task }) };
-    });
-
-  const handoff = program.command("handoff").description("manage handoffs");
-  handoff
-    .command("request")
-    .description("request a handoff for an operation")
-    .argument("[operationId]", "operation id")
-    .option("--note <note>", "handoff note")
-    .action(async (operationId: string | undefined, options: { note?: string }) => {
-      result = { value: await (await client()).requestHandoff({ operationId: operationId ?? "", note: options.note }) };
-    });
-  handoff
-    .command("respond")
-    .description("respond to a handoff request")
-    .argument("[id]", "handoff id")
-    .option("--decision <decision>", "accepted or declined")
-    .action(async (id: string | undefined, options: { decision?: string }) => {
-      result = { value: await (await client()).respondHandoff(id ?? "", (options.decision ?? "") as "accepted" | "declined") };
-    });
-
-  const proposals = program.command("proposals").description("inspect proposed operations");
-  proposals
-    .command("list")
-    .description("list proposed operations")
-    .action(async () => {
-      result = { value: (await (await client()).operations()).filter((operation) => operation.status === "proposed") };
-    });
-  proposals
-    .command("inspect")
-    .description("inspect a proposed operation")
-    .argument("[id]", "operation id")
-    .action(async (id: string | undefined) => {
-      result = { value: await (await client()).analyze(id ?? "") };
-    });
-  proposals
-    .command("diff")
-    .description("show the diff for a proposed operation")
-    .argument("[id]", "operation id")
-    .action(async (id: string | undefined) => {
-      result = { value: await (await client()).diff(id ?? "") };
-    });
-  proposals
-    .command("artifacts")
-    .description("show conflict artifacts for a proposed operation")
-    .argument("[id]", "operation id")
-    .action(async (id: string | undefined) => {
-      result = { value: await (await client()).artifacts(id ?? "") };
-    });
-
-  program
-    .command("accept")
-    .description("accept a proposed operation")
-    .argument("[id]", "operation id")
-    .action(async (id: string | undefined) => {
-      result = { value: await (await client()).accept(id ?? "") };
-    });
-
-  program
-    .command("reject")
-    .description("reject a proposed operation")
-    .argument("[id]", "operation id")
-    .action(async (id: string | undefined) => {
-      result = { value: await (await client()).reject(id ?? "") };
-    });
-
-  program
-    .command("validate")
-    .description("run validation checks (validate commands must come from trusted .crosscode/config.yaml profiles)")
-    .option("--profile <name>", "validation profile", "fast")
-    .action(async (options: { profile: string }) => {
-      result = { value: await (await client()).validate(options.profile) };
-    });
-
-  program
-    .command("publish")
-    .description("publish accepted changes to a branch")
-    .option("--branch <branch>", "target branch")
-    .option("--profile <name>", "validation profile")
-    .option("--message <message>", "publish message")
-    .option("--dry-run", "do not actually publish")
-    .option("--yes", "skip the confirmation prompt")
-    .action(async (options: { branch?: string; profile?: string; message?: string; dryRun?: boolean; yes?: boolean }) => {
-      if (!options.branch || !options.profile) {
-        throw new CliError("USAGE_ERROR", 'Usage: crosscode publish --branch <branch> --profile <name> [--message "..."] [--dry-run] [--yes]', "Both --branch and --profile are required; add --dry-run to see what would be published.");
-      }
-      const input = { branch: options.branch, profile: options.profile, message: options.message, dryRun: Boolean(options.dryRun) };
-      if (!options.yes) {
-        if (!process.stdout.isTTY) throw new CliError("CONFIRMATION_REQUIRED", "Publishing requires confirmation; pass --yes in noninteractive environments", "Pass --yes to publish without an interactive prompt.");
-        const confirmed = await confirm(`Publish to branch "${input.branch}"? [y/N] `);
-        if (!confirmed) throw new CliError("CANCELLED", "Publish cancelled", "Re-run with --yes to publish without the confirmation prompt.");
-      }
-      result = { value: await (await client()).publish(input) };
     });
 
   const billing = program.command("billing").description("plan, usage, and subscription management");
@@ -573,131 +373,6 @@ export async function runCli(args: string[], directory = process.cwd()): Promise
         }
       }
       result = { value: await serviceRequest(directory, `/v1/workspace-tokens/${encodeURIComponent(tokenId)}`, { method: "DELETE", workspaceId: options.workspace, describe: "Device revocation" }) };
-    });
-
-  program
-    .command("pair")
-    .description("mint a pairing code for another machine and hand it the workspace encryption key")
-    .option("--timeout <seconds>", "how long to wait for the code to be claimed", "900")
-    .option("--yes", "grant the key without confirming the other device's fingerprint")
-    .action(async (options: { timeout: string; yes?: boolean }) => {
-      const timeoutSeconds = Number(options.timeout);
-      if (!Number.isInteger(timeoutSeconds) || timeoutSeconds <= 0) throw new CliError("USAGE_ERROR", "--timeout must be a positive number of seconds");
-      const session = await startPairing(directory, { timeoutMs: timeoutSeconds * 1_000 });
-      // stderr, so `--json` still prints exactly one object on stdout.
-      process.stderr.write(`Pairing code: ${session.code}\nRun this on the other machine:\n  crosscode join --pair ${session.code}\nWaiting for it to be claimed...\n`);
-      const claim = await session.claimed;
-      if (!claim.fingerprint) {
-        // No public key means that device is not encrypting -- there is nothing to grant,
-        // and pretending otherwise would report a key handoff that did not happen.
-        result = { value: { pairingId: session.pairingId, replicaId: claim.replicaId, actorId: claim.actorId, granted: 0, encrypted: false } };
-        return;
-      }
-      process.stderr.write(`\nClaimed by ${claim.actorId}.\nThe other machine printed a device fingerprint. It must read:\n\n  ${claim.fingerprint}\n\n`);
-      if (!options.yes) {
-        if (!process.stdout.isTTY) {
-          throw new CliError(
-            "CONFIRMATION_REQUIRED",
-            "Granting the workspace key requires confirming the device fingerprint; pass --yes in noninteractive environments",
-            `Check that the other machine printed ${claim.fingerprint}, then re-run with --yes.`
-          );
-        }
-        if (!await confirm("Does the other machine show exactly that fingerprint? [y/N] ")) {
-          throw new CliError(
-            "FINGERPRINT_MISMATCH",
-            "Pairing aborted without granting the workspace key",
-            "A fingerprint that does not match means the key you would send could be readable by whoever relayed it. The device stays paired but cannot read workspace content."
-          );
-        }
-      }
-      const granted = await session.approve(claim.replicaId);
-      result = { value: { pairingId: session.pairingId, replicaId: claim.replicaId, actorId: claim.actorId, granted: granted.granted, encrypted: true } };
-    });
-
-  const key = program.command("key").description("this workspace's end-to-end encryption key");
-  key
-    .command("status")
-    .description("show which key epochs this checkout holds and this device's fingerprint")
-    .action(async () => {
-      result = { value: await workspaceKeyStatus(directory) };
-    });
-  key
-    .command("init")
-    .description("create this workspace's first encryption key (only when no device holds one)")
-    .action(async () => {
-      result = { value: await initWorkspaceKey(directory) };
-    });
-  key
-    .command("export")
-    .description("print the recovery code for this workspace key -- the only copy that can exist off your devices")
-    .option("--yes", "skip the confirmation prompt")
-    .action(async (options: { yes?: boolean }) => {
-      if (!options.yes && process.stdout.isTTY) {
-        process.stderr.write("This prints your workspace encryption key. Anyone who reads it can decrypt this workspace's history.\n");
-        if (!await confirm("Print it? [y/N] ")) throw new CliError("CANCELLED", "Export cancelled");
-      }
-      result = { value: await exportWorkspaceKey(directory) };
-    });
-  key
-    .command("import")
-    .description("restore a workspace key from a recovery code")
-    .argument("<recoveryCode>", "the ccrk1. code from `crosscode key export`")
-    .action(async (recoveryCode: string) => {
-      result = { value: await importWorkspaceKey(directory, recoveryCode) };
-    });
-  key
-    .command("devices")
-    .description("list every device that has registered an encryption key with this workspace")
-    .action(async () => {
-      result = { value: await listKeyDevices(directory) };
-    });
-  key
-    .command("approve")
-    .description("grant the workspace key to a device, after comparing its fingerprint")
-    .argument("<replicaId>", "replica id from `crosscode key devices`")
-    .option("--fingerprint <fingerprint>", "the fingerprint the other machine printed; checked before granting")
-    .option("--yes", "grant without confirming the fingerprint")
-    .action(async (replicaId: string, options: { fingerprint?: string; yes?: boolean }) => {
-      const devices = await listKeyDevices(directory);
-      const device = devices.find((candidate) => candidate.replicaId === replicaId);
-      if (!device) throw new CliError("UNKNOWN_DEVICE", `No device ${replicaId} has registered an encryption key with this workspace`, "Run `crosscode key devices` to see the registered devices.");
-      // Comparing the fingerprint is the whole security of this step: the coordination
-      // service relays public keys, so a key it substituted would look exactly like a
-      // real one here and only the string differs.
-      if (options.fingerprint && options.fingerprint.trim().toUpperCase() !== device.fingerprint) {
-        throw new CliError("FINGERPRINT_MISMATCH", `Device ${replicaId} shows fingerprint ${device.fingerprint}, not the one you passed`, "Do not grant the key. Ask the other machine to re-read `crosscode key status`.");
-      }
-      if (!options.fingerprint && !options.yes) {
-        if (!process.stdout.isTTY) throw new CliError("CONFIRMATION_REQUIRED", "Granting the workspace key requires confirming the device fingerprint", `Pass --fingerprint ${device.fingerprint} once you have checked it on the other machine, or --yes to skip the check.`);
-        process.stderr.write(`Device ${device.replicaName} (${device.actorId}) reports fingerprint:\n\n  ${device.fingerprint}\n\nIt should print the same string for \`crosscode key status\`.\n`);
-        if (!await confirm("Grant it the workspace key? [y/N] ")) throw new CliError("CANCELLED", "No key was granted");
-      }
-      result = { value: await approveKeyDevice(directory, replicaId) };
-    });
-  key
-    .command("rotate")
-    .description("start a new key epoch and grant it to every already-approved device")
-    .option("--yes", "skip the confirmation prompt")
-    .action(async (options: { yes?: boolean }) => {
-      if (!options.yes) {
-        if (!process.stdout.isTTY) throw new CliError("CONFIRMATION_REQUIRED", "Rotating the workspace key requires confirmation; pass --yes in noninteractive environments");
-        process.stderr.write("Rotation protects work from here on. It cannot make already-shared history unreadable to anyone who already downloaded it.\n");
-        if (!await confirm("Rotate the workspace key? [y/N] ")) throw new CliError("CANCELLED", "Rotation cancelled");
-      }
-      result = { value: await rotateWorkspaceKey(directory) };
-    });
-  key
-    .command("forget")
-    .description("delete this checkout's copy of the workspace key (local only)")
-    .option("--yes", "skip the confirmation prompt")
-    .action(async (options: { yes?: boolean }) => {
-      if (!options.yes) {
-        if (!process.stdout.isTTY) throw new CliError("CONFIRMATION_REQUIRED", "Forgetting the workspace key requires confirmation; pass --yes in noninteractive environments");
-        if (!await confirm("Delete this checkout's copy of the workspace key? Without a recovery code or another paired device it cannot be recovered. [y/N] ")) {
-          throw new CliError("CANCELLED", "Cancelled");
-        }
-      }
-      result = { value: await forgetWorkspaceKey(directory) };
     });
 
   const members = program.command("members").description("workspace membership");
