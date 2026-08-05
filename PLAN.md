@@ -173,10 +173,10 @@ starting Phase 4; port the algorithm, not the code.
 - [x] **Verify:** three real daemons, concurrent edits, all converge identical; one intentional collision → exactly one conflict
 
 ### 5 — CLI + onboarding
-- [ ] Cut to 5 commands
-- [ ] `start`: config → GitHub sign-in → project → daemon → install MCP + skill + hooks. Idempotent.
-- [ ] `invite` → URL; `/join/:code` page verifies repo access → copy-paste block
-- [ ] `join <code>` → redeem → same setup
+- [x] Cut to 5 commands
+- [x] `start`: config → GitHub sign-in → project → daemon → install MCP + skill + hooks. Idempotent.
+- [x] `invite` → URL; `/join/:code` page verifies repo access → copy-paste block
+- [x] `join <code>` → redeem → same setup
 - [ ] **Verify:** fresh machine, link to syncing in under 60s, typing only the two given lines
 
 ### 6 — Agent surface

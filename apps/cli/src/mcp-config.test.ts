@@ -53,13 +53,20 @@ describe("resolveMcpLaunch", () => {
   });
 
   // Windows .cmd shims lose the bin name, so the basename dispatch in index.ts cannot fire.
-  it("uses `crosscode mcp` on Windows, where the crosscode-mcp bin cannot identify itself", async () => {
-    const directory = await binDir("crosscode");
+  // There is no `crosscode mcp` subcommand to fall back on -- the CLI has exactly five
+  // commands -- so the entry carries the environment variable that serves MCP instead.
+  it("sets CROSSCODE_SERVE_MCP on Windows, where the crosscode-mcp bin cannot identify itself", async () => {
+    const directory = await binDir("crosscode-mcp.cmd");
 
-    expect(resolveMcpLaunch("1.2.3", { PATH: directory }, "win32")).toEqual({ command: "crosscode", args: ["mcp"] });
+    expect(resolveMcpLaunch("1.2.3", { PATH: directory }, "win32")).toEqual({
+      command: "crosscode-mcp",
+      args: [],
+      env: { CROSSCODE_SERVE_MCP: "1" }
+    });
     expect(resolveMcpLaunch("1.2.3", { PATH: "" }, "win32")).toEqual({
       command: "npx",
-      args: ["-y", "--package", "@crosscode/cli@1.2.3", "crosscode", "mcp"]
+      args: ["-y", "--package", "@crosscode/cli@1.2.3", "crosscode-mcp"],
+      env: { CROSSCODE_SERVE_MCP: "1" }
     });
   });
 });
@@ -122,7 +129,7 @@ describe("registerMcpServer", () => {
     const root = await tempDir();
     await writeFile(join(root, ".mcp.json"), "{ not json");
 
-    await expect(registerMcpServer(root, "claude", launch)).rejects.toMatchObject({ code: "MCP_CONFIG_UNPARSEABLE" });
+    await expect(registerMcpServer(root, "claude", launch)).rejects.toMatchObject({ code: "CONFIG_UNPARSEABLE" });
     expect(await readFile(join(root, ".mcp.json"), "utf8")).toBe("{ not json");
   });
 });

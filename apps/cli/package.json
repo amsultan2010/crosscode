@@ -2,5 +2,8 @@
   "name": "@crosscode/cli-src",
   "private": true,
   "type": "module",
-  "dependencies": { "@crosscode/daemon": "workspace:*", "@crosscode/git": "workspace:*", "@crosscode/protocol": "workspace:*", "@crosscode/service": "workspace:*", "commander": "^15.0.0" }
+  "scripts": {
+    "test": "vitest run --root ../.. apps/cli"
+  },
+  "dependencies": { "@crosscode/git": "workspace:*", "@crosscode/protocol": "workspace:*", "commander": "^15.0.0", "zod": "^3.25.76" }
 }

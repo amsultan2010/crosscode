@@ -74,21 +74,18 @@ importers:
 
   apps/cli:
     dependencies:
-      '@crosscode/daemon':
-        specifier: workspace:*
-        version: link:../daemon
       '@crosscode/git':
         specifier: workspace:*
         version: link:../../packages/git
       '@crosscode/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
-      '@crosscode/service':
-        specifier: workspace:*
-        version: link:../service
       commander:
         specifier: ^15.0.0
         version: 15.0.0
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
 
   apps/daemon:
     dependencies:
