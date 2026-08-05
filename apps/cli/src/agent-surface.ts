@@ -80,7 +80,10 @@ async function installSkill(repoRoot: string): Promise<InstalledPiece> {
   return { path, changed: true };
 }
 
-const HOOK_COMMAND = "crosscode status --json";
+// `crosscode-mcp hook` -- the second entrypoint of the MCP bundle, which reads the tool
+// payload on stdin and exits 2 on a conflicted path. Not `crosscode status`: that ignores
+// stdin, so it never learns which file is about to be edited.
+const HOOK_COMMAND = "crosscode-mcp hook";
 const HOOK_MATCHER = "Edit|Write|MultiEdit|NotebookEdit";
 
 /**
@@ -88,8 +91,10 @@ const HOOK_MATCHER = "Edit|Write|MultiEdit|NotebookEdit";
  * than after it has written over one side of it.
  *
  * Idempotent by command, not by position: the matcher entry is only appended when no hook in
- * it already runs `crosscode status`, so a second `crosscode start` -- or a user who moved
- * the entry -- does not end up with the hook installed twice.
+ * it already runs a `crosscode` command, so a second `crosscode start` -- or a user who moved
+ * the entry -- does not end up with the hook installed twice. An existing crosscode hook is
+ * rewritten in place rather than left alone, because 0.1.0 installed one that pointed at the
+ * wrong command and an upgrade has to repair it.
  */
 async function installHooks(repoRoot: string): Promise<InstalledPiece> {
   const path = join(repoRoot, ".claude", "settings.json");
@@ -97,10 +102,13 @@ async function installHooks(repoRoot: string): Promise<InstalledPiece> {
   const base = existing ?? {};
   const hooks = isObject(base.hooks) ? base.hooks : {};
   const preToolUse = Array.isArray(hooks.PreToolUse) ? hooks.PreToolUse : [];
-  if (preToolUse.some(mentionsCrosscode)) return { path, changed: false };
+  const repaired = preToolUse.map(withCurrentCommand);
   const merged = {
     ...base,
-    hooks: { ...hooks, PreToolUse: [...preToolUse, { matcher: HOOK_MATCHER, hooks: [{ type: "command", command: HOOK_COMMAND }] }] }
+    hooks: {
+      ...hooks,
+      PreToolUse: repaired.some(mentionsCrosscode) ? repaired : [...repaired, { matcher: HOOK_MATCHER, hooks: [{ type: "command", command: HOOK_COMMAND }] }]
+    }
   };
   return { path, changed: await writeJsonObjectIfChanged(path, existing, merged) };
 }
@@ -108,4 +116,13 @@ async function installHooks(repoRoot: string): Promise<InstalledPiece> {
 function mentionsCrosscode(entry: unknown): boolean {
   if (!isObject(entry) || !Array.isArray(entry.hooks)) return false;
   return entry.hooks.some((hook) => isObject(hook) && typeof hook.command === "string" && hook.command.includes("crosscode"));
+}
+
+/** Points an entry's crosscode hooks at the current command, leaving everything else as it is. */
+function withCurrentCommand(entry: unknown): unknown {
+  if (!mentionsCrosscode(entry) || !isObject(entry) || !Array.isArray(entry.hooks)) return entry;
+  return {
+    ...entry,
+    hooks: entry.hooks.map((hook) => (isObject(hook) && typeof hook.command === "string" && hook.command.includes("crosscode") ? { ...hook, command: HOOK_COMMAND } : hook))
+  };
 }

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -114,6 +114,44 @@ describe("crosscode start", () => {
     expect(Object.keys(mcp.mcpServers)).toEqual(["crosscode"]);
     const settings = JSON.parse(await readFile(join(root, ".claude", "settings.json"), "utf8"));
     expect(settings.hooks.PreToolUse).toHaveLength(1);
+  });
+
+  // The hook has to reach the entrypoint that reads the tool payload on stdin and can exit 2.
+  // `crosscode status` cannot: it ignores stdin and prints CLI status JSON.
+  it("installs a hook that runs the pre-edit hook entrypoint", async () => {
+    const root = await checkout();
+    const { environment } = stubEnvironment();
+
+    await setup(root, environment);
+
+    const settings = JSON.parse(await readFile(join(root, ".claude", "settings.json"), "utf8"));
+    expect(settings.hooks.PreToolUse[0].hooks).toEqual([{ type: "command", command: "crosscode-mcp hook" }]);
+  });
+
+  // 0.1.0 installed a hook pointing at `crosscode status --json`, which never blocks an edit.
+  // Upgrading has to repair that entry rather than skip it as "already installed".
+  it("repairs the broken hook a previous version installed", async () => {
+    const root = await checkout();
+    const { environment } = stubEnvironment();
+    const settingsPath = join(root, ".claude", "settings.json");
+    await mkdir(join(root, ".claude"), { recursive: true });
+    await writeFile(settingsPath, JSON.stringify({
+      hooks: {
+        PreToolUse: [
+          { matcher: "Bash", hooks: [{ type: "command", command: "./scripts/audit.sh" }] },
+          { matcher: "Edit|Write|MultiEdit|NotebookEdit", hooks: [{ type: "command", command: "crosscode status --json" }] }
+        ]
+      }
+    }));
+
+    const result = await setup(root, environment);
+
+    expect(result.agent).toMatchObject({ hooks: { changed: true } });
+    const settings = JSON.parse(await readFile(settingsPath, "utf8"));
+    expect(settings.hooks.PreToolUse).toEqual([
+      { matcher: "Bash", hooks: [{ type: "command", command: "./scripts/audit.sh" }] },
+      { matcher: "Edit|Write|MultiEdit|NotebookEdit", hooks: [{ type: "command", command: "crosscode-mcp hook" }] }
+    ]);
   });
 
   it("refuses a checkout that is not a git repository", async () => {
