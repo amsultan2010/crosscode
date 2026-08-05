@@ -59,7 +59,7 @@ lifecycle. A conflicted path is quarantined until `resolve` arrives with merged 
 | --- | --- | --- |
 | `POST /v1/projects` | `createProjectRequest` (`name`, `repo` as `owner/repo`) | `syncProject` |
 | `POST /v1/invites` | `createInviteRequest` (`projectId`, `expiresInHours`) | `syncInvite` |
-| `POST /v1/invites/:code/redeem` | — | `redeemSyncInviteResponse` (`projectId`, `repo`, `cloneCommand`) |
+| `POST /v1/invites/:code/redeem` | none | `redeemSyncInviteResponse` (`projectId`, `repo`, `cloneCommand`) |
 | `POST /v1/replicas` | `registerSyncReplicaRequest` (`projectId`, `branch`) | `registerSyncReplicaResponse` (`replicaId`, `cursor`) |
 | `POST /v1/changes` | `publishChangesRequest` (up to 500 versions) | `publishChangesResponse` (`cursor`) |
 | `GET /v1/changes?since=` | `listChangesQuery` | `listChangesResponse` **or** `syncCursorTooOld` |
@@ -87,12 +87,12 @@ directory.
 The daemon's loopback HTTP API is what `crosscode status` and the MCP tools call. The
 contract pins the shapes:
 
-- `syncStatus` — `branch`, `connected`, `paused`, `cursor`, `pendingConflicts`, `peers`.
+- `syncStatus`: `branch`, `connected`, `paused`, `cursor`, `pendingConflicts`, `peers`.
   Returned by `crosscode status` and the `status` MCP tool alike.
-- `conflict[]` — the pending conflicts.
-- `resolveConflictRequest` — `{ conflictId, content }`, the agent's merged result. Written
+- `conflict[]`: the pending conflicts.
+- `resolveConflictRequest`: `{ conflictId, content }`, the agent's merged result. Written
   to disk and republished.
-- `pauseRequest` — `{ paused }`.
+- `pauseRequest`: `{ paused }`.
 
 The route spellings the MCP server uses are `GET /v1/status`, `GET /v1/conflicts`,
 `POST /v1/conflicts/resolve`, and `POST /v1/pause`, with a `Bearer` secret from the

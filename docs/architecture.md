@@ -43,8 +43,8 @@ rebroadcast forever.
 
 All four clauses are load-bearing; the earlier draft of this rule lost data on concurrent
 edits, which is why `spike/` exists. Binary files are never merged, so concurrent binary
-edits are always a conflict. A conflicted path is quarantined — neither published nor
-applied — until it is resolved.
+edits are always a conflict. A conflicted path is quarantined, neither published nor
+applied, until it is resolved.
 
 **Deferral and pausing.** A file the user or their agent touched in the last ~10 seconds is
 never written to; the write is deferred. Syncing pauses entirely during a rebase, merge, or
@@ -74,7 +74,7 @@ Neither holds sync state. Both talk to the local daemon's loopback HTTP API.
 
 The CLI is five commands: `start`, `invite`, `join`, `status`, `stop`.
 
-The MCP server is four tools — `status`, `conflicts`, `resolve`, `pause` — and one pre-edit
+The MCP server is four tools (`status`, `conflicts`, `resolve`, `pause`) and one pre-edit
 hook. Every tool response carries any pending conflicts, so an agent finds out about one on
 its next call regardless of what that call was for. See
 [mcp-clients.md](./mcp-clients.md).

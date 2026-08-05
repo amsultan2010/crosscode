@@ -86,8 +86,8 @@ schemas come from the Zod schemas in `packages/protocol/src/sync.ts`.
 
 ## Conflicts ride on every response
 
-Every response from every tool carries a `conflicts` array — including `status` and `pause`,
-which nobody would call to ask about conflicts — plus an `attention` line when it is
+Every response from every tool carries a `conflicts` array, including `status` and `pause`,
+which nobody would call to ask about conflicts, plus an `attention` line when it is
 non-empty:
 
 ```json
@@ -108,8 +108,8 @@ was for.
 ## The skill
 
 [`skills/crosscode/SKILL.md`](../skills/crosscode/SKILL.md) is one skill, not a suite. It
-tells the agent what is happening in the background, how to resolve a conflict, and — the
-part that matters most — when to do nothing. An agent that narrates sync activity to its
+tells the agent what is happening in the background, how to resolve a conflict, and, the
+part that matters most, when to do nothing. An agent that narrates sync activity to its
 user has broken the product.
 
 `crosscode start` copies it into the agent's skills directory (`.claude/skills/crosscode/`

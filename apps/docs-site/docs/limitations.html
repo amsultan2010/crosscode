@@ -77,8 +77,8 @@
         <li>There is no hosted or managed coordination service yet. Your team runs a Supabase project (or a plain Postgres instance for local-only testing) and the service itself. This is the main setup cost.</li>
         <li>There is no production website deployed yet, so <code>crosscode login</code> has no default sign-in page to open and fails with <code>WEB_URL_REQUIRED</code>. Pass <code>--web &lt;url&gt;</code> or set <code>CROSSCODE_WEB_URL</code>, or use the headless <code>--email</code>/<code>--password</code> path, which needs neither.</li>
         <li>Billing is a placeholder: the plan and usage data model and its enforcement helpers exist, but no payment provider is wired up, so nothing is charged or actually limited.</li>
-        <li>Workspace, membership, invite, and billing management is CLI- and API-only. There is no web UI for any of it, by decision — the website is landing, sign-up/sign-in, and docs.</li>
-        <li>Deliberately not published to npm or any editor marketplace — the supported surface is the daemon + MCP server, run from a cloned checkout. Editors like VS Code and Cursor connect via MCP; there is no supported editor extension.</li>
+        <li>Workspace, membership, invite, and billing management is CLI- and API-only. There is no web UI for any of it, by decision. The website is landing, sign-up/sign-in, and docs.</li>
+        <li>Deliberately not published to npm or any editor marketplace. The supported surface is the daemon + MCP server, run from a cloned checkout. Editors like VS Code and Cursor connect via MCP; there is no supported editor extension.</li>
       </ul>
 
       <h2>Operational hardening</h2>
@@ -86,7 +86,7 @@
         <li>Production PostgreSQL role grants still need environment-specific deployment hardening. Retention is opt-in and admin-only (<code>pnpm service:prune -- --older-than-days &lt;n&gt;</code>); tables that cursor reconnect depends on are deliberately never pruned.</li>
         <li>Supabase refresh tokens go in the OS keychain when one is available (macOS Keychain, Linux Secret Service); otherwise, including on Windows, the mode-<code>0600</code> Git-directory config file is used instead. The workspace encryption keyring follows the same rule.</li>
         <li><strong>End-to-end encryption covers file payloads, not everything.</strong> File contents, paths, diffs, content hashes, and change intents are sealed. Task titles, claim targets, published intents, handoff notes, and validation output are <em>not</em> encrypted yet, and can contain paths and descriptions of what you're working on. The <a href="/docs/privacy.html">privacy page</a> states this plainly rather than letting "end-to-end encrypted" imply more than it currently covers.</li>
-        <li>Adding a device to an encrypted workspace needs a human to compare a fingerprint on both machines. That is deliberate — auto-granting to whatever device the service listed would let the service ask for the key and get it — but it does mean pairing is not fully unattended.</li>
+        <li>Adding a device to an encrypted workspace needs a human to compare a fingerprint on both machines. That is deliberate, because auto-granting to whatever device the service listed would let the service ask for the key and get it, but it does mean pairing is not fully unattended.</li>
         <li>Losing every copy of a workspace key is unrecoverable: we hold no copy, which is the same fact as being unable to read your code. It costs the coordination history, not source code, since the repository is an ordinary Git repository throughout. <code>crosscode key export</code> produces a recovery code worth keeping.</li>
       </ul>
 

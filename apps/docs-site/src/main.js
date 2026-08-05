@@ -107,11 +107,17 @@ if (billingOptions.length > 0) {
 const scene = document.querySelector("#scene");
 
 if (scene) {
-  const toggle = scene.querySelector("[data-scene-toggle]");
+  const stage = scene.closest(".stage") ?? document;
+  const toggle = stage.querySelector("[data-scene-toggle]");
   const toggleLabel = toggle?.querySelector(".scene-toggle-label");
+  const tabs = [...stage.querySelectorAll("[data-step-tab]")];
 
   // Step 0 is the idle frame; 5 holds the finished state before looping.
   const TIMINGS = [700, 1700, 1950, 1500, 3000, 2400];
+
+  // The tab strip labels steps 1 through 4. Step 5 is the settled frame that
+  // follows the accept, so it keeps the last tab lit rather than going dark.
+  const TAB_FOR_STEP = { 1: 1, 2: 2, 3: 3, 4: 4, 5: 4, done: 4 };
 
   let step = 0;
   let timer = null;
@@ -120,12 +126,20 @@ if (scene) {
 
   const running = () => !userPaused && onScreen && !document.hidden;
 
+  function paint() {
+    scene.dataset.step = String(step);
+    const active = TAB_FOR_STEP[step];
+    for (const tab of tabs) {
+      tab.setAttribute("aria-selected", String(Number(tab.dataset.stepTab) === active));
+    }
+  }
+
   function schedule() {
     clearTimeout(timer);
     if (!running()) return;
     timer = setTimeout(() => {
       step = (step + 1) % TIMINGS.length;
-      scene.dataset.step = String(step);
+      paint();
       schedule();
     }, TIMINGS[step]);
   }
@@ -135,10 +149,24 @@ if (scene) {
     timer = null;
   }
 
+  // Clicking a tab drives the scene by hand, which also pauses the loop so the
+  // frame you asked for is the frame you keep looking at.
+  for (const tab of tabs) {
+    tab.addEventListener("click", () => {
+      step = Number(tab.dataset.stepTab);
+      userPaused = true;
+      toggle?.setAttribute("aria-pressed", "true");
+      if (toggleLabel) toggleLabel.textContent = "Play";
+      stop();
+      paint();
+    });
+  }
+
   if (reduceMotion.matches) {
     // Nothing animates, so render the frame that shows the whole story at once:
     // the edit made, the payload sealed, the proposal received and accepted.
-    scene.dataset.step = "done";
+    step = "done";
+    paint();
   } else {
     const sceneObserver = new IntersectionObserver(
       (entries) => {
