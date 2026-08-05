@@ -25,9 +25,18 @@ BASE="${BASE%/}"
 failures=0
 
 body="$(mktemp)"
-trap 'rm -f "$body"' EXIT
+headers="$(mktemp)"
+trap 'rm -f "$body" "$headers"' EXIT
 
-status="$(curl -sS --max-time 30 -o "$body" -w '%{http_code}' "$BASE/api/health")"
+# Vercel's deployment protection answers every route, including the API ones, with a 302 to
+# its SSO login. Nothing about the deployment is observable from here, so checking it would
+# only report on the login page: /api/health looks broken and /v1/memberships looks healthy,
+# both for the same reason. Say so and stop rather than pass or fail on no evidence.
+status="$(curl -sS --max-time 30 -o "$body" -D "$headers" -w '%{http_code}' "$BASE/api/health")"
+if [ "$status" -ge 300 ] && [ "$status" -lt 400 ] && grep -qi '^location:.*vercel\.com/sso-api' "$headers"; then
+  echo "skip $BASE is behind Vercel deployment protection; no route is reachable unauthenticated."
+  exit 0
+fi
 if [ "$status" = "200" ] && grep -q 'crosscode-service' "$body"; then
   echo "ok   GET $BASE/api/health -> $status $(cat "$body")"
 else
