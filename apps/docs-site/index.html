@@ -586,44 +586,36 @@
             <span class="panel-path">paste into your coding agent</span>
             <button class="copy-btn" type="button" data-copy-target="install-prompt-text">Copy prompt</button>
           </header>
-          <pre><code id="install-prompt-text">Set up Crosscode for this project. Crosscode keeps everyone working on this
-codebase in sync: a local daemon watches Git and filesystem activity and exposes
-itself to you (my coding agent) as an MCP server, so you can see what my teammates
-and their agents are doing in their own checkouts, and they can see what we do here
-within seconds, instead of at pull-request time. Their work arrives as proposals
-we review, never as writes into our files. Do the following:
+          <pre><code id="install-prompt-text">Set up Crosscode for this project. Crosscode syncs uncommitted working-tree files between
+my teammates' checkouts and mine in real time: they edit, my copy updates within seconds,
+and vice versa. It never touches commits, branches, or remotes. Do the following:
 
-1. Check that Node 24 or newer is available (`node --version`). If it is not, stop
-   and tell me, because everything below needs it.
+1. Check that Node 24 or newer is available (`node --version`). If it is not, stop and
+   tell me, because everything below needs it.
 2. From this project's Git root, run:
 
    ```
-   npx --yes @crosscode/cli start --no-browser
+   npm install -g @crosscode/cli &amp;&amp; crosscode start
    ```
 
-   `start` does the whole setup: it configures this checkout, signs me in, attaches
-   it to my personal workspace, starts the background daemon, and writes the
-   Crosscode MCP server into this project's MCP config. It registers with Claude
-   Code (`.mcp.json`) by default; pass `--mcp cursor`, `--mcp gemini`, or
-   `--mcp opencode` if I use one of those instead.
-3. `--no-browser` makes it print a sign-in URL instead of trying to open a browser
-   you cannot see. Show me that URL and wait. I have to open it and sign in (or
-   create an account) before the command finishes. Do not try to sign in for me,
-   and do not ask me for my password.
-4. If I say I would rather not use a browser at all, run it headlessly instead:
-   `npx --yes @crosscode/cli start --email &lt;my email&gt; --password &lt;my password&gt;`,
-   using credentials I give you. If I have no account yet, that path needs
-   `npx --yes @crosscode/cli signup --email &lt;e&gt; --password &lt;p&gt;` first.
-5. Once `start` reports success, tell me the config was written and that I need to
-   restart/reload you (or reconnect MCP servers) for the new "crosscode" server to
-   be picked up.
-6. Once reconnected, call the `get_workspace_state` tool once to confirm it works.
-   If the call fails, report the exact error back to me instead of guessing at a
-   fix.
+   `start` does the whole setup: it signs me in with GitHub, attaches this checkout to a
+   project, starts the background daemon, and installs the Crosscode MCP server, skill,
+   and pre-edit hook for you. It is safe to re-run.
+3. It will print a GitHub sign-in URL. Show it to me and wait — I have to open it and sign
+   in before the command finishes. Do not try to sign in for me and do not ask me for
+   credentials.
+4. Once `start` reports success, tell me I need to restart you (or reconnect MCP servers)
+   for the "crosscode" server to be picked up.
+5. Once reconnected, call the `status` tool once to confirm it works. If it fails, show me
+   the exact error rather than guessing at a fix.
 
-If I am joining a teammate's workspace rather than using my own, run
-`npx --yes @crosscode/cli join --invite &lt;code&gt;` with the invite code I give you
-after step 5, then restart as above.</code></pre>
+If I am joining a teammate instead, they will send me a link that gives me two lines to
+paste — a `git clone` and a `crosscode join CC-XXXX-XXXX`. Run those from the parent
+directory rather than the steps above.
+
+After setup, read the `crosscode` skill and follow it. The short version: syncing is
+invisible, files will change under you and that is normal, and you should never mention
+Crosscode to me unless there is a conflict you cannot merge on your own.</code></pre>
         </div>
 
         <p class="note">
@@ -766,7 +758,6 @@ after step 5, then restart as above.</code></pre>
         <a href="/docs/privacy.html">Privacy</a>
         <a href="/docs/limitations.html">Limitations</a>
         <a href="/docs/terms.html">Terms</a>
-        <a href="/docs/refund-policy.html">Refund policy</a>
         <a href="/docs/support.html">Support</a>
       </nav>
       <nav class="footer-col" aria-label="More">

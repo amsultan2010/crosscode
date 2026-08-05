@@ -97,8 +97,7 @@ const NAV_GROUPS = [
     label: "Support & legal",
     links: [
       { href: "/docs/support.html", label: "Support", key: "support" },
-      { href: "/docs/terms.html", label: "Terms of Service", key: "terms" },
-      { href: "/docs/refund-policy.html", label: "Refund policy", key: "refund-policy" }
+      { href: "/docs/terms.html", label: "Terms of Service", key: "terms" }
     ]
   }
 ];
@@ -160,14 +159,6 @@ const GENERATED_PAGES = [
     title: "Terms of Service",
     mdFile: "terms.md",
     htmlOut: "terms.html",
-    nextHref: "/docs/refund-policy.html",
-    nextLabel: "Refund policy"
-  },
-  {
-    key: "refund-policy",
-    title: "Refund policy",
-    mdFile: "refund-policy.md",
-    htmlOut: "refund-policy.html",
     nextHref: "/docs/index.html",
     nextLabel: "Docs overview"
   }
@@ -313,10 +304,10 @@ function syncInstallPrompt() {
 
 function generateLlmsTxt() {
   const entries = [
-    { href: "/docs/architecture.md", label: "Architecture", desc: "The daemon, coordination service, and how transactions and proposals move between them." },
-    { href: "/docs/safety.md", label: "Safety model", desc: "The rules and threat model governing when Crosscode may touch your working tree, and how file payloads are end-to-end encrypted." },
+    { href: "/docs/architecture.md", label: "Architecture", desc: "The daemon, the coordination service, and how one file change reaches a teammate." },
+    { href: "/docs/safety.md", label: "Safety model", desc: "The rules and threat model governing when Crosscode may touch your working tree." },
     { href: "/docs/privacy.md", label: "Privacy", desc: "Exactly what the hosted coordination service can and cannot read. Short answer: not your code." },
-    { href: "/docs/protocol.md", label: "Network protocol", desc: "The wire schema (Zod) shared by the daemon, CLI, MCP server, and coordination service." },
+    { href: "/docs/protocol.md", label: "Network protocol", desc: "The wire contract (Zod) shared by the daemon, CLI, MCP server, and coordination service." },
     { href: "/docs/mcp-clients.md", label: "MCP client setup", desc: "Configuring Claude Code, Codex CLI, OpenCode, Gemini CLI, and Cursor, plus the MCP tool catalog." },
     { href: "/docs/install-prompt.md", label: "Install prompt", desc: "The exact text to paste into any MCP-capable coding agent to set up Crosscode in a project." }
   ];
