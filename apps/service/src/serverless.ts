@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createSupabaseJwks } from "./auth.js";
 import { createRequestHandler, sendHealth } from "./http.js";
 import { createObservability, observeRequest } from "./observability.js";
+import { createAnalytics } from "./analytics.js";
 import { PgStore } from "./store.js";
 import type { WebSocketGateway } from "./ws.js";
 
@@ -75,6 +76,8 @@ function buildHandler(environment: NodeJS.ProcessEnv): { handler: ServerlessHand
     // address is the load balancer.
     trustProxy: true,
     allowedOrigins: parseAllowedOrigins(environment.CROSSCODE_ALLOWED_ORIGINS),
+    // Inert unless POSTHOG_KEY is set in the function's environment.
+    analytics: createAnalytics(environment),
     appUrl: environment.CROSSCODE_APP_URL,
     gateway: silentGateway
   });

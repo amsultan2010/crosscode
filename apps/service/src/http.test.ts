@@ -16,9 +16,35 @@ afterEach(async () => {
 });
 
 describe("service HTTP boundary", () => {
+  it("captures a product event per real action, and an activation only for a new account", async () => {
+    const captured: Array<{ event: string; userId: string }> = [];
+    const analytics = {
+      enabled: true,
+      capture: (event: string, id: string) => { captured.push({ event, userId: id }); },
+      flush: async () => {}
+    };
+    const store = {
+      upsertUser: async () => ({ created: true }),
+      createProject: async () => ({
+        id: projectId, name: "app", repo: "acme/app", plan: "free", createdAt: "2026-01-01T00:00:00.000Z"
+      }),
+      requireMembership: async () => ({ projectId, userId, role: "owner" as const, repo: "acme/app" }),
+      registerReplica: async () => ({ replicaId, cursor: 0 })
+    } as unknown as PgStore;
+    const base = await listen(store, { analytics } as Partial<ServiceServerOptions>);
+    const token = await signToken();
+
+    expect((await post(base, "/v1/projects", { name: "app", repo: "acme/app" }, token)).status).toBe(201);
+    expect((await post(base, "/v1/replicas", { projectId, branch: "main" }, token)).status).toBe(201);
+
+    // upsertUser reported an insert, so this account is new and is counted once.
+    expect(captured.map((entry) => entry.event)).toEqual(["user_activated", "project_created", "replica_registered"]);
+    expect(new Set(captured.map((entry) => entry.userId))).toEqual(new Set([userId]));
+  });
+
   it("creates a project, mints an invite, and registers a replica", async () => {
     const store = {
-      upsertUser: async () => {},
+      upsertUser: async () => ({ created: false }),
       createProject: async () => ({
         id: projectId, name: "app", repo: "acme/app", plan: "free", createdAt: "2026-01-01T00:00:00.000Z"
       }),
@@ -55,7 +81,7 @@ describe("service HTTP boundary", () => {
   it("redeems an invite only for a caller GitHub says can read the repository", async () => {
     const redeemed: string[] = [];
     const store = {
-      upsertUser: async () => {},
+      upsertUser: async () => ({ created: false }),
       findInvite: async (code: string) => code === "CC-7F3A-9C2E"
         ? { code, projectId, repo: "acme/app", expiresAt: "2099-01-01T00:00:00.000Z", redeemedAt: null }
         : null,

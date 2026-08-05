@@ -88,16 +88,20 @@ export class PgStore {
    * invites and replicas all reference one. Called on the routes a brand-new user can
    * reach before belonging to anything -- create a project, redeem an invite.
    */
-  async upsertUser(input: { id: string; githubId?: string; githubLogin?: string; email?: string }): Promise<void> {
-    await this.pool.query(
+  async upsertUser(input: { id: string; githubId?: string; githubLogin?: string; email?: string }): Promise<{ created: boolean }> {
+    // xmax is 0 on a row this statement inserted and non-zero on one it updated, which is
+    // how an upsert reports which half it took. Analytics counts activations with it.
+    const result = await this.pool.query<{ created: boolean }>(
       `INSERT INTO users (id, github_id, github_login, email)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (id) DO UPDATE
          SET github_id = COALESCE(excluded.github_id, users.github_id),
              github_login = COALESCE(excluded.github_login, users.github_login),
-             email = COALESCE(excluded.email, users.email)`,
+             email = COALESCE(excluded.email, users.email)
+       RETURNING (xmax = 0) AS created`,
       [input.id, input.githubId ?? null, input.githubLogin ?? null, input.email ?? null]
     );
+    return { created: result.rows[0]?.created ?? false };
   }
 
   /* ------------------------------------------------------------------------ projects */

@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { createSupabaseJwks } from "./auth.js";
 import { assertSafeServiceBinding, createServiceServer } from "./http.js";
 import { createObservability, observeRequest } from "./observability.js";
+import { createAnalytics } from "./analytics.js";
 import { PgStore } from "./store.js";
 
 export async function main(environment: NodeJS.ProcessEnv = process.env): Promise<void> {
@@ -37,7 +38,9 @@ export async function main(environment: NodeJS.ProcessEnv = process.env): Promis
     server = createServiceServer({
       store, jwks, supabaseUrl, tls, allowedOrigins, trustProxy: trustProxyTls,
       // Where invite links point. Set it per deployment; the default is production.
-      appUrl: environment.CROSSCODE_APP_URL
+      appUrl: environment.CROSSCODE_APP_URL,
+      // Inert unless POSTHOG_KEY is set.
+      analytics: createAnalytics(environment)
     });
     // A second request listener alongside the route handler: it only reads the status the
     // response ends with, so it cannot change what any route does.

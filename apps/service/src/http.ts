@@ -2,6 +2,7 @@ import { createServer as createHttpServer, type IncomingMessage, type Server, ty
 import { createServer as createHttpsServer } from "node:https";
 import {
   changesResponseSchema,
+  createInviteRequestSchema,
   createProjectRequestSchema,
   listChangesQuerySchema,
   publishChangesRequestSchema,
@@ -18,6 +19,7 @@ import type { JWTVerifyGetKey } from "jose";
 import { checkGitHubRepoAccess, verifySupabaseAccessToken, type GitHubIdentity, type RepoAccessChecker } from "./auth.js";
 import { PgStore, StoreConflictError, StoreUnauthorizedError } from "./store.js";
 import { attachWebSocketGateway, type WebSocketGateway } from "./ws.js";
+import type { Analytics } from "./analytics.js";
 
 export type ServiceServerOptions = {
   store: PgStore;
@@ -32,6 +34,8 @@ export type ServiceServerOptions = {
   /** Injectable so tests do not reach GitHub. Defaults to the real API call. */
   checkRepoAccess?: RepoAccessChecker;
   bodyLimitBytes?: number;
+  /** Product analytics. Absent, or inert without POSTHOG_KEY, means nothing is captured. */
+  analytics?: Analytics;
   tls?: { key: string | Buffer; cert: string | Buffer };
   /**
    * Exact browser origins allowed to call this service cross-origin, e.g.
@@ -105,19 +109,6 @@ const JSON_TYPE = "application/json";
 const GITHUB_TOKEN_HEADER = "x-crosscode-github-token";
 
 const DEFAULT_APP_URL = "https://getcrosscode.dev";
-
-/**
- * Restated field for field from `createInviteRequestSchema` in packages/protocol/src/sync.ts,
- * which cannot be imported: the old transaction-era protocol exports a schema of the same
- * name from packages/protocol/src/index.ts, and an explicit export there shadows the
- * `export * from "./sync.js"` beneath it. The package has no subpath export to reach past
- * the collision with. This goes away the moment the old export does -- it is the only place
- * in the service that does not build directly against the contract.
- */
-const createSyncInviteRequestSchema = z.object({
-  projectId: z.string().min(1),
-  expiresInHours: z.number().int().positive().max(720).default(168)
-}).strict();
 
 export function assertSafeServiceBinding(host: string, tlsEnabled: boolean): void {
   if (!isLoopback(host) && !tlsEnabled) {
@@ -227,6 +218,7 @@ async function handleRequest(
     const body = createProjectRequestSchema.parse(await readJson(request, Math.min(bodyLimit, 16_384)));
     await upsertCaller(options, caller);
     const project = await options.store.createProject(caller.userId, body);
+    options.analytics?.capture("project_created", caller.userId);
     send(response, 201, syncProjectSchema.parse(project));
     return;
   }
@@ -249,6 +241,7 @@ async function handleRequest(
     }
     await upsertCaller(options, caller);
     const redeemed = await options.store.redeemInvite({ code, userId: caller.userId });
+    options.analytics?.capture("invite_redeemed", caller.userId);
     send(response, 200, redeemSyncInviteResponseSchema.parse({
       projectId: redeemed.projectId,
       repo: redeemed.repo,
@@ -258,12 +251,13 @@ async function handleRequest(
   }
 
   if (method === "POST" && url.pathname === "/v1/invites") {
-    const body = createSyncInviteRequestSchema.parse(await readJson(request, Math.min(bodyLimit, 16_384)));
+    const body = createInviteRequestSchema.parse(await readJson(request, Math.min(bodyLimit, 16_384)));
     const invite = await options.store.createInvite({
       projectId: body.projectId,
       userId: caller.userId,
       expiresInHours: body.expiresInHours
     });
+    options.analytics?.capture("invite_created", caller.userId);
     send(response, 201, syncInviteSchema.parse({
       code: invite.code,
       url: joinUrl(options.appUrl, invite.code),
@@ -280,6 +274,7 @@ async function handleRequest(
     const replica = await options.store.registerReplica({
       projectId: body.projectId, userId: caller.userId, branch: body.branch
     });
+    options.analytics?.capture("replica_registered", caller.userId);
     send(response, 201, registerSyncReplicaResponseSchema.parse(replica));
     return;
   }
@@ -298,6 +293,7 @@ async function handleRequest(
       if (redactPath(version.path)) throw new HttpError(400, "Sensitive paths cannot be synchronized");
     }
     const changes = await options.store.publishChanges(body);
+    options.analytics?.capture("changes_published", caller.userId, { versionCount: body.versions.length });
     gateway.broadcastChanges(body.projectId, body.branch, changes, body.replicaId);
     send(response, 200, publishChangesResponseSchema.parse({ cursor: changes.at(-1)!.sequence }));
     return;
@@ -337,12 +333,16 @@ function joinUrl(appUrl: string | undefined, code: string): string {
 }
 
 async function upsertCaller(options: RequestOptions, caller: Caller): Promise<void> {
-  await options.store.upsertUser({
+  const { created } = await options.store.upsertUser({
     id: caller.userId,
     githubId: caller.github?.id,
     githubLogin: caller.github?.login,
     email: caller.email
   });
+  // The first time a person's account reaches the service at all. The closest honest
+  // measure of an install: npm downloads count machines, this counts people who got far
+  // enough to sign in.
+  if (created) options.analytics?.capture("user_activated", caller.userId, { isNewUser: true });
 }
 
 function header(request: IncomingMessage, name: string): string | undefined {
