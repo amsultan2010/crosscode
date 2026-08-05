@@ -6,6 +6,7 @@
     "@crosscode/core": "workspace:*",
     "@crosscode/git": "workspace:*",
     "@crosscode/protocol": "workspace:*",
+    "@crosscode/sync": "workspace:*",
     "@supabase/supabase-js": "^2.58.0",
     "chokidar": "^4.0.3",
     "minimatch": "^10.2.6",

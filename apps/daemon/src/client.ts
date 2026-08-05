@@ -1,30 +1,17 @@
 import { readFile, stat } from "node:fs/promises";
-import type { CaptureKind } from "@crosscode/protocol";
-import { daemonConnectionSchema, type DaemonConnection } from "@crosscode/protocol";
-import type { LocalOperation } from "./types.js";
-import { daemonConnectionPath } from "./runtime.js";
-
-type Status = {
-  root: string;
-  head?: string;
-  branch?: string;
-  worktree: string;
-  remotes: string[];
-  dirty: boolean;
-  workspaceId: string;
-  replicaId: string;
-  materializationPaused: boolean;
-  eventSequence: number;
-  remoteCursor: number;
-  pendingOutbound: number;
-  service: { configured: boolean; online: boolean; lastSyncAt?: string; lastSyncError?: string; lastResyncAt?: string; lastResyncMessage?: string };
-};
+import {
+  conflictSchema,
+  syncStatusSchema,
+  type Conflict,
+  type SyncStatus
+} from "@crosscode/protocol";
+import { daemonDescriptorPath, daemonDescriptorSchema, type DaemonDescriptor } from "./sync-config.js";
 
 /**
  * No usable daemon for this worktree. Carries the `DAEMON_UNAVAILABLE` contract the CLI
- * and MCP server branch on, so every way of not reaching a daemon -- no descriptor, an
- * unreadable or corrupt one, or a descriptor whose daemon is gone -- reports the same
- * actionable code instead of leaking a raw errno and an absolute path.
+ * and the MCP server branch on, so every way of not reaching a daemon -- no descriptor, an
+ * unreadable one, or one whose daemon is gone -- reports the same actionable code instead
+ * of leaking a raw errno and an absolute path.
  */
 export class DaemonUnavailableError extends Error {
   readonly code = "DAEMON_UNAVAILABLE";
@@ -33,49 +20,57 @@ export class DaemonUnavailableError extends Error {
   }
 }
 
+/** The loopback client behind `crosscode status` and the four MCP tools. */
 export class DaemonClient {
-  private constructor(private readonly connection: DaemonConnection) {}
+  private constructor(private readonly descriptor: DaemonDescriptor) {}
 
   static async connect(directory: string): Promise<DaemonClient> {
-    const path = await daemonConnectionPath(directory);
-    let connection: DaemonConnection;
+    const path = await daemonDescriptorPath(directory);
+    let descriptor: DaemonDescriptor;
     try {
       const metadata = await stat(path);
       if ((metadata.mode & 0o077) !== 0) throw new Error("the daemon descriptor's permissions are unsafe");
       if (typeof process.getuid === "function" && metadata.uid !== process.getuid()) throw new Error("the daemon descriptor is owned by another user");
-      connection = daemonConnectionSchema.parse(JSON.parse(await readFile(path, "utf8")));
+      descriptor = daemonDescriptorSchema.parse(JSON.parse(await readFile(path, "utf8")));
     } catch (error) {
-      // ENOENT is the overwhelmingly common case -- no daemon has been started for this
-      // worktree -- and it used to escape as a bare `stat` failure, so the one error an
-      // agent is told to branch on was unreachable in exactly the situation it names.
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new DaemonUnavailableError("no daemon is running for this worktree");
-      }
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new DaemonUnavailableError("no daemon is running for this worktree");
       throw new DaemonUnavailableError(error instanceof Error ? error.message : "the daemon descriptor could not be read");
     }
-    const client = new DaemonClient(connection);
+    const client = new DaemonClient(descriptor);
     await client.status().catch((error: unknown) => {
       throw new DaemonUnavailableError(error instanceof Error ? error.message : "connection failed");
     });
     return client;
   }
 
-  static from(connection: DaemonConnection): DaemonClient {
-    return new DaemonClient(daemonConnectionSchema.parse(connection));
+  static from(descriptor: DaemonDescriptor): DaemonClient {
+    return new DaemonClient(daemonDescriptorSchema.parse(descriptor));
   }
 
-  status(): Promise<Status> { return this.request("GET", "/v1/status"); }
-  workspace(): Promise<{ root: string; workspaceId: string; replicaId: string; actorId: string }> { return this.request("GET", "/v1/workspace"); }
-  operations(): Promise<LocalOperation[]> { return this.request("GET", "/v1/operations"); }
-  capture(intent: string, kind?: CaptureKind): Promise<LocalOperation> { return this.request("POST", "/v1/transactions", kind ? { intent, kind } : { intent }); }
+  async status(): Promise<SyncStatus> {
+    return syncStatusSchema.parse(await this.request("GET", "/v1/status"));
+  }
 
-  private async request<T>(method: "GET" | "POST" | "PUT", path: string, body?: unknown): Promise<T> {
+  async conflicts(): Promise<Conflict[]> {
+    return conflictSchema.array().parse(await this.request("GET", "/v1/conflicts"));
+  }
+
+  /** Hands the agent's merged result back. A path leaves quarantine here and nowhere else. */
+  async resolve(conflictId: string, content: string): Promise<Conflict[]> {
+    return conflictSchema.array().parse(await this.request("POST", "/v1/conflicts/resolve", { conflictId, content }));
+  }
+
+  async pause(paused: boolean): Promise<SyncStatus> {
+    return syncStatusSchema.parse(await this.request("POST", "/v1/pause", { paused }));
+  }
+
+  private async request(method: "GET" | "POST", path: string, body?: unknown): Promise<unknown> {
     let response: Response;
     try {
-      response = await fetch(`http://127.0.0.1:${this.connection.port}${path}`, {
+      response = await fetch(`http://127.0.0.1:${this.descriptor.port}${path}`, {
         method,
         headers: {
-          authorization: `Bearer ${this.connection.secret}`,
+          authorization: `Bearer ${this.descriptor.secret}`,
           ...(body === undefined ? {} : { "content-type": "application/json" })
         },
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -84,8 +79,8 @@ export class DaemonClient {
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : "Daemon request failed");
     }
-    const envelope = await response.json().catch(() => undefined) as { ok?: boolean; data?: T; error?: string } | undefined;
+    const envelope = await response.json().catch(() => undefined) as { ok?: boolean; data?: unknown; error?: string } | undefined;
     if (!response.ok || !envelope?.ok) throw new Error(envelope?.error ?? `Daemon request failed with status ${response.status}`);
-    return envelope.data as T;
+    return envelope.data;
   }
 }
