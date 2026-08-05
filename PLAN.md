@@ -128,7 +128,7 @@ Nothing below is started.
 - [ ] Tasks / claims / handoffs / intents — daemon, routes, 4 tables, CLI, MCP
 - [ ] Proposal lifecycle — accept, reject, analyze, diff, artifacts
 - [ ] Checkpoints · validation profiles · publish-to-branch · autonomy tiers
-- [ ] Semantic review, agent-delegated reviewer, TypeScript dependency graph
+- [x] Semantic review, agent-delegated reviewer, TypeScript dependency graph
 - [ ] E2E key + device pairing — `workspace-key.ts`, `sealing.ts`, pairing routes, migrations 009/015
 - [ ] Stripe — `billing*.ts`, `stripe.ts`, migrations 008/011/014
 - [ ] Self-hosting — `--service` flag and docs
