@@ -60,7 +60,7 @@ async function handOff(session) {
     );
     return;
   }
-  renderMessage("You're signed in — return to your terminal.", "You can close this tab.");
+  renderMessage("You're signed in", "Return to your terminal. You can close this tab.");
 }
 
 function escapeHtml(value) {

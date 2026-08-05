@@ -3,441 +3,598 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Crosscode: work on one codebase together, the way you work on one doc</title>
-  <meta name="description" content="Google Docs made writing together easy. Coding together is still everyone on a separate copy, merging at the end. Crosscode syncs your team's edits as they settle, so a teammate's work is one command away instead of one pull request away — end-to-end encrypted, so we can't read your code." />
+  <title>Crosscode: your teammate's edit, one command away</title>
+  <meta name="description" content="Everyone on your team works in their own checkout with their own coding agent, and nobody sees anyone else's work until a pull request lands. Crosscode closes that gap to seconds. Remote work arrives as a proposal you take with one command, and file payloads are encrypted on your machine before they sync." />
   <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml" />
   <link rel="alternate icon" href="/brand/favicon-32.png" sizes="32x32" />
   <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="Crosscode" />
-  <meta property="og:title" content="Crosscode: work on one codebase together, the way you work on one doc" />
-  <meta property="og:description" content="Everyone on your team has their own checkout and their own agents, and nobody sees anyone else&#39;s work until a pull request lands. Crosscode closes that gap to seconds — and encrypts every file payload on your machine, so we can&#39;t read your code." />
+  <meta property="og:title" content="Crosscode: your teammate's edit, one command away" />
+  <meta property="og:description" content="Coding together still works like emailing a .docx around. Crosscode syncs every settled edit between your team's checkouts within seconds, as a reviewable proposal rather than a write into your files." />
   <meta property="og:image" content="/brand/logo-social.png" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:image" content="/brand/logo-social.png" />
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
   <header class="site-header">
-    <nav>
+    <nav class="nav" aria-label="Primary">
       <a class="brand" href="/">Crosscode</a>
-      <a href="#compare">Why Crosscode</a>
-      <a href="#how-it-works">How it works</a>
-      <a href="#pricing">Pricing</a>
-      <a href="#use-cases">Use cases</a>
-      <a href="#safety">Safety model</a>
-      <a href="/docs/index.html">Docs</a>
-      <a href="/auth/signin.html">Sign in</a>
-      <button class="nav-copy-btn" data-copy-target="install-prompt-text" type="button">Copy install prompt</button>
-      <a class="nav-github" href="https://github.com/amsultan2010/crosscode" rel="noopener">
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-        GitHub
-      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-links">
+        <span class="nav-toggle-bars" aria-hidden="true"></span>
+        Menu
+      </button>
+      <div class="nav-links" id="nav-links">
+        <a href="#loop">The loop</a>
+        <a href="#gap">Why</a>
+        <a href="#stories">Use cases</a>
+        <a href="#encryption">Encryption</a>
+        <a href="#pricing">Pricing</a>
+        <a href="/docs/index.html">Docs</a>
+        <span class="nav-spacer" aria-hidden="true"></span>
+        <a class="nav-plain" href="/auth/signin.html">Sign in</a>
+        <a class="nav-ghost" href="https://github.com/amsultan2010/crosscode" rel="noopener">
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+          GitHub
+        </a>
+        <a class="btn btn-primary btn-sm" href="#install">Install</a>
+      </div>
     </nav>
   </header>
 
-  <main class="landing">
+  <main id="main">
+    <!-- ================= HERO ================= -->
     <section class="hero">
-      <div class="inner hero-grid">
-        <div class="hero-copy reveal">
-          <span class="eyebrow">Pre-1.0 &middot; Open source &middot; MCP-native</span>
-          <h1>Coding together still works like emailing a <code class="h1-code">.docx</code> around.</h1>
-          <p class="subtitle">
-            Google Docs fixed this for writing. Code is still everyone on their own
-            copy, working in the dark, stitching it together at the end. Crosscode
-            closes that gap: a small daemon in each teammate's checkout notices every
-            edit as it settles and puts it in front of everyone else within seconds,
-            one command away from being in their files. Not quite live typing &mdash;
-            you still decide what lands, which is the part you actually want in code
-            &mdash; but a lot closer than waiting on a pull request.
+      <div class="wrap hero-inner">
+        <div class="hero-copy">
+          <p class="kicker reveal">Coordination for teams whose agents all write at once</p>
+          <h1 class="reveal">Everyone has their own copy of the code. Someone merges it all at the end.</h1>
+          <p class="lede reveal">
+            That is how writing worked before Google Docs. Crosscode closes the same gap for
+            code. A small daemon sits in each teammate's checkout, captures an edit once it
+            has settled, and puts it in front of everyone else within seconds. It stops one
+            step short of typing into your files, which is the one thing you never want in
+            code. Remote work arrives as a proposal, and one command takes it.
           </p>
-          <div class="cta-row">
-            <a class="cta" href="#install">Set it up with one prompt</a>
-            <a class="cta secondary" href="#pricing">See pricing</a>
+
+          <div class="hero-actions reveal">
+            <a class="btn btn-primary" href="#install">Install in one command</a>
+            <a class="btn btn-quiet" href="#loop">Watch the loop</a>
           </div>
-          <p class="hero-microcopy"><strong>For teams shipping something together</strong> &mdash; a startup, a hackathon crew, any project moving faster than its pull requests. Free for small teams, and free forever if you self-host.</p>
-          <p class="hero-microcopy"><strong>We can't read your code.</strong> Your team's edits pass through our service, so file contents, paths, and diffs are encrypted on your machine with a key we never receive &mdash; on by default. Not a promise; we don't have the key. <a href="/docs/privacy.html">What we can and can't see</a>.</p>
+
+          <div class="hero-cmd reveal">
+            <code id="hero-command-text">npx @crosscode/cli start</code>
+            <button class="copy-btn" type="button" data-copy-target="hero-command-text">Copy</button>
+          </div>
+
+          <p class="hero-foot reveal">
+            Node 24 and a Git checkout. Nothing to deploy. File contents, paths, and diffs are
+            sealed on your machine before they sync, under a key the service never receives.
+            <a href="#encryption">What that covers</a>.
+          </p>
         </div>
 
-        <div class="hero-visual reveal">
-          <div class="terminal">
-            <div class="terminal-bar">
-              <span></span><span></span><span></span>
-              <span class="terminal-title">claude &middot; crosscode MCP</span>
-            </div>
-            <pre><code><span class="muted">&gt; get_workspace_state()</span>
-
-<span class="accent">✓</span> daemon: running <span class="muted">(auto-started)</span>
-<span class="accent">✓</span> checkout: ~/dev/api-service
-<span class="accent">✓</span> peers online: 2 <span class="muted">(alicja, codex-agent-3)</span>
-
-<span class="muted">incoming proposals</span>
-  <span class="accent">•</span> alicja &middot; refactor: extract payment retry logic
-    <span class="muted">3 files &middot; not yet applied &middot; awaiting your review</span>
-
-<span class="muted">&gt; </span><span class="cursor">▌</span></code></pre>
+        <aside class="panel hero-board reveal" aria-label="Example workspace state">
+          <header class="panel-bar">
+            <span class="dot dot-live" aria-hidden="true"></span>
+            <span class="panel-who">orbit-api</span>
+            <span class="panel-path">workspace</span>
+            <span class="panel-agent">get_workspace_state</span>
+          </header>
+          <div class="panel-body">
+            <p class="board-label">online now</p>
+            <ul class="board-list">
+              <li><span class="dot dot-live" aria-hidden="true"></span> maya <em>claude code</em></li>
+              <li><span class="dot dot-live" aria-hidden="true"></span> you <em>codex cli</em></li>
+              <li><span class="dot dot-live" aria-hidden="true"></span> ci-agent <em>opencode</em></li>
+            </ul>
+            <p class="board-label">claimed right now</p>
+            <ul class="board-list">
+              <li>services/payments/* <em>maya</em></li>
+              <li>services/checkout/* <em>you</em></li>
+            </ul>
+            <p class="board-label">waiting for you</p>
+            <p class="board-row">
+              <span class="badge badge-pending">proposal</span>
+              services/payments/retry.ts <span class="stat-add">+6</span>
+            </p>
           </div>
-        </div>
+        </aside>
       </div>
     </section>
 
-    <section id="compare" class="alt">
-      <div class="inner">
-        <div class="section-heading reveal">
-          <h2>How your team works now &mdash; and what it costs you</h2>
-          <p>Every one of these is a way of coping with the same thing: you can't see what anyone else is doing until they're finished.</p>
+    <!-- ================= THE LOOP (animated demo) ================= -->
+    <section id="loop" class="band">
+      <div class="wrap">
+        <div class="section-head reveal">
+          <p class="kicker">The whole product, in one loop</p>
+          <h2>Maya edits a file. You get a proposal. You take it.</h2>
+          <p class="lede">
+            Two checkouts of one repository, each with its own coding agent, running at the
+            same time. Nothing below is a mockup of a future feature. This is what the
+            daemon, the coordination service, and <code>crosscode accept</code> do today.
+          </p>
         </div>
 
-        <div class="compare-table reveal">
-          <div class="compare-row compare-head">
-            <div>Your current approach</div>
-            <div>What that costs</div>
-            <div>With Crosscode</div>
+        <div class="scene reveal" id="scene" data-step="0">
+          <div class="scene-grid">
+            <!-- Panel A: Maya -->
+            <article class="panel" aria-label="Maya's checkout">
+              <header class="panel-bar">
+                <span class="dot dot-live" aria-hidden="true"></span>
+                <span class="panel-who">maya</span>
+                <span class="panel-path">~/src/orbit-api</span>
+                <span class="panel-agent">claude code</span>
+              </header>
+              <div class="panel-body">
+                <div class="file-head"><span class="file-name">services/payments/retry.ts</span><span class="file-state" data-state="editing">editing</span></div>
+                <pre class="code"><code><span class="ln"><span class="c">// retry a failed capture with backoff</span></span>
+<span class="ln"><span class="k">export async function</span> <span class="f">retryCapture</span>(id: <span class="t">string</span>) {</span>
+<span class="ln add a1"><span class="s">+</span>  <span class="k">const</span> delays = [<span class="n">250</span>, <span class="n">1000</span>, <span class="n">4000</span>];</span>
+<span class="ln add a2"><span class="s">+</span>  <span class="k">for</span> (<span class="k">const</span> ms <span class="k">of</span> delays) {</span>
+<span class="ln add a3"><span class="s">+</span>    <span class="k">const</span> ok = <span class="k">await</span> <span class="f">capture</span>(id);</span>
+<span class="ln add a4"><span class="s">+</span>    <span class="k">if</span> (ok) <span class="k">return</span> ok;</span>
+<span class="ln add a5"><span class="s">+</span>    <span class="k">await</span> <span class="f">sleep</span>(ms);</span>
+<span class="ln add a6"><span class="s">+</span>  }</span>
+<span class="ln">}</span></code></pre>
+                <div class="panel-log">
+                  <p class="log-line l1"><span class="tick">ok</span> edit settled, 1 file, +6</p>
+                  <p class="log-line l2"><span class="tick">ok</span> sealed on this machine, sent</p>
+                </div>
+              </div>
+            </article>
+
+            <!-- The wire -->
+            <div class="wire" aria-hidden="true">
+              <span class="wire-track"></span>
+              <span class="packet"><span class="packet-tag">sealed</span></span>
+            </div>
+
+            <!-- Panel B: you -->
+            <article class="panel" aria-label="Your checkout">
+              <header class="panel-bar">
+                <span class="dot dot-live" aria-hidden="true"></span>
+                <span class="panel-who">you</span>
+                <span class="panel-path">~/work/orbit-api</span>
+                <span class="panel-agent">codex cli</span>
+              </header>
+              <div class="panel-body">
+                <div class="file-head"><span class="file-name">services/checkout/session.ts</span><span class="file-state" data-state="yours">your work, untouched</span></div>
+                <pre class="code"><code><span class="ln"><span class="k">export function</span> <span class="f">startSession</span>(cart: <span class="t">Cart</span>) {</span><span class="ln">  <span class="k">const</span> total = <span class="f">sum</span>(cart.items);</span><span class="ln">  <span class="k">return</span> { id: <span class="f">uuid</span>(), total };</span><span class="ln">}</span></code></pre>
+
+                <div class="proposal">
+                  <div class="proposal-head">
+                    <span class="badge badge-pending">proposal</span>
+                    <span class="proposal-from">from maya</span>
+                  </div>
+                  <p class="proposal-file">services/payments/retry.ts <span class="stat-add">+6</span> <span class="stat-del">&minus;0</span></p>
+                  <p class="proposal-note note-before">Not applied. Your working tree is unchanged until you say otherwise.</p>
+                  <p class="proposal-note note-after">Applied. Base re-checked, checkpoint taken first.</p>
+                </div>
+
+                <div class="panel-cmd">
+                  <p class="cmd-line"><span class="prompt">$</span> <span class="typed">crosscode accept op_8f2c41</span><span class="caret"></span></p>
+                  <p class="log-line l3"><span class="tick">ok</span> checkpoint refs/crosscode/checkpoints/&hellip;</p>
+                  <p class="log-line l4"><span class="tick">ok</span> applied 1 file, base verified</p>
+                </div>
+              </div>
+            </article>
           </div>
-          <div class="compare-row">
-            <div class="compare-now">Everyone on their own branch</div>
-            <div class="compare-pain">Nobody sees anyone else's work until a PR lands, hours later. Two people solve the same thing twice.</div>
-            <div class="compare-fix">Every settled edit reaches your teammates in seconds, so you find the overlap while it's still one line.</div>
-          </div>
-          <div class="compare-row">
-            <div class="compare-now">Merge it all at the end</div>
-            <div class="compare-pain">You're the merge queue, reconstructing what everyone meant hours after they meant it.</div>
-            <div class="compare-fix">Overlap surfaces the moment an edit settles, while everyone still remembers what they were doing.</div>
-          </div>
-          <div class="compare-row">
-            <div class="compare-now">A pull request for every change</div>
-            <div class="compare-pain">Minutes of round trip through your Git host for a change that took four seconds to make.</div>
-            <div class="compare-fix">Take a teammate's work with one command, locally. Publish to a real branch when the work is actually done.</div>
-          </div>
-          <div class="compare-row">
-            <div class="compare-now">Coordinate in Slack</div>
-            <div class="compare-pain">Out of date the second an agent starts working, and no agent is reading it anyway.</div>
-            <div class="compare-fix">Claims and live presence are a fact every agent can query, not a message someone has to remember.</div>
-          </div>
-          <div class="compare-row">
-            <div class="compare-now">Let an AI merge tool sort it out</div>
-            <div class="compare-pain">Now something nobody read has rewritten your working tree.</div>
-            <div class="compare-fix">The AI reviewer only ever advises, runs on your own agent, and can't apply anything without you.</div>
+
+          <div class="scene-foot">
+            <ol class="scene-steps">
+              <li data-for="1"><b>Maya's agent writes.</b> The daemon waits until the edit has settled instead of reacting to every keystroke.</li>
+              <li data-for="2"><b>It is sealed and sent.</b> Contents, paths, and the diff are encrypted before they leave her machine.</li>
+              <li data-for="3"><b>It lands as a proposal.</b> Your files are not touched. You can read the diff first.</li>
+              <li data-for="4"><b>One command takes it.</b> Crosscode re-checks your base, takes a checkpoint, then writes.</li>
+            </ol>
+            <button class="scene-toggle" type="button" data-scene-toggle aria-pressed="false">
+              <span class="scene-toggle-label">Pause</span>
+            </button>
           </div>
         </div>
 
-        <p class="install-steps" style="text-align:center; margin-top:1.75rem;">
-          The common thread: Crosscode doesn't replace your editor, your agent, your branches, or your Git host.
-          Turn it off and your repository is exactly what it was.
+        <p class="note center">
+          Publishing is still ordinary Git. When the work is actually done,
+          <code>crosscode publish --branch</code> turns accepted proposals into commits on a
+          real branch, with a dry-run plan first.
         </p>
       </div>
     </section>
 
-    <section id="use-cases">
-      <div class="inner">
-        <div class="section-heading reveal">
-          <h2>Use cases</h2>
-          <p>Where a shared codebase stops feeling like separate copies.</p>
+    <!-- ================= THE GAP ================= -->
+    <section id="gap">
+      <div class="wrap">
+        <div class="section-head reveal">
+          <p class="kicker">Why this is worth installing</p>
+          <h2>Every habit below exists to cope with one problem</h2>
+          <p class="lede">You cannot see what anyone else is doing until they are finished.</p>
         </div>
 
-        <div class="usecase-grid stagger">
-          <div class="usecase-card usecase-card--featured reveal">
-            <div class="usecase-card-main">
-              <h3>A startup or hackathon team, all shipping at once</h3>
-              <ul class="usecase-card-list">
-                <li>Your Claude Code and a teammate's Codex CLI on the same codebase, each seeing the other's work land</li>
-                <li>Every settled change becomes a durable transaction the instant it lands</li>
-                <li>Ask "who else is working on this repo right now?" and get a real answer</li>
-              </ul>
-              <a class="usecase-card-cta" href="#how-it-works">
-                <span>See how coordination works</span>
-                <span class="usecase-arrow" aria-hidden="true">&rarr;</span>
-              </a>
+        <div class="ledger reveal">
+          <div class="ledger-row ledger-head" aria-hidden="true">
+            <span>What you do now</span>
+            <span>What it costs</span>
+            <span>With Crosscode</span>
+          </div>
+          <div class="ledger-row">
+            <span class="l-now">Everyone on their own branch</span>
+            <span class="l-cost">Nobody sees anyone else's work until a pull request lands hours later. Two people solve the same thing twice.</span>
+            <span class="l-fix">Every settled edit reaches your teammates in seconds, so you catch the overlap while it is still one line.</span>
+          </div>
+          <div class="ledger-row">
+            <span class="l-now">Merge it all at the end</span>
+            <span class="l-cost">Someone becomes the merge queue, reconstructing what four people meant hours after they meant it.</span>
+            <span class="l-fix">Conflicting work surfaces the moment an edit settles, while everyone still remembers the reasoning.</span>
+          </div>
+          <div class="ledger-row">
+            <span class="l-now">A pull request for every change</span>
+            <span class="l-cost">Minutes of round trip through your Git host for a change that took four seconds to write.</span>
+            <span class="l-fix">Take a teammate's work locally with one command. Publish to a real branch when the work is done.</span>
+          </div>
+          <div class="ledger-row">
+            <span class="l-now">Coordinate in Slack</span>
+            <span class="l-cost">Out of date the second an agent starts working, and no agent is reading the channel anyway.</span>
+            <span class="l-fix">Claims and live presence are facts any agent can query over MCP, not a message someone has to remember.</span>
+          </div>
+          <div class="ledger-row">
+            <span class="l-now">Let an AI merge tool sort it out</span>
+            <span class="l-cost">Now something nobody read has rewritten your working tree.</span>
+            <span class="l-fix">The AI reviewer only advises, runs on your own connected agent, and cannot apply anything without you.</span>
+          </div>
+        </div>
+
+        <p class="note center">
+          Crosscode does not replace your editor, your agent, your branches, or your Git
+          host. Turn it off and the repository is exactly what it was.
+        </p>
+      </div>
+    </section>
+
+    <!-- ================= USE CASES ================= -->
+    <section id="stories" class="band">
+      <div class="wrap">
+        <div class="section-head reveal">
+          <p class="kicker">Who this is for</p>
+          <h2>Two teams, one repository, four agents writing at once</h2>
+          <p class="lede">
+            Crosscode is built for a shared codebase with more than one person on it. If a
+            repository will only ever have you in it, plain Git is the better tool.
+          </p>
+        </div>
+
+        <div class="stories">
+          <article class="story reveal">
+            <div class="story-head">
+              <span class="story-tag">Hackathon crew</span>
+              <h3>Four people, 36 hours, one repo</h3>
             </div>
-            <div class="usecase-card-media">
-              <div class="terminal">
-                <div class="terminal-bar">
-                  <span></span><span></span><span></span>
-                  <span class="terminal-title">codex &middot; crosscode MCP</span>
-                </div>
-                <pre><code><span class="muted">&gt; get_workspace_state()</span>
-
-<span class="accent">✓</span> peers online: 2 <span class="muted">(alicja, claude-code)</span>
-<span class="accent">✓</span> your edits: 4 files settled, synced
-
-<span class="muted">&gt; </span><span class="cursor">▌</span></code></pre>
+            <div class="story-body">
+              <div class="beat beat-before">
+                <p class="beat-label">Hour 11, without Crosscode</p>
+                <p>
+                  Two of you built a session helper for the same auth flow, in different
+                  files, twenty minutes apart. Nobody found out until the first merge at
+                  02:00, and fixing it cost an hour you did not have. Meanwhile the fourth
+                  person kept working against an API shape that changed at hour 9.
+                </p>
+              </div>
+              <div class="beat beat-after">
+                <p class="beat-label">Hour 11, with Crosscode</p>
+                <p>
+                  The second helper never got written. When the first one settled, it
+                  appeared in everyone's checkout as a proposal within seconds, and the
+                  claim on <code>auth/session</code> was already visible to the other
+                  agent. The API change landed the same way, two minutes after it was made.
+                </p>
               </div>
             </div>
-          </div>
+            <p class="story-cmd"><span class="prompt">$</span> crosscode claim path auth/session --task t_31</p>
+          </article>
 
-          <div class="usecase-card reveal">
-            <h3>Review without the pull-request round trip</h3>
-            <ul class="usecase-card-list">
-              <li>A teammate's change arrives as a proposal in seconds, not after a push and a CI run</li>
-              <li>Diff, accept, or reject before it touches your branch</li>
-            </ul>
-          </div>
-
-          <div class="usecase-card reveal">
-            <h3>Hand off work across machines or people</h3>
-            <ul class="usecase-card-list">
-              <li>Start on your laptop, hand off to a cloud agent in another worktree</li>
-              <li>Live presence, claims, and handoffs over the same MCP connection</li>
-            </ul>
-          </div>
-
-          <div class="usecase-card usecase-card--wide reveal">
-            <h3>Recover instantly from a bad edit</h3>
-            <ul class="usecase-card-list">
-              <li>Checkpoints live under <code>refs/crosscode/checkpoints/...</code></li>
-              <li>Roll back an agent's change without touching your branch history</li>
-            </ul>
-          </div>
+          <article class="story reveal">
+            <div class="story-head">
+              <span class="story-tag">Building your own startup</span>
+              <h3>Two founders, two laptops, no review process yet</h3>
+            </div>
+            <div class="story-body">
+              <div class="beat beat-before">
+                <p class="beat-label">Tuesday, without Crosscode</p>
+                <p>
+                  You are both running agents all day and neither of you wants a pull
+                  request for a four-second change. So you push to main and hope, or you
+                  batch a day of work into one branch and spend the evening untangling it.
+                  Half of the standup is reading each other's diffs out loud.
+                </p>
+              </div>
+              <div class="beat beat-after">
+                <p class="beat-label">Tuesday, with Crosscode</p>
+                <p>
+                  Every settled edit shows up in the other checkout as a proposal. You take
+                  the ones you want, when you want them, and your working tree stays yours
+                  the rest of the time. Main stays clean because you publish a branch when
+                  the feature is finished, not to move a file between two machines.
+                </p>
+              </div>
+            </div>
+            <p class="story-cmd"><span class="prompt">$</span> crosscode publish --branch feat/payment-retry</p>
+          </article>
         </div>
       </div>
     </section>
 
-    <section id="terminal-vs-site" class="alt">
-      <div class="inner">
-        <div class="section-heading reveal">
-          <h2>Two ways to use Crosscode</h2>
-          <p>Day-to-day work never requires this website. It's where you come to go deeper.</p>
+    <!-- ================= HOW IT WORKS ================= -->
+    <section id="how">
+      <div class="wrap">
+        <div class="section-head reveal">
+          <p class="kicker">How it works</p>
+          <h2>One daemon per checkout, MCP on one side, a coordination service on the other</h2>
         </div>
 
-        <div class="today-grid stagger">
-          <div class="today-card reveal">
-            <h3>Your terminal <span class="badge live">Day-to-day</span></h3>
+        <ol class="steps stagger">
+          <li class="reveal">
+            <h3>A background program watches your checkout</h3>
             <p>
-              Status, claiming work, publishing, and accepting or rejecting a
-              proposal all happen through the <code>crosscode</code> CLI or the
-              MCP tools your coding agent already has connected. There's nothing
-              to look up here for routine work.
+              One small daemon per Git worktree. It watches your files and your Git
+              activity, waits until an edit has settled, and records it without moving
+              <code>HEAD</code>, staging anything, or touching your branch.
             </p>
-            <ul style="margin-top:0.9rem;">
-              <li><a href="/docs/install-prompt.md">The install prompt</a>, straight from the source markdown</li>
-              <li><a href="/docs/mcp-clients.html#available-tools">MCP tool catalog</a>: every tool your agent can call</li>
-              <li><a href="https://github.com/amsultan2010/crosscode/blob/main/AGENTS.md">AGENTS.md</a>: the capability ladder and trust model for agent-delegated actions</li>
-            </ul>
-          </div>
-          <div class="today-card reveal">
-            <h3>This website <span class="badge soon">Going deeper</span></h3>
+          </li>
+          <li class="reveal">
+            <h3>Your agent talks to it over MCP</h3>
             <p>
-              Come here to create an account for the coordination service, and
-              when you want to browse the full documentation, understand a
-              setting before you change it, or read the safety model end to end
-              instead of trusting a summary. Once the account exists, run
-              <code>crosscode login</code> in your terminal &mdash; there is no
-              web app to work in.
+              The daemon is a standards-compliant MCP server. Claude Code, Codex CLI,
+              OpenCode, Cursor, Gemini CLI, and VS Code all connect to it. There is no
+              editor plugin to install.
             </p>
-            <ul style="margin-top:0.9rem;">
-              <li><a href="/auth/signup.html">Create an account</a>, then <code>crosscode login</code> in your terminal</li>
-              <li><a href="/docs/architecture.html">Architecture</a> and <a href="/docs/protocol.html">network protocol</a> reference</li>
-              <li><a href="/docs/install.html">Install &amp; quickstart</a> for configuring the coordination service</li>
-              <li><a href="/docs/safety.html">Safety model</a> and <a href="/docs/limitations.html">current limitations</a> in full</li>
-            </ul>
-          </div>
-        </div>
-      </div>
-    </section>
+          </li>
+          <li class="reveal">
+            <h3>Work syncs through a shared service</h3>
+            <p>
+              Recorded edits go to a coordination service backed by PostgreSQL, so every
+              other checkout sees the same history. If it is unreachable, the daemon keeps
+              capturing and catches up from its saved cursor.
+            </p>
+          </li>
+          <li class="reveal">
+            <h3>Remote work arrives as a proposal</h3>
+            <p>
+              Nothing from another checkout is written to your files automatically. Before
+              a proposal is applied, Crosscode re-checks that your files still match the
+              base it was built on and takes a checkpoint it can roll back to.
+            </p>
+          </li>
+        </ol>
 
-    <section id="benefits" class="alt">
-      <div class="inner">
-        <div class="section-heading reveal">
-          <h2>What changes when your team is actually in sync</h2>
-          <p>The difference between working near each other and working together.</p>
-        </div>
-
-        <div class="benefit-grid stagger">
-          <div class="benefit reveal">
-            <div class="benefit-num">01</div>
-            <h3>See your teammates' work as it happens</h3>
-            <p>
-              The moment an edit settles in anyone's checkout, everyone else can see
-              it &mdash; what changed, which files, by whom. No waiting for a branch to
-              be pushed or a pull request to be opened before the rest of the team
-              finds out the shape of what you built.
-            </p>
-          </div>
-          <div class="benefit reveal">
-            <div class="benefit-num">02</div>
-            <h3>Take a change when you want it, not when Git says so</h3>
-            <p>
-              A teammate's work arrives as a proposal you can read and pull in with
-              one command, in seconds. Your working tree stays yours until you say
-              otherwise &mdash; the one place code should not behave like a shared
-              document.
-            </p>
-          </div>
-          <div class="benefit reveal">
-            <div class="benefit-num">03</div>
-            <h3>Your agent knows what everyone else is doing</h3>
-            <p>
-              Your coding agent can ask "who else is working on this repo right
-              now, and on what?" and get a real answer: live presence,
-              tasks, claims, and handoffs, over the same MCP connection it already
-              uses.
-            </p>
-          </div>
+        <div class="rules">
+          <h3 class="rules-title">The five rules it will not break</h3>
+          <ol class="rule-list stagger">
+            <li class="reveal">Your files are authoritative for your own work.</li>
+            <li class="reveal">Remote operations arrive as proposals and are never applied automatically.</li>
+            <li class="reveal">Every write re-checks the local base and creates a checkpoint first.</li>
+            <li class="reveal">Excluded paths, files that look like secrets, symlinks leaving the repository, and payloads whose content does not match its hash are refused.</li>
+            <li class="reveal">File payloads are encrypted before they leave your machine, so the service stores code it cannot read.</li>
+          </ol>
+          <p class="note">
+            Checkpoints live under <code>refs/crosscode/checkpoints/</code> and never appear
+            in branch history. Full detail on the <a href="/docs/safety.html">safety model page</a>.
+          </p>
         </div>
       </div>
     </section>
 
+    <!-- ================= ENCRYPTION ================= -->
+    <section id="encryption" class="band">
+      <div class="wrap">
+        <div class="section-head reveal">
+          <p class="kicker">Encryption</p>
+          <h2>We do not have the key to your code</h2>
+          <p class="lede">
+            Your edits pass through our coordination service, so the code itself is
+            encrypted on your machine first, under a workspace key we never receive. That
+            is not a policy. It is that we cannot decrypt it, for you or for anyone. Some
+            coordination metadata is still in the clear, and here is exactly which.
+          </p>
+        </div>
+
+        <div class="seal-grid reveal">
+          <div class="seal seal-sealed">
+            <h3><span class="seal-icon" aria-hidden="true">&#9679;</span> Encrypted on your machine</h3>
+            <ul>
+              <li>File contents</li>
+              <li>File paths</li>
+              <li>Diffs</li>
+              <li>Content hashes</li>
+              <li>Change intents, the descriptions attached to a change</li>
+            </ul>
+            <p class="seal-note">A database dump or a subpoena gets ciphertext.</p>
+          </div>
+          <div class="seal seal-open">
+            <h3><span class="seal-icon" aria-hidden="true">&#9675;</span> Visible to the service</h3>
+            <ul>
+              <li>Your account email and the workspace, device, and project identifiers</li>
+              <li>Your repository's Git remote URL</li>
+              <li>Timestamps, file counts, and payload sizes</li>
+              <li>Whether a file was added, modified, deleted, or renamed, but not which file</li>
+              <li>Task titles, claim targets, published intents, handoff notes, and validation output, which are not encrypted yet</li>
+            </ul>
+            <p class="seal-note">If any of those are confidential for you, self-host the service.</p>
+          </div>
+        </div>
+
+        <p class="note center">
+          No third-party model provider is in the loop either. The AI reviewer for ambiguous
+          conflicts runs on the coding agent already connected to your machine.
+          <a href="/docs/privacy.html">Read the privacy page</a> for the full list and what
+          happens if you lose your key.
+        </p>
+      </div>
+    </section>
+
+    <!-- ================= PRICING ================= -->
     <section id="pricing">
-      <div class="inner">
-        <div class="section-heading reveal">
-          <h2>Pricing</h2>
-          <p>
-            The free plan is meant to cover a real team, not tease you into upgrading. Up to
-            5 people, unlimited repos, unlimited AI review, auto-apply &mdash; and if you host
-            it yourself, everything is free forever with no limits at all.
+      <div class="wrap">
+        <div class="section-head reveal">
+          <p class="kicker">Pricing</p>
+          <h2>Free covers a real team of five</h2>
+          <p class="lede">
+            Unlimited repositories and unlimited AI review on every plan, including free.
+            Paid plans buy you seats, a longer proposal history, and the auto-apply setting.
+            Self-hosting is free forever with no limits at all.
           </p>
         </div>
 
         <div class="billing-toggle reveal" role="group" aria-label="Billing period">
-          <button type="button" class="billing-option is-active" data-billing="monthly">Monthly</button>
-          <button type="button" class="billing-option" data-billing="annual">Annual <span class="billing-save">2 months free</span></button>
+          <button type="button" class="billing-option is-active" data-billing="monthly" aria-pressed="true">Monthly</button>
+          <button type="button" class="billing-option" data-billing="annual" aria-pressed="false">Yearly <span class="save">2 months free</span></button>
         </div>
 
-        <div class="pricing-grid stagger">
-          <div class="pricing-card pricing-card--featured reveal">
-            <div class="pricing-name">Free <span class="badge live">Forever</span></div>
-            <div class="pricing-price"><span class="pricing-amount">$0</span></div>
-            <p class="pricing-note">No card. No trial timer.</p>
-            <ul class="pricing-features">
-              <li>Up to <strong>5 people or agents</strong></li>
-              <li>Unlimited repos and workspaces</li>
-              <li><strong>Unlimited AI conflict review</strong></li>
-              <li>Auto-apply when a change is clean</li>
+        <div class="plans stagger">
+          <div class="plan plan-featured reveal">
+            <p class="plan-name">Free</p>
+            <p class="plan-price"><span class="amount">$0</span></p>
+            <p class="plan-sub">No card, no trial timer.</p>
+            <ul class="plan-feat">
+              <li>Up to <b>5 people or agents</b></li>
+              <li>Unlimited repositories and workspaces</li>
+              <li>Unlimited AI conflict review</li>
               <li>7 days of proposal history</li>
-              <li>Every safety feature, nothing held back</li>
+              <li>Auto-apply when a change is clean</li>
+              <li>Every safety feature</li>
             </ul>
-            <a class="cta pricing-cta" href="#install">Start free</a>
+            <a class="btn btn-primary plan-cta" href="#install">Start free</a>
           </div>
 
-          <div class="pricing-card reveal">
-            <div class="pricing-name">Essential</div>
-            <div class="pricing-price">
-              <span class="pricing-amount" data-monthly="$2.50" data-annual="$2.08">$2.50</span>
-              <span class="pricing-period">/mo</span>
-            </div>
-            <p class="pricing-note"><span data-monthly="billed monthly" data-annual="$25 billed annually">billed monthly</span></p>
-            <ul class="pricing-features">
-              <li>Up to <strong>10 people or agents</strong></li>
+          <div class="plan reveal">
+            <p class="plan-name">Essential</p>
+            <p class="plan-price">
+              <span class="amount" data-monthly="$2.50" data-annual="$25">$2.50</span>
+              <span class="per" data-monthly="/mo" data-annual="/yr">/mo</span>
+            </p>
+            <p class="plan-sub"><span data-monthly="billed monthly" data-annual="one workspace, billed yearly">billed monthly</span></p>
+            <ul class="plan-feat">
+              <li>Up to <b>10 people or agents</b></li>
               <li>30 days of proposal history</li>
               <li>Auto-apply always, unlocked</li>
               <li>Everything in Free</li>
             </ul>
-            <a class="cta secondary pricing-cta" href="/auth/signup.html">Create an account</a>
+            <a class="btn btn-quiet plan-cta" href="/auth/signup.html">Create an account</a>
           </div>
 
-          <div class="pricing-card reveal">
-            <div class="pricing-name">Pro</div>
-            <div class="pricing-price">
-              <span class="pricing-amount" data-monthly="$5.00" data-annual="$4.17">$5.00</span>
-              <span class="pricing-period">/mo</span>
-            </div>
-            <p class="pricing-note"><span data-monthly="billed monthly" data-annual="$50 billed annually">billed monthly</span></p>
-            <ul class="pricing-features">
-              <li>Up to <strong>25 people or agents</strong></li>
+          <div class="plan reveal">
+            <p class="plan-name">Pro</p>
+            <p class="plan-price">
+              <span class="amount" data-monthly="$5" data-annual="$50">$5</span>
+              <span class="per" data-monthly="/mo" data-annual="/yr">/mo</span>
+            </p>
+            <p class="plan-sub"><span data-monthly="billed monthly" data-annual="one workspace, billed yearly">billed monthly</span></p>
+            <ul class="plan-feat">
+              <li>Up to <b>25 people or agents</b></li>
               <li>90 days of proposal history</li>
-              <li>Priority support</li>
               <li>Everything in Essential</li>
             </ul>
-            <a class="cta secondary pricing-cta" href="/auth/signup.html">Create an account</a>
+            <a class="btn btn-quiet plan-cta" href="/auth/signup.html">Create an account</a>
           </div>
 
-          <div class="pricing-card reveal">
-            <div class="pricing-name">Unlimited</div>
-            <div class="pricing-price">
-              <span class="pricing-amount" data-monthly="$7.50" data-annual="$6.25">$7.50</span>
-              <span class="pricing-period">/mo</span>
-            </div>
-            <p class="pricing-note"><span data-monthly="billed monthly" data-annual="$75 billed annually">billed monthly</span></p>
-            <ul class="pricing-features">
-              <li><strong>Unlimited</strong> people and agents</li>
-              <li>1 year of proposal history</li>
+          <div class="plan reveal">
+            <p class="plan-name">Unlimited</p>
+            <p class="plan-price">
+              <span class="amount" data-monthly="$7.50" data-annual="$75">$7.50</span>
+              <span class="per" data-monthly="/mo" data-annual="/yr">/mo</span>
+            </p>
+            <p class="plan-sub"><span data-monthly="billed monthly" data-annual="one workspace, billed yearly">billed monthly</span></p>
+            <ul class="plan-feat">
+              <li><b>Unlimited</b> people and agents</li>
+              <li>365 days of proposal history</li>
               <li>Everything in Pro</li>
             </ul>
-            <a class="cta secondary pricing-cta" href="/auth/signup.html">Create an account</a>
+            <a class="btn btn-quiet plan-cta" href="/auth/signup.html">Create an account</a>
           </div>
         </div>
 
-        <div class="pricing-team reveal">
+        <div class="plan-wide reveal">
           <div>
             <h3>Team</h3>
             <p>
-              For organisations that need SSO, exportable audit logs, and an SLA. Priced per seat.
-              Everything in Unlimited, plus the controls your security review will ask about.
+              For organisations that need SSO, exportable audit logs, and an SLA. Priced per
+              seat, at Pro's per-head rate: <b data-monthly="$5 per seat / month" data-annual="$50 per seat / year">$5 per seat / month</b>.
+              Unlimited seats and 365 days of history, same as Unlimited. Below about five
+              people, Unlimited is cheaper, so Team is bought for the controls.
             </p>
           </div>
-          <a class="cta secondary" href="https://github.com/amsultan2010/crosscode/issues" rel="noopener">Get in touch</a>
+          <a class="btn btn-quiet" href="https://github.com/amsultan2010/crosscode/issues" rel="noopener">Get in touch</a>
         </div>
 
-        <div class="pricing-strip reveal">
+        <div class="plan-strip reveal">
           <div>
             <h4>Self-hosting is free forever</h4>
-            <p>MIT-licensed, no seat limits, no history limits, no feature gates. Paid plans exist so you don't have to run it.</p>
+            <p>MIT-licensed, no seat cap, no retention window, no feature gates. Paid plans exist so you do not have to run the service.</p>
           </div>
           <div>
-            <h4>Students and public repos are free</h4>
-            <p>Verified students get Pro-level limits. Work on a public repository is free the same way.</p>
+            <h4>Students get Pro at Essential's price</h4>
+            <p>25 seats and 90 days of history for $2.50 a month. It is granted after verification rather than bought, so the CLI refuses a self-serve upgrade to it.</p>
           </div>
           <div>
-            <h4>Your code stays yours</h4>
-            <p>AI review runs on the agent already connected to your machine. Nothing is sent to a third-party model provider.</p>
+            <h4>A failed payment costs you nothing for 14 days</h4>
+            <p>Paid limits stay in place through the grace period, which outlasts Stripe's usual retries. No downgrade, cancellation, or failed payment ever deletes anything.</p>
           </div>
         </div>
-
-        <p class="install-steps" style="text-align:center;">
-          <strong>Heads up:</strong> no payment provider is wired up yet, so paid plans aren't chargeable
-          &mdash; the free tier is what runs today. Self-hosting is always an option; see the
-          <a href="/docs/install.html">install &amp; quickstart guide</a>.
-        </p>
       </div>
     </section>
 
-    <section id="install" class="alt">
-      <div class="inner">
-        <div class="section-heading reveal">
-          <h2>Set up in one command</h2>
-          <p>
-            Run this in the repository your team shares. It signs you in, starts the
-            daemon, and registers Crosscode with your coding agent &mdash; no service
-            to deploy, no Supabase project, no flags.
+    <!-- ================= INSTALL ================= -->
+    <section id="install" class="band">
+      <div class="wrap">
+        <div class="section-head reveal">
+          <p class="kicker">Install</p>
+          <h2>One command, in the repository your team shares</h2>
+          <p class="lede">
+            It configures the checkout, signs you in, attaches you to a workspace, starts the
+            daemon, and registers the Crosscode MCP server with your coding agent. Re-running
+            it is safe: every step it has already done is skipped.
           </p>
         </div>
 
-        <div class="install-panel reveal">
-          <div class="code-toolbar">
-            <span>Run in your project</span>
-            <button class="copy-btn" data-copy-target="install-command-text" type="button">Copy command</button>
-          </div>
-          <pre><code id="install-command-text">npx @crosscode/cli start</code></pre>
+        <div class="panel install-panel reveal">
+          <header class="panel-bar">
+            <span class="panel-path">run in your project</span>
+            <button class="copy-btn" type="button" data-copy-target="install-command-text">Copy command</button>
+          </header>
+          <pre class="code"><code id="install-command-text">npx @crosscode/cli start</code></pre>
         </div>
 
-        <p class="install-steps">
-          Node 24 and a Git checkout are all it needs. Using it daily?
-          <code>npm install -g @crosscode/cli</code> first, then <code>crosscode start</code>.
+        <p class="note">
+          Using it daily? Install it properly so the daemon runs from a stable path instead
+          of npm's cache: <code>npm install -g @crosscode/cli</code>, then
+          <code>crosscode start</code>. To bring a teammate in, generate an invite and have
+          them run <code>crosscode join --invite &lt;code&gt;</code> in their own checkout.
         </p>
 
-        <div class="section-heading reveal" style="margin-top:3rem;">
-          <h3>Or let your agent do it</h3>
-          <p>
-            Copy this prompt into your coding agent's chat: Claude Code, Codex CLI,
-            OpenCode, Cursor, or any other MCP-capable agent. It runs the same
-            command and wires up your MCP config itself.
+        <div class="section-head reveal install-second">
+          <h3>Or hand the whole thing to your agent</h3>
+          <p class="lede">
+            Paste this into Claude Code, Codex CLI, OpenCode, Cursor, or any other
+            MCP-capable agent. It runs the same command and wires up the MCP config itself.
           </p>
         </div>
 
-        <div class="install-panel reveal">
-          <div class="code-toolbar">
-            <span>Paste into your coding agent</span>
-            <button class="copy-btn" data-copy-target="install-prompt-text" type="button">Copy prompt</button>
-          </div>
+        <div class="panel install-panel reveal">
+          <header class="panel-bar">
+            <span class="panel-path">paste into your coding agent</span>
+            <button class="copy-btn" type="button" data-copy-target="install-prompt-text">Copy prompt</button>
+          </header>
           <pre><code id="install-prompt-text">Set up Crosscode for this project. Crosscode keeps everyone working on this
 codebase in sync: a local daemon watches Git and filesystem activity and exposes
 itself to you (my coding agent) as an MCP server, so you can see what my teammates
 and their agents are doing in their own checkouts, and they can see what we do here
-— within seconds, instead of at pull-request time. Their work arrives as proposals
+within seconds, instead of at pull-request time. Their work arrives as proposals
 we review, never as writes into our files. Do the following:
 
 1. Check that Node 24 or newer is available (`node --version`). If it is not, stop
-   and tell me — everything below needs it.
+   and tell me, because everything below needs it.
 2. From this project's Git root, run:
 
    ```
@@ -450,7 +607,7 @@ we review, never as writes into our files. Do the following:
    Code (`.mcp.json`) by default; pass `--mcp cursor`, `--mcp gemini`, or
    `--mcp opencode` if I use one of those instead.
 3. `--no-browser` makes it print a sign-in URL instead of trying to open a browser
-   you cannot see. Show me that URL and wait — I have to open it and sign in (or
+   you cannot see. Show me that URL and wait. I have to open it and sign in (or
    create an account) before the command finishes. Do not try to sign in for me,
    and do not ask me for my password.
 4. If I say I would rather not use a browser at all, run it headlessly instead:
@@ -469,220 +626,160 @@ If I am joining a teammate's workspace rather than using my own, run
 after step 5, then restart as above.</code></pre>
         </div>
 
-        <p class="install-steps">
-          Works with any MCP-capable coding agent, and there's no editor plugin to
-          install. See <a href="/docs/mcp-clients.html">MCP client setup</a> for
-          per-agent notes, including Codex CLI, whose TOML config you add by hand.
+        <p class="note">
+          Codex CLI's config is TOML and <code>start</code> does not write it, so Codex users
+          add a three-line entry by hand. See
+          <a href="/docs/mcp-clients.html">MCP client setup</a>.
         </p>
       </div>
     </section>
 
-    <section id="how-it-works">
-      <div class="inner">
-        <div class="section-heading reveal">
-          <h2>How it works</h2>
-          <p>One daemon per checkout, talking through MCP and a shared coordination service.</p>
+    <!-- ================= STATUS ================= -->
+    <section id="status">
+      <div class="wrap">
+        <div class="section-head reveal">
+          <p class="kicker">Pre-1.0</p>
+          <h2>What works, and what does not</h2>
+          <p class="lede">The loop works end to end: capture, sync, review, accept, publish. Some of the hosting around it is still being finished.</p>
         </div>
 
-        <ol class="flow-steps stagger">
-          <li class="reveal">
-            <h3>A background program watches your checkout</h3>
-            <p>
-              One small daemon runs per checkout. It watches your files and your
-              Git activity, waits until an edit has settled rather than reacting
-              to every keystroke, and records it &mdash; without moving
-              <code>HEAD</code>, staging anything, or touching your branch.
-            </p>
-          </li>
-          <li class="reveal">
-            <h3>Your agent talks to it over MCP</h3>
-            <p>
-              The daemon exposes itself as a standards-compliant MCP server.
-              Claude Code, Codex CLI, OpenCode, Cursor, or any other MCP-capable
-              agent can call its tools directly. No CLI or editor plugin
-              required.
-            </p>
-          </li>
-          <li class="reveal">
-            <h3>Work syncs through a shared service</h3>
-            <p>
-              Those recorded edits go to a coordination service your team runs,
-              backed by PostgreSQL, so every other checkout &mdash; other people
-              or other agents &mdash; sees the same history. If it's unreachable,
-              the daemon keeps working and catches up when it's back.
-            </p>
-          </li>
-          <li class="reveal">
-            <h3>Remote work arrives as a proposal</h3>
-            <p>
-              Nothing from another checkout is written to your files
-              automatically. Every remote change shows up as a reviewable
-              proposal that you explicitly accept or reject.
-            </p>
-          </li>
-        </ol>
-
-        <div class="feature-grid stagger" style="margin-top: 2.5rem;">
-          <div class="feature reveal">
-            <div class="icon">GIT HOOK</div>
-            <h3>Hidden Git checkpoints</h3>
-            <p>Safety snapshots live under <code>refs/crosscode/checkpoints/...</code> and never pollute your branch history.</p>
-          </div>
-          <div class="feature reveal">
-            <div class="icon">MCP</div>
-            <h3>MCP-first</h3>
-            <p>Works with any MCP-capable coding agent: Claude Code, Codex CLI, OpenCode, Cursor, and more.</p>
-          </div>
-          <div class="feature reveal">
-            <div class="icon">LIVE</div>
-            <h3>Live presence &amp; handoffs</h3>
-            <p>WebSocket-backed presence, tasks, claims, and handoffs, with a durable poll fallback when offline.</p>
-          </div>
-          <div class="feature reveal">
-            <div class="icon">EDITOR</div>
-            <h3>Works in your editor via MCP</h3>
-            <p>VS Code, Cursor, Claude Code, Codex CLI, Gemini CLI, and OpenCode all connect through the same standards-compliant MCP server. No editor plugin to install.</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section id="safety" class="alt">
-      <div class="inner">
-        <div class="section-heading reveal">
-          <h2>The safety model</h2>
-          <p>Five rules govern everything Crosscode is allowed to do to your working tree &mdash; and to anything that leaves it.</p>
-        </div>
-
-        <ol class="safety-rules stagger">
-          <li class="reveal"><p>The local filesystem is always authoritative for local work.</p></li>
-          <li class="reveal"><p>Remote operations arrive as proposals and are never automatically applied.</p></li>
-          <li class="reveal"><p>Every materialization re-checks the local base and creates a checkpoint first.</p></li>
-          <li class="reveal"><p>Excluded paths, secrets, symlink traversal, malformed payloads, and unsupported binaries are rejected.</p></li>
-          <li class="reveal"><p>File payloads are end-to-end encrypted, so the coordination service stores code it cannot read.</p></li>
-        </ol>
-
-        <p class="install-steps" style="text-align: center; margin-top: 1.75rem;">
-          If Crosscode stops running or gets removed, the repository is still an
-          ordinary Git repository. See the <a href="/docs/safety.html">safety model page</a> for the full list,
-          and <a href="/docs/privacy.html">privacy</a> for exactly what we can and cannot see.
-        </p>
-      </div>
-    </section>
-
-    <section>
-      <div class="inner">
-        <div class="section-heading reveal">
-          <h2>What's here today vs. still missing</h2>
-          <p>Pre-1.0. The whole loop &mdash; capture, sync, review, accept, publish &mdash; works; the hosting around it doesn't exist yet.</p>
-        </div>
-
-        <div class="today-grid stagger">
-          <div class="today-card reveal">
-            <h3>Working today <span class="badge live">Live</span></h3>
+        <div class="status-grid">
+          <div class="status-card reveal">
+            <h3><span class="badge badge-live">Working</span></h3>
             <ul>
-              <li>Open source: clone it and run it yourself</li>
-              <li>A per-checkout daemon that captures every settled edit durably</li>
-              <li>An MCP server that starts that daemon for you on the first tool call</li>
-              <li>Multiple workspaces, teammates, roles, invite codes, and pairing codes &mdash; sign yourself up with <code>crosscode signup</code>, no admin step</li>
-              <li>A per-workspace autonomy setting: always ask, auto-apply only when clean, or auto-apply always</li>
-              <li>Live presence, tasks, claims, and handoffs</li>
-              <li><code>publish --branch</code> for accepted work, plus binary files and real rename tracking</li>
-              <li>An AI reviewer for ambiguous conflicts that runs on your own connected MCP agent &mdash; advisory only, off by default, and still gated behind human approval</li>
+              <li>A per-checkout daemon that captures every settled edit durably, and survives restarts</li>
+              <li>An MCP server that starts that daemon on the first tool call</li>
+              <li>Workspaces, members, roles, invite codes, and one-time pairing codes, all self-serve</li>
+              <li>Live presence, tasks, claims, handoffs, and intents</li>
+              <li>End-to-end encrypted file payloads, on by default</li>
+              <li>Binary files restored byte for byte, and renames tracked as renames</li>
+              <li><code>publish --branch</code>, with a dry-run plan first</li>
+              <li>An advisory AI reviewer that runs on your own agent, off unless workspace policy turns it on</li>
             </ul>
           </div>
-          <div class="today-card reveal">
-            <h3>Not there yet <span class="badge soon">Honest gaps</span></h3>
+          <div class="status-card reveal">
+            <h3><span class="badge badge-gap">Not yet</span></h3>
             <ul>
-              <li>Live push runs through the hosted service as polling, not a held-open socket, so remote work shows up on the next sync rather than instantly. Self-hosting the service gets you the WebSocket path.</li>
-              <li>No payment provider is wired up, so no paid plan is chargeable yet. Plan limits themselves are enforced server-side.</li>
-              <li>No editor marketplace listing &mdash; install from npm.</li>
-              <li>No editor extension, and there won't be one: MCP is the single integration contract.</li>
+              <li>Live push through the hosted service is polling rather than a held-open socket, so remote work appears on the next sync. Self-hosting gets you the WebSocket path.</li>
+              <li>No live Stripe account exists yet, so no real card has moved a workspace between plans. Plan limits are enforced server-side regardless.</li>
+              <li>Task titles, claim targets, intents, and validation output are not encrypted yet. File payloads are.</li>
+              <li>Dependency-impact analysis for TypeScript is a syntactic walk, not a type-checker-backed one.</li>
+              <li>There is no web app and there will not be one. Workspaces, invites, and billing are CLI and API only.</li>
             </ul>
           </div>
         </div>
       </div>
     </section>
 
-    <section id="faq" class="alt">
-      <div class="inner">
-        <div class="section-heading reveal">
-          <h2>Questions people ask before installing</h2>
-          <p>If yours isn't here, the <a href="/docs/index.html">docs</a> go deeper.</p>
+    <!-- ================= FAQ ================= -->
+    <section id="faq" class="band">
+      <div class="wrap">
+        <div class="section-head reveal">
+          <p class="kicker">Questions</p>
+          <h2>Asked before installing</h2>
         </div>
 
-        <div class="faq-list stagger">
+        <div class="faq stagger">
           <details class="faq-item reveal">
             <summary>What do I actually have to set up?</summary>
-            <p>Nothing, beyond Node 24 and a Git checkout. Run <code>npx @crosscode/cli start</code> in the repository your team shares: it signs you in, gives your account a workspace, starts the daemon, and registers Crosscode with your coding agent. Teammates run the same command and join with an invite code. Teams who would rather hold their own data can still run the coordination service themselves &mdash; one small Node process, or the included Dockerfile &mdash; backed by a <a href="https://supabase.com" rel="noopener">Supabase</a> project; the <a href="/docs/install.html">install guide</a> covers that.</p>
-          </details>
-          <details class="faq-item reveal">
-            <summary>What does it cost?</summary>
-            <p>Self-hosting is free forever with no limits &mdash; it's MIT-licensed and runs on your own infrastructure. The hosted plans (from $2.50/mo) exist so you don't have to run it yourself; see <a href="#pricing">pricing</a>. The hosted service is still being deployed, so nothing is chargeable yet.</p>
-          </details>
-          <details class="faq-item reveal">
-            <summary>Which coding agents does this work with?</summary>
-            <p>Any MCP-capable agent: Claude Code, Codex CLI, OpenCode, and Cursor are used today. It's a standard MCP server, so anything that can add a local stdio MCP server can use it.</p>
-          </details>
-          <details class="faq-item reveal">
-            <summary>Can it rewrite my branch history or force-push anything?</summary>
-            <p>No. Crosscode never moves HEAD, rewrites history, or applies a remote change without your explicit approval. See the <a href="/docs/safety.html">safety model</a> for the exact rules it follows.</p>
-          </details>
-          <details class="faq-item reveal">
-            <summary>What happens if I stop running it?</summary>
-            <p>Your repository is an ordinary Git repository the whole time. Stop or remove Crosscode and nothing about your checkout changes. There's no lock-in format to migrate away from.</p>
-          </details>
-          <details class="faq-item reveal">
-            <summary>Does it work without any coding agent, just for people?</summary>
-            <p>Yes. The CLI works for human-only teams too, though the proposal-review workflow matters most once agents are in the mix.</p>
-          </details>
-          <details class="faq-item reveal">
-            <summary>What if I'm the only one working on it today?</summary>
-            <p>That's still the case Crosscode is for, as long as the project is shared. Your teammates' agents will land work on this repo again, and the proposals waiting for you when they do are exactly what Crosscode exists to make safe. What it is <em>not</em> built for is a project only you will ever touch &mdash; there is nothing to coordinate with, and you should just use Git.</p>
+            <div class="faq-body">
+              <p>Node 24 and a Git checkout. Run <code>npx @crosscode/cli start</code> in the repository your team shares and it does the rest, including giving your account a workspace. Teammates run the same command and join with an invite code. Teams who would rather hold their own data can run the coordination service themselves, from one Node process or the included Dockerfile, backed by a Supabase project. The <a href="/docs/install.html">install guide</a> covers that.</p>
+            </div>
           </details>
           <details class="faq-item reveal">
             <summary>Can you read my code?</summary>
-            <p>No. File contents, paths, diffs, and content hashes are encrypted on your machine before they're sent, with a key generated on your machine that we never receive &mdash; on by default, nothing to switch on. A database dump or a subpoena gets ciphertext. What we <em>can</em> see is your account email, your repository's git remote URL, timestamps and sizes, and &mdash; for now &mdash; task titles and claim targets, which aren't encrypted yet. The <a href="/docs/privacy.html">privacy page</a> lists all of it plainly.</p>
+            <div class="faq-body">
+              <p>No. File contents, paths, diffs, content hashes, and change intents are encrypted on your machine before they are sent, with a key we never receive. What we can see is your account email, your Git remote URL, timestamps and sizes, and for now task titles, claim targets, published intents, handoff notes, and validation output, which are not encrypted yet. The <a href="/docs/privacy.html">privacy page</a> lists all of it.</p>
+            </div>
           </details>
           <details class="faq-item reveal">
             <summary>What happens if I lose the encryption key?</summary>
-            <p>You lose the coordination history &mdash; past proposals and their diffs &mdash; and no source code, because your repository is an ordinary Git repository on your disk the whole time. We can't recover it for you; that's the same fact as "we can't read your code." Print a recovery code with <code>crosscode key export</code> and keep it in your password manager, and any other paired machine can also hand the key to a new one.</p>
+            <div class="faq-body">
+              <p>You lose the coordination history, meaning past proposals and their diffs. You lose no source code, because your repository is an ordinary Git repository on your disk the whole time. We cannot recover it for you, which is the same fact as not being able to read your code. Print a recovery code with <code>crosscode key export</code> and keep it in your password manager. Any other paired machine can also hand the key to a new one.</p>
+            </div>
           </details>
           <details class="faq-item reveal">
-            <summary>Does my source code get sent to an AI provider?</summary>
-            <p>No. The AI reviewer for ambiguous conflicts runs on the coding agent already connected to your own machine, so it never leaves your machine and there is no third-party model provider in the loop. That's also why AI review is unlimited on every plan, including free &mdash; it costs us nothing.</p>
+            <summary>Can it rewrite my branch history or force-push?</summary>
+            <div class="faq-body">
+              <p>No. Crosscode never stages, commits, pushes, resets, rebases, or changes remotes on its own, and it never moves <code>HEAD</code>. Checkpoints live under <code>refs/crosscode/checkpoints/</code>, outside branch history. The <a href="/docs/safety.html">safety model</a> has the exact rules.</p>
+            </div>
+          </details>
+          <details class="faq-item reveal">
+            <summary>What happens if I stop running it?</summary>
+            <div class="faq-body">
+              <p>Your repository is an ordinary Git repository the whole time, so nothing about your checkout changes. There is no lock-in format to migrate away from.</p>
+            </div>
+          </details>
+          <details class="faq-item reveal">
+            <summary>Which coding agents work with it?</summary>
+            <div class="faq-body">
+              <p>Any MCP-capable agent. Claude Code, Codex CLI, OpenCode, Cursor, Gemini CLI, and VS Code are in use today. It is a standard stdio MCP server, so anything that can add one can use it. There is no editor extension, by decision: MCP is the single integration contract.</p>
+            </div>
+          </details>
+          <details class="faq-item reveal">
+            <summary>Does my code get sent to an AI provider?</summary>
+            <div class="faq-body">
+              <p>No. The AI reviewer for ambiguous conflicts runs on the coding agent already connected to your machine, so nothing leaves it and there is no third-party model provider involved. That is also why AI review is unlimited on every plan including free: it costs us nothing.</p>
+            </div>
+          </details>
+          <details class="faq-item reveal">
+            <summary>What does it cost?</summary>
+            <div class="faq-body">
+              <p>Free for up to five people or agents, forever. Paid plans start at $2.50 a month, or $25 a year for the same plan. Self-hosting is free with no limits. See <a href="#pricing">pricing</a>. No live payment account exists yet, so nothing is chargeable today.</p>
+            </div>
           </details>
         </div>
       </div>
     </section>
 
-    <section class="landing-footer-cta">
-      <div class="inner reveal">
-        <h2 style="margin-top:0;">Try it in your own repo</h2>
-        <p class="subtitle" style="margin-bottom: 1.5rem;">One prompt, one paste, no manual setup.</p>
-        <a class="cta" href="#install">Get the install prompt</a>
+    <!-- ================= CLOSE ================= -->
+    <section class="close">
+      <div class="wrap reveal">
+        <h2>Put it in your team's repo</h2>
+        <p class="lede">One command in the checkout you already have.</p>
+        <div class="hero-cmd">
+          <code id="close-command-text">npx @crosscode/cli start</code>
+          <button class="copy-btn" type="button" data-copy-target="close-command-text">Copy</button>
+        </div>
       </div>
     </section>
   </main>
 
   <footer class="site-footer">
-    <p>Crosscode: local-first Git coordination. Pre-1.0 and fully open source.</p>
-    <p>
-      <a href="/docs/index.html">Docs</a> &middot;
-      <a href="/docs/architecture.html">Architecture</a> &middot;
-      <a href="/docs/protocol.html">Protocol</a> &middot;
-      <a href="/docs/install.html">Install &amp; quickstart</a> &middot;
-      <a href="/docs/mcp-clients.html">MCP clients</a> &middot;
-      <a href="/docs/cli.html">CLI reference</a> &middot;
-      <a href="/docs/safety.html">Safety model</a> &middot;
-      <a href="/docs/privacy.html">Privacy</a> &middot;
-      <a href="/docs/limitations.html">Limitations</a> &middot;
-      <a href="/auth/signin.html">Sign in</a> &middot;
-      <a href="/llms.txt">llms.txt</a> &middot;
-      <a href="https://github.com/amsultan2010/crosscode" rel="noopener">View on GitHub</a>
-    </p>
+    <div class="wrap footer-grid">
+      <div class="footer-brand">
+        <a class="brand" href="/">Crosscode</a>
+        <p>Local-first coordination for people and coding agents working in separate checkouts of one repository. Pre-1.0, MIT licensed.</p>
+      </div>
+      <nav class="footer-col" aria-label="Documentation">
+        <h2>Docs</h2>
+        <a href="/docs/index.html">Overview</a>
+        <a href="/docs/install.html">Install and quickstart</a>
+        <a href="/docs/architecture.html">Architecture</a>
+        <a href="/docs/protocol.html">Network protocol</a>
+        <a href="/docs/cli.html">CLI reference</a>
+        <a href="/docs/mcp-clients.html">MCP clients</a>
+      </nav>
+      <nav class="footer-col" aria-label="Trust">
+        <h2>Trust</h2>
+        <a href="/docs/safety.html">Safety model</a>
+        <a href="/docs/privacy.html">Privacy</a>
+        <a href="/docs/limitations.html">Limitations</a>
+        <a href="/docs/terms.html">Terms</a>
+        <a href="/docs/refund-policy.html">Refund policy</a>
+        <a href="/docs/support.html">Support</a>
+      </nav>
+      <nav class="footer-col" aria-label="More">
+        <h2>More</h2>
+        <a href="/auth/signin.html">Sign in</a>
+        <a href="/auth/signup.html">Create an account</a>
+        <a href="https://github.com/amsultan2010/crosscode" rel="noopener">GitHub</a>
+        <a href="/llms.txt">llms.txt</a>
+      </nav>
+    </div>
   </footer>
 
   <script type="module" src="/src/main.js"></script>
+  <script type="module" src="/src/analytics.js"></script>
 </body>
 </html>

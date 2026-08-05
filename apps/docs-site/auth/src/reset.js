@@ -1,7 +1,7 @@
 import { getSupabaseClient } from "./supabase.js";
 
-// Two states on one page: request a reset email, and — when Supabase sends the
-// user back here from that email — set the new password.
+// Two states on one page: request a reset email, then set the new password once
+// Supabase sends the user back here from that email.
 const container = document.querySelector("#auth");
 const arrivedFromEmail = window.location.hash.includes("type=recovery");
 

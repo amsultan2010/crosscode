@@ -61,6 +61,9 @@ export function mountAuthForm(container, { mode = "signin", onSession }) {
             Continue with GitHub
           </button>
         </div>
+        <p class="auth-foot">
+          There is no web app behind this. <a href="/docs/install.html">Install and quickstart</a>
+        </p>
       </div>
     `;
 
