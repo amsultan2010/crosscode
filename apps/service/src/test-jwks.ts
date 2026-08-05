@@ -27,12 +27,20 @@ export async function testSupabaseJwks(): Promise<JWTVerifyGetKey> {
 
 export async function signTestSupabaseToken(
   supabaseUrl: string,
-  overrides: { sub?: string; email?: string; aud?: string; iss?: string; ttl?: string } = {}
+  overrides: {
+    sub?: string; email?: string; aud?: string; iss?: string; ttl?: string;
+    /** GitHub identity, in the shape Supabase records for a GitHub sign-in. */
+    github?: { id: string; login: string } | null;
+    provider?: string;
+  } = {}
 ): Promise<string> {
   const { privateKey } = await keys();
+  const github = overrides.github === undefined ? { id: "4242", login: "octocat" } : overrides.github;
   return new SignJWT({
     email: overrides.email ?? "member@example.com",
-    role: "authenticated"
+    role: "authenticated",
+    app_metadata: { provider: overrides.provider ?? "github", providers: [overrides.provider ?? "github"] },
+    user_metadata: github ? { provider_id: github.id, user_name: github.login } : {}
   })
     .setProtectedHeader({ alg: "ES256", typ: "JWT", kid: "test-key" })
     .setSubject(overrides.sub ?? "user-1")

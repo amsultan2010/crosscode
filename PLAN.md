@@ -158,11 +158,11 @@ starting Phase 4; port the algorithm, not the code.
 
 ### 3 — Protocol + service
 - [ ] Rewrite `packages/protocol` (~1,000 lines → ~150)
-- [ ] 6-table migration, RLS from day one
+- [x] 6-table migration, RLS from day one
 - [ ] GitHub OAuth
-- [ ] `POST /v1/projects` · `POST /v1/invites` · `POST /v1/invites/:code/redeem` · `GET /v1/changes?since=` · `POST /v1/changes`
-- [ ] Websocket `/v1/stream`
-- [ ] **Verify:** two replicas, 100 changes in order; cursor catch-up after forced disconnect
+- [x] `POST /v1/projects` · `POST /v1/invites` · `POST /v1/invites/:code/redeem` · `GET /v1/changes?since=` · `POST /v1/changes`
+- [x] Websocket `/v1/stream`
+- [x] **Verify:** two replicas, 100 changes in order; cursor catch-up after forced disconnect
 
 ### 4 — Daemon
 - [ ] Watch (tracked files, denylist, ~300ms per-file debounce) → shadow diff → publish

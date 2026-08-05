@@ -5,7 +5,8 @@
   "scripts": {
     "build": "node ../../scripts/build-serverless.mjs",
     "start": "tsx src/main.ts",
-    "migrate": "tsx src/migrate.ts"
+    "migrate": "tsx src/migrate.ts",
+    "test": "vitest run --root ../.. apps/service"
   },
   "dependencies": {
     "@crosscode/core": "workspace:*",

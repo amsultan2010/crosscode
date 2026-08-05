@@ -1,38 +1,36 @@
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import {
-  createInviteRequestSchema,
-  createWorkspaceRequestSchema,
-  createWorkspaceResponseSchema,
-  cursorQuerySchema,
-  cursorTooOldResponseSchema,
-  OPERATIONS_PROTOCOL_VERSION,
-  inviteSchema,
-  listInvitesResponseSchema,
-  listMembersResponseSchema,
-  memberSummarySchema,
-  listProjectsResponseSchema,
-  projectSchema,
-  upsertProjectRequestSchema,
-  redeemInviteResponseSchema,
-  registerReplicaRequestSchema,
-  registerReplicaResponseSchema,
-  serviceIngestReceiptSchema,
-  serviceIngestRequestSchema,
-  listMembershipsResponseSchema,
-  type RemoteOperation
+  changesResponseSchema,
+  createProjectRequestSchema,
+  listChangesQuerySchema,
+  publishChangesRequestSchema,
+  publishChangesResponseSchema,
+  redeemSyncInviteResponseSchema,
+  registerSyncReplicaRequestSchema,
+  registerSyncReplicaResponseSchema,
+  syncInviteSchema,
+  syncProjectSchema
 } from "@crosscode/protocol";
-import { contentHash, redactPath } from "@crosscode/core";
-import { ZodError } from "zod";
+import { redactPath } from "@crosscode/core";
+import { z, ZodError } from "zod";
 import type { JWTVerifyGetKey } from "jose";
-import { verifySupabaseAccessToken } from "./auth.js";
-import { PgStore, StoreConflictError, StoreUnauthorizedError, type Membership, type StoredOperation } from "./store.js";
+import { checkGitHubRepoAccess, verifySupabaseAccessToken, type GitHubIdentity, type RepoAccessChecker } from "./auth.js";
+import { PgStore, StoreConflictError, StoreUnauthorizedError } from "./store.js";
 import { attachWebSocketGateway, type WebSocketGateway } from "./ws.js";
 
 export type ServiceServerOptions = {
   store: PgStore;
   jwks: JWTVerifyGetKey;
   supabaseUrl: string;
+  /**
+   * Origin the join links in invites point at, e.g. "https://getcrosscode.dev". The
+   * invite's `url` is the only thing an invitee ever sees, so this is what makes a code
+   * clickable rather than something to retype.
+   */
+  appUrl?: string;
+  /** Injectable so tests do not reach GitHub. Defaults to the real API call. */
+  checkRepoAccess?: RepoAccessChecker;
   bodyLimitBytes?: number;
   tls?: { key: string | Buffer; cert: string | Buffer };
   /**
@@ -62,12 +60,19 @@ export type ServiceServerOptions = {
 
 /**
  * ServiceServerOptions plus the per-request hook that charges an authenticated caller's
- * own quota. Set once per request in handleRequest and consumed by verifyToken() and
- * authenticate(), which is why it is internal rather than part of the public options type.
+ * own quota. Set once per request in handleRequest and consumed by authenticate(), which
+ * is why it is internal rather than part of the public options type.
  */
 type RequestOptions = ServiceServerOptions & {
   /** Throws 429 when this identity has exhausted its own per-minute budget for the route. */
   chargeIdentity?: (identityKey: string) => void;
+};
+
+/** Who the bearer token says is calling. Project membership is checked per route. */
+type Caller = {
+  userId: string;
+  email: string | undefined;
+  github: GitHubIdentity | undefined;
 };
 
 /**
@@ -88,15 +93,31 @@ const IDENTITY_REPLICA_RATE_PER_MINUTE = 30;
 
 const JSON_TYPE = "application/json";
 
-// Supabase-issued access tokens only carry the auth.users id (sub) — they no longer
-// embed a workspaceId/replicaId the way Crosscode-issued tokens did. Every authenticated
-// request must therefore say which workspace it targets via this header, since
-// authenticate() runs before (and, for GET routes, without) a request body to read a
-// workspaceId from. POST bodies still carry their own event.workspaceId, which is
-// checked against this header for a redundant principal-binding match.
-const WORKSPACE_HEADER = "x-crosscode-workspace-id";
+/**
+ * The invitee's own GitHub OAuth token, offered on the redeem call so the service can ask
+ * GitHub whether they can see the project's repository.
+ *
+ * It travels in a header rather than the body because it is a credential, not data: it
+ * must not end up in a request log that records bodies, and it is the same shape of thing
+ * as the Authorization header beside it. Supabase hands the client this token as
+ * `session.provider_token` at GitHub sign-in.
+ */
+const GITHUB_TOKEN_HEADER = "x-crosscode-github-token";
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DEFAULT_APP_URL = "https://getcrosscode.dev";
+
+/**
+ * Restated field for field from `createInviteRequestSchema` in packages/protocol/src/sync.ts,
+ * which cannot be imported: the old transaction-era protocol exports a schema of the same
+ * name from packages/protocol/src/index.ts, and an explicit export there shadows the
+ * `export * from "./sync.js"` beneath it. The package has no subpath export to reach past
+ * the collision with. This goes away the moment the old export does -- it is the only place
+ * in the service that does not build directly against the contract.
+ */
+const createSyncInviteRequestSchema = z.object({
+  projectId: z.string().min(1),
+  expiresInHours: z.number().int().positive().max(720).default(168)
+}).strict();
 
 export function assertSafeServiceBinding(host: string, tlsEnabled: boolean): void {
   if (!isLoopback(host) && !tlsEnabled) {
@@ -155,7 +176,7 @@ async function handleRequest(
   response: ServerResponse,
   baseOptions: ServiceServerOptions,
   limiter: FixedWindowRateLimiter,
-  gateway: ReturnType<typeof attachWebSocketGateway>
+  gateway: WebSocketGateway
 ): Promise<void> {
   const options: RequestOptions = baseOptions;
   response.setHeader("cache-control", "no-store");
@@ -179,8 +200,8 @@ async function handleRequest(
     return;
   }
   // Layer two, post-auth: the real quota, charged against whoever the caller turns out to
-  // be rather than the address they happen to share. verifyToken()/authenticate() call this
-  // as soon as an identity is established.
+  // be rather than the address they happen to share. authenticate() calls this as soon as
+  // an identity is established.
   options.chargeIdentity = (identityKey: string): void => {
     const identityRate = route === "POST /v1/replicas"
       ? IDENTITY_REPLICA_RATE_PER_MINUTE
@@ -196,188 +217,138 @@ async function handleRequest(
     return;
   }
 
-  // These two routes are reachable by a freshly authenticated Supabase user who is not
-  // (yet) a member of any workspace, so they verify the bearer token only -- not the full
-  // authenticate() below, which requires an existing membership resolved via the
-  // WORKSPACE_HEADER.
-  if (method === "POST" && url.pathname === "/v1/workspaces") {
-    const { userId, email } = await verifyToken(request, options);
-    const body = createWorkspaceRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
-    const created = await options.store.createWorkspace({ workspaceName: body.name, userId, actorId: email ?? userId });
-    send(response, 201, createWorkspaceResponseSchema.parse(created));
+  const caller = await authenticate(request, options);
+  const bodyLimit = options.bodyLimitBytes ?? 1_048_576;
+
+  // Creating a project and redeeming an invite are both reachable by someone who belongs
+  // to nothing yet, so they provision the user row the rest of the schema references.
+
+  if (method === "POST" && url.pathname === "/v1/projects") {
+    const body = createProjectRequestSchema.parse(await readJson(request, Math.min(bodyLimit, 16_384)));
+    await upsertCaller(options, caller);
+    const project = await options.store.createProject(caller.userId, body);
+    send(response, 201, syncProjectSchema.parse(project));
     return;
   }
 
   const redeemMatch = method === "POST" ? url.pathname.match(/^\/v1\/invites\/([^/]+)\/redeem$/) : null;
   if (redeemMatch) {
-    const { userId, email } = await verifyToken(request, options);
-    const redeemed = await options.store.redeemInvite({ code: decodeURIComponent(redeemMatch[1]!), userId, actorId: email ?? userId });
-    send(response, 200, redeemInviteResponseSchema.parse(redeemed));
-    return;
-  }
-
-  if (method === "GET" && url.pathname === "/v1/memberships") {
-    const { userId, email } = await verifyToken(request, options);
-    // Contract C: a valid user never sees an empty membership list. Provisioning here
-    // rather than at signup keeps it independent of how the account was created (website
-    // OAuth, `crosscode signup`, or an admin), and the partial unique index behind
-    // ensurePersonalWorkspace() makes concurrent first requests converge on one workspace.
-    await options.store.ensurePersonalWorkspace({ userId, actorId: email ?? userId });
-    const memberships = await options.store.listMembershipsForUser(userId);
-    send(response, 200, listMembershipsResponseSchema.parse({
-      memberships: memberships.map((m) => ({ workspaceId: m.workspaceId, workspaceName: m.workspaceName, role: m.role, isPersonal: m.isPersonal }))
+    const code = decodeURIComponent(redeemMatch[1]!);
+    const invite = await options.store.findInvite(code);
+    if (!invite) throw new HttpError(404, "Invite code is not valid");
+    if (invite.redeemedAt) throw new HttpError(409, "Invite has already been redeemed");
+    if (Date.parse(invite.expiresAt) <= Date.now()) throw new HttpError(409, "Invite has expired");
+    // The whole point of the invite page: a code is not access. Somebody who cannot read
+    // the repository on GitHub cannot join the room that carries its working tree, and a
+    // caller who offers no GitHub token has not shown they can.
+    const githubToken = header(request, GITHUB_TOKEN_HEADER);
+    if (!githubToken) throw new HttpError(403, `${GITHUB_TOKEN_HEADER} is required to verify access to ${invite.repo}`);
+    const checkAccess = options.checkRepoAccess ?? checkGitHubRepoAccess;
+    if (!await checkAccess(githubToken, invite.repo)) {
+      throw new HttpError(403, `Your GitHub account does not have access to ${invite.repo}`);
+    }
+    await upsertCaller(options, caller);
+    const redeemed = await options.store.redeemInvite({ code, userId: caller.userId });
+    send(response, 200, redeemSyncInviteResponseSchema.parse({
+      projectId: redeemed.projectId,
+      repo: redeemed.repo,
+      cloneCommand: cloneCommandFor(redeemed.repo)
     }));
     return;
   }
 
-  const identity = await authenticate(request, options);
-
   if (method === "POST" && url.pathname === "/v1/invites") {
-    if (identity.role !== "owner") throw new HttpError(403, "Only workspace owners can create invites");
-    const body = createInviteRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
-    const invite = await options.store.createInvite(identity, { role: body.role, ttlMs: body.ttlSeconds ? body.ttlSeconds * 1_000 : undefined });
-    send(response, 201, inviteSchema.parse(invite));
-    return;
-  }
-
-  if (method === "GET" && url.pathname === "/v1/invites") {
-    if (identity.role !== "owner") throw new HttpError(403, "Only workspace owners can list invites");
-    const invites = await options.store.listInvites(identity);
-    send(response, 200, listInvitesResponseSchema.parse({ invites }));
-    return;
-  }
-
-  const deleteInviteMatch = method === "DELETE" ? url.pathname.match(/^\/v1\/invites\/([^/]+)$/) : null;
-  if (deleteInviteMatch) {
-    if (identity.role !== "owner") throw new HttpError(403, "Only workspace owners can revoke invites");
-    await options.store.revokeInvite(identity, decodeURIComponent(deleteInviteMatch[1]!));
-    send(response, 200, { revoked: true });
-    return;
-  }
-
-  if (method === "GET" && url.pathname === "/v1/members") {
-    const members = await options.store.listMembers(identity);
-    send(response, 200, listMembersResponseSchema.parse({ members }));
-    return;
-  }
-
-  const removeMemberMatch = method === "DELETE" ? url.pathname.match(/^\/v1\/members\/([^/]+)$/) : null;
-  if (removeMemberMatch) {
-    if (identity.role !== "owner") throw new HttpError(403, "Only workspace owners can remove members");
-    const memberId = decodeURIComponent(removeMemberMatch[1]!);
-    if (!UUID_PATTERN.test(memberId)) throw new HttpError(400, "memberId must be a UUID");
-    const removed = await options.store.disableMember(identity, memberId);
-    send(response, 200, memberSummarySchema.parse(removed));
+    const body = createSyncInviteRequestSchema.parse(await readJson(request, Math.min(bodyLimit, 16_384)));
+    const invite = await options.store.createInvite({
+      projectId: body.projectId,
+      userId: caller.userId,
+      expiresInHours: body.expiresInHours
+    });
+    send(response, 201, syncInviteSchema.parse({
+      code: invite.code,
+      url: joinUrl(options.appUrl, invite.code),
+      projectId: invite.projectId,
+      repo: invite.repo,
+      expiresAt: invite.expiresAt
+    }));
     return;
   }
 
   if (method === "POST" && url.pathname === "/v1/replicas") {
-    const body = registerReplicaRequestSchema.parse(
-      await readJson(request, Math.min(options.bodyLimitBytes ?? 1_048_576, 16_384))
-    );
-    const replica = await options.store.registerReplica(identity.userId, identity.workspaceId, body.name, {
-      repoRoot: body.repoRoot, repoRemote: body.repoRemote
+    const body = registerSyncReplicaRequestSchema.parse(await readJson(request, Math.min(bodyLimit, 16_384)));
+    await options.store.requireMembership(body.projectId, caller.userId);
+    const replica = await options.store.registerReplica({
+      projectId: body.projectId, userId: caller.userId, branch: body.branch
     });
-    send(response, 201, registerReplicaResponseSchema.parse(replica));
+    send(response, 201, registerSyncReplicaResponseSchema.parse(replica));
     return;
   }
 
-  // Declaring which repository a checkout belongs to is the same class of action as
-  // registering a replica (an idempotent upsert of a checkout identity, not a content
-  // mutation), so like POST /v1/replicas it is not gated on the viewer role.
-  if (method === "POST" && url.pathname === "/v1/projects") {
-    const body = upsertProjectRequestSchema.parse(await readJson(request, Math.min(options.bodyLimitBytes ?? 1_048_576, 16_384)));
-    const project = await options.store.upsertProject(identity.workspaceId, body);
-    if (!project) throw new HttpError(400, "repoRemote or repoRoot must yield a usable project key");
-    send(response, 200, projectSchema.parse(project));
-    return;
-  }
-
-  if (method === "GET" && url.pathname === "/v1/projects") {
-    const projects = await options.store.listProjects(identity.workspaceId);
-    send(response, 200, listProjectsResponseSchema.parse({ projects }));
-    return;
-  }
-
-  const projectMatch = method === "GET" ? url.pathname.match(/^\/v1\/projects\/([^/]+)$/) : null;
-  if (projectMatch) {
-    const projectId = decodeURIComponent(projectMatch[1]!);
-    // Ids are uuids; a malformed one would otherwise reach Postgres and surface as a 500.
-    // A project in another workspace and one that does not exist are both plain 404s.
-    const project = UUID_PATTERN.test(projectId) ? await options.store.getProject(identity.workspaceId, projectId) : null;
-    if (!project) throw new HttpError(404, "Project not found");
-    send(response, 200, projectSchema.parse(project));
-    return;
-  }
-
-  if (method === "POST" && url.pathname === "/v1/events") {
-    if (identity.role === "viewer") throw new HttpError(403, "Viewer membership is read-only");
-    const body = serviceIngestRequestSchema.parse(await readJson(request, options.bodyLimitBytes ?? 1_048_576));
-    const event = body.event;
-    // End-to-end encryption was removed with device pairing, so the sealed form the
-    // protocol still accepts on the wire has nothing here that can store it.
-    if (event.type !== "transaction.created") throw new HttpError(400, "Sealed transactions are not supported");
-    if (event.serverSequence !== undefined) throw new HttpError(400, "Clients may not assign serverSequence");
-    const transaction = event.payload;
-    const fileKeys = transaction.changes.map((change) => change.path);
-    if (new Set(fileKeys).size !== fileKeys.length) {
-      throw new HttpError(400, "An operation may change each path only once");
+  if (method === "POST" && url.pathname === "/v1/changes") {
+    const body = publishChangesRequestSchema.parse(await readJson(request, bodyLimit));
+    await options.store.requireMembership(body.projectId, caller.userId);
+    // The replica is the sender identity fan-out excludes, so it has to be one of this
+    // caller's own -- otherwise anybody could publish as somebody else's checkout and
+    // suppress the echo to it.
+    const replica = await options.store.touchReplica(body.projectId, caller.userId, body.replicaId);
+    if (replica.branch !== body.branch) throw new HttpError(409, "Replica is registered to a different branch");
+    for (const version of body.versions) {
+      // A denylisted path reaching the change log would put a secret in a durable,
+      // fan-out-to-everybody store. The daemon filters these too; this is the backstop.
+      if (redactPath(version.path)) throw new HttpError(400, "Sensitive paths cannot be synchronized");
     }
-    if (
-      event.workspaceId !== identity.workspaceId ||
-      event.actorId !== identity.actorId
-    ) throw new HttpError(403, "Event principal does not match authenticated membership");
-    await options.store.assertReplicaOwnership(identity.workspaceId, identity.memberId, event.replicaId);
-    for (const change of transaction.changes) {
-      if (redactPath(change.path)) throw new HttpError(400, "Sensitive paths cannot be synchronized");
-      if (change.kind !== "delete" && (change.afterContent === undefined || change.afterHash !== contentHash(change.afterContent))) {
-        throw new HttpError(400, "Transaction content hash is invalid");
-      }
-    }
-    const operation = await options.store.appendOperation(identity, event);
-    gateway.broadcastOperation(identity.workspaceId, toRemoteOperation(operation), event.replicaId);
-    send(response, 200, serviceIngestReceiptSchema.parse({
-      eventId: operation.eventId,
-      operationId: operation.id,
-      serverSequence: operation.serverSequence
-    }));
+    const changes = await options.store.publishChanges(body);
+    gateway.broadcastChanges(body.projectId, body.branch, changes, body.replicaId);
+    send(response, 200, publishChangesResponseSchema.parse({ cursor: changes.at(-1)!.sequence }));
     return;
   }
 
-  if (method === "GET" && url.pathname === "/v1/operations") {
-    const rawCursor = url.searchParams.get("afterSequence") ?? "0";
-    if (!/^\d+$/.test(rawCursor)) throw new HttpError(400, "afterSequence must be a non-negative integer");
-    const afterSequence = Number(rawCursor);
-    if (!Number.isSafeInteger(afterSequence)) throw new HttpError(400, "afterSequence is outside the supported range");
-    // Absent means version 1: a daemon built before the cursor-too-old status existed.
-    const rawVersion = url.searchParams.get("protocolVersion");
-    if (rawVersion !== null && !/^\d+$/.test(rawVersion)) throw new HttpError(400, "protocolVersion must be a positive integer");
-    const clientProtocolVersion = rawVersion === null ? 1 : Number(rawVersion);
-    const query = cursorQuerySchema.parse({ afterSequence });
-    const page = await options.store.listOperations(identity.workspaceId, query.afterSequence, 200);
-    if (page.status === "cursor-too-old") {
-      // Never answer this with a 200 page. Serving what survives would be indistinguishable
-      // from "caught up" and would silently drop every proposal retention deleted, which is
-      // the whole failure this status exists to prevent.
-      if (clientProtocolVersion < OPERATIONS_PROTOCOL_VERSION) {
-        throw new HttpError(410, `Operations before ${page.resyncFrom} are outside this workspace's ${page.retentionDays}-day history retention and have been deleted; upgrade the daemon to resynchronize automatically`);
-      }
-      send(response, 200, cursorTooOldResponseSchema.parse({
-        status: "cursor-too-old",
-        protocolVersion: OPERATIONS_PROTOCOL_VERSION,
-        resyncFrom: page.resyncFrom,
-        retentionDays: page.retentionDays
-      }));
-      return;
-    }
-    send(response, 200, {
-      operations: page.items.map(toRemoteOperation),
-      nextCursor: page.nextCursor
+  if (method === "GET" && url.pathname === "/v1/changes") {
+    const query = listChangesQuerySchema.parse({
+      projectId: url.searchParams.get("projectId") ?? undefined,
+      branch: url.searchParams.get("branch") ?? undefined,
+      since: integerParam(url, "since"),
+      limit: integerParam(url, "limit")
     });
+    await options.store.requireMembership(query.projectId, caller.userId);
+    const page = await options.store.listChanges(query);
+    // A too-old cursor is answered with its own shape, never with a page: a short page and
+    // "you are caught up" are the same message, so serving what survived retention would
+    // silently drop everything it deleted.
+    send(response, 200, changesResponseSchema.parse(
+      page.status === "ok"
+        ? { changes: page.changes, cursor: page.cursor }
+        : { status: "cursor-too-old", resyncFrom: page.resyncFrom, retentionDays: page.retentionDays }
+    ));
     return;
   }
 
   throw new HttpError(404, "Route not found");
+}
+
+/** The clone line the join page shows, straight from the contract's `cloneCommand`. */
+function cloneCommandFor(repo: string): string {
+  const directory = repo.split("/").at(-1) ?? repo;
+  return `git clone git@github.com:${repo}.git && cd ${directory}`;
+}
+
+function joinUrl(appUrl: string | undefined, code: string): string {
+  return new URL(`/join/${code}`, appUrl ?? DEFAULT_APP_URL).toString();
+}
+
+async function upsertCaller(options: RequestOptions, caller: Caller): Promise<void> {
+  await options.store.upsertUser({
+    id: caller.userId,
+    githubId: caller.github?.id,
+    githubLogin: caller.github?.login,
+    email: caller.email
+  });
+}
+
+function header(request: IncomingMessage, name: string): string | undefined {
+  const value = request.headers[name];
+  const single = Array.isArray(value) ? value[0] : value;
+  return single && single.length > 0 ? single : undefined;
 }
 
 function bearerToken(request: IncomingMessage): string {
@@ -386,10 +357,12 @@ function bearerToken(request: IncomingMessage): string {
   return authorization.slice(7);
 }
 
-// Verifies the bearer token only, without requiring an existing workspace membership --
-// for the self-serve routes (create workspace, redeem invite, list memberships) that a
-// brand-new Supabase user must be able to call before they belong to any workspace.
-async function verifyToken(request: IncomingMessage, options: RequestOptions): Promise<{ userId: string; email: string | undefined }> {
+/**
+ * Verifies the bearer token. Project membership is not resolved here: every route names
+ * its own project in a body or a query, and a caller who belongs to nothing yet still has
+ * to be able to create one or redeem an invite.
+ */
+async function authenticate(request: IncomingMessage, options: RequestOptions): Promise<Caller> {
   const token = bearerToken(request);
   let claims;
   try {
@@ -399,30 +372,17 @@ async function verifyToken(request: IncomingMessage, options: RequestOptions): P
   }
   // Outside the try: a 429 from the quota must not be swallowed and reported as a bad token.
   options.chargeIdentity?.(`user:${claims.userId}`);
-  return { userId: claims.userId, email: claims.email };
+  return { userId: claims.userId, email: claims.email, github: claims.github };
 }
 
-async function authenticate(request: IncomingMessage, options: RequestOptions): Promise<Membership> {
-  // Before the workspace header, so a request with no credential at all is a 401 rather
-  // than a complaint about a header it was never going to get as far as needing.
-  bearerToken(request);
-  const workspaceId = request.headers[WORKSPACE_HEADER];
-  if (typeof workspaceId !== "string" || workspaceId.length === 0) {
-    throw new HttpError(400, `${WORKSPACE_HEADER} header is required`);
-  }
-  // Charge the membership below rather than the user here: one person driving several
-  // workspaces is doing several workspaces' worth of legitimate work, and double-charging
-  // the same request to both buckets would make the per-user budget the real ceiling.
-  const { userId } = await verifyToken(request, { ...options, chargeIdentity: undefined });
-  let identity: Membership;
-  try {
-    identity = await options.store.resolveMembership(userId, workspaceId);
-  } catch (error) {
-    if (error instanceof StoreUnauthorizedError) throw new HttpError(401, error.message);
-    throw error;
-  }
-  options.chargeIdentity?.(`member:${identity.memberId}`);
-  return identity;
+/** A non-negative integer query parameter, or undefined so the schema's default applies. */
+function integerParam(url: URL, name: string): number | undefined {
+  const raw = url.searchParams.get(name);
+  if (raw === null) return undefined;
+  if (!/^\d+$/.test(raw)) throw new HttpError(400, `${name} must be a non-negative integer`);
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) throw new HttpError(400, `${name} is outside the supported range`);
+  return value;
 }
 
 async function readJson(request: IncomingMessage, maximumBytes: number): Promise<unknown> {
@@ -447,20 +407,6 @@ async function readJson(request: IncomingMessage, maximumBytes: number): Promise
   }
 }
 
-/** Exported so tests can assert on the exact bytes `GET /v1/operations` serializes. */
-export function toRemoteOperation(operation: StoredOperation): RemoteOperation {
-  return {
-    id: operation.id,
-    eventId: operation.eventId,
-    workspaceId: operation.workspaceId,
-    senderReplicaId: operation.senderReplicaId,
-    projectId: operation.projectId,
-    transaction: operation.transaction,
-    serverSequence: operation.serverSequence,
-    createdAt: operation.createdAt
-  };
-}
-
 /** The request's Origin when it is on the allowlist, otherwise undefined. */
 function corsOriginFor(request: IncomingMessage, allowedOrigins: readonly string[] | undefined): string | undefined {
   const origin = request.headers.origin;
@@ -476,8 +422,8 @@ function applyCorsHeaders(request: IncomingMessage, response: ServerResponse, al
   const origin = corsOriginFor(request, allowedOrigins);
   if (!origin) return;
   response.setHeader("access-control-allow-origin", origin);
-  response.setHeader("access-control-allow-methods", "GET, POST, PUT, DELETE, OPTIONS");
-  response.setHeader("access-control-allow-headers", `authorization, content-type, ${WORKSPACE_HEADER}`);
+  response.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
+  response.setHeader("access-control-allow-headers", `authorization, content-type, ${GITHUB_TOKEN_HEADER}`);
   response.setHeader("access-control-max-age", "600");
 }
 
@@ -566,29 +512,21 @@ function reportError(options: ServiceServerOptions, request: IncomingMessage, er
 
 function rateLimitRoute(method: string, pathname: string): string {
   if (method === "POST" && /^\/v1\/invites\/[^/]+\/redeem$/.test(pathname)) return "POST /v1/invites/:code/redeem";
-  if (method === "DELETE" && /^\/v1\/invites\/[^/]+$/.test(pathname)) return "DELETE /v1/invites/:id";
-  if (method === "GET" && /^\/v1\/projects\/[^/]+$/.test(pathname)) return "GET /v1/projects/:id";
-  if (method === "DELETE" && /^\/v1\/members\/[^/]+$/.test(pathname)) return "DELETE /v1/members/:id";
   const route = `${method} ${pathname}`;
   return new Set([
     "GET /healthz",
-    "POST /v1/replicas",
-    "POST /v1/events",
-    "GET /v1/operations",
-    "GET /v1/memberships",
-    "GET /v1/projects",
     "POST /v1/projects",
-    "POST /v1/workspaces",
     "POST /v1/invites",
-    "GET /v1/invites",
-    "GET /v1/members"
+    "POST /v1/replicas",
+    "POST /v1/changes",
+    "GET /v1/changes"
   ]).has(route) ? route : "unknown";
 }
 
 function statusFor(error: unknown): number {
   if (error instanceof HttpError) return error.status;
   if (error instanceof ZodError) return 400;
-  if (error instanceof StoreUnauthorizedError) return 401;
+  if (error instanceof StoreUnauthorizedError) return 403;
   if (error instanceof StoreConflictError) return 409;
   return 500;
 }

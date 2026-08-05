@@ -27,7 +27,7 @@ import type { WebSocketGateway } from "./ws.js";
 
 /** Broadcasts have nowhere to go without a persistent process; dropping them is safe. */
 const silentGateway: WebSocketGateway = {
-  broadcastOperation: () => {}
+  broadcastChanges: () => {}
 };
 
 export type ServerlessHandler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
@@ -75,6 +75,7 @@ function buildHandler(environment: NodeJS.ProcessEnv): { handler: ServerlessHand
     // address is the load balancer.
     trustProxy: true,
     allowedOrigins: parseAllowedOrigins(environment.CROSSCODE_ALLOWED_ORIGINS),
+    appUrl: environment.CROSSCODE_APP_URL,
     gateway: silentGateway
   });
   // main.ts refuses to start when the runtime role can update or delete immutable

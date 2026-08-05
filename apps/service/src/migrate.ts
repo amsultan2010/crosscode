@@ -1,5 +1,10 @@
 import { PgStore } from "./store.js";
 
+/**
+ * Applies the schema, then (optionally) narrows what the role the service actually runs as
+ * may do. The split matters: migrations own the tables, the runtime does not, and the
+ * change log stays append-only because the runtime role has no way to rewrite it.
+ */
 async function main(): Promise<void> {
   const databaseUrl = process.env.MIGRATION_DATABASE_URL ?? process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error("MIGRATION_DATABASE_URL or DATABASE_URL is required");
@@ -13,20 +18,12 @@ async function main(): Promise<void> {
       await store.pool.query(`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${role}`);
       await store.pool.query(`GRANT USAGE ON SCHEMA public TO ${role}`);
       await store.pool.query(`GRANT SELECT ON ALL TABLES IN SCHEMA public TO ${role}`);
-      await store.pool.query(`GRANT INSERT ON replicas, operations, operation_files, audit_events TO ${role}`);
-      await store.pool.query(`GRANT INSERT ON projects TO ${role}`);
-      // Key grants are relayed ciphertext: the runtime inserts them and reads them back,
-      // and never needs to change or remove one.
-      await store.pool.query(`GRANT INSERT ON workspace_key_grants TO ${role}`);
-      // The encryption latch is a one-way flag the ingest path sets on first sealed
-      // operation; device_public_key is written once when a replica registers its key.
-      await store.pool.query(`GRANT UPDATE (encryption_latched_at) ON workspaces TO ${role}`);
-      await store.pool.query(`GRANT UPDATE (device_public_key) ON replicas TO ${role}`);
-      // upsertProject() is an INSERT ... ON CONFLICT DO UPDATE, so the runtime role needs
-      // UPDATE on exactly the two columns that upsert path touches -- and nothing else.
-      await store.pool.query(`GRANT UPDATE (repo_root, last_activity_at) ON projects TO ${role}`);
-      await store.pool.query(`GRANT UPDATE (last_seen_at, project_id) ON replicas TO ${role}`);
-      await store.pool.query(`GRANT UPDATE (next_sequence) ON workspaces TO ${role}`);
+      await store.pool.query(`GRANT INSERT ON users, projects, project_members, invites, replicas, file_versions TO ${role}`);
+      // Exactly the columns the routes write after a row exists, and nothing else. No
+      // UPDATE at all on file_versions: retention deletes rows as the migration role.
+      await store.pool.query(`GRANT UPDATE (github_id, github_login, email) ON users TO ${role}`);
+      await store.pool.query(`GRANT UPDATE (redeemed_at, redeemed_by) ON invites TO ${role}`);
+      await store.pool.query(`GRANT UPDATE (last_seen_at) ON replicas TO ${role}`);
     }
   }
   finally { await store.close(); }

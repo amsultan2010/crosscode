@@ -34,7 +34,11 @@ export async function main(environment: NodeJS.ProcessEnv = process.env): Promis
     // trustProxy rides the same flag: it is the operator asserting there is a real
     // reverse proxy in front, which is exactly the condition under which
     // x-forwarded-for is trustworthy and the socket address is not.
-    server = createServiceServer({ store, jwks, supabaseUrl, tls, allowedOrigins, trustProxy: trustProxyTls });
+    server = createServiceServer({
+      store, jwks, supabaseUrl, tls, allowedOrigins, trustProxy: trustProxyTls,
+      // Where invite links point. Set it per deployment; the default is production.
+      appUrl: environment.CROSSCODE_APP_URL
+    });
     // A second request listener alongside the route handler: it only reads the status the
     // response ends with, so it cannot change what any route does.
     server.on("request", (request, response) => { observeRequest(reporter, request, response); });
