@@ -7,12 +7,13 @@ function request(url: string, method = "GET"): IncomingMessage {
 }
 
 function response(): ServerResponse & { statusCode: number } {
-  return {
+  const res = {
     statusCode: 0,
     setHeader() {},
     end() {},
-    writeHead(status: number) { this.statusCode = status; return this; }
-  } as unknown as ServerResponse & { statusCode: number };
+    writeHead(this: { statusCode: number }, status: number) { this.statusCode = status; return this; }
+  };
+  return res as unknown as ServerResponse & { statusCode: number };
 }
 
 describe("serverless adapter", () => {
