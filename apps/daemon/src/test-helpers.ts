@@ -1,5 +1,4 @@
 import { runDaemonProcess, type ManagedDaemon } from "./runtime.js";
-import { createKeyring, generateDeviceKeyPair, saveKeyring } from "./workspace-key.js";
 
 export type { ManagedDaemon };
 export type SpawnDaemonOptions = Parameters<typeof runDaemonProcess>[1];
@@ -19,19 +18,4 @@ export async function stopDaemon(daemon: ManagedDaemon): Promise<void> {
 
 export async function stopAllDaemons(): Promise<void> {
   await Promise.all([...daemons].map((daemon) => stopDaemon(daemon)));
-}
-
-/**
- * Puts the same workspace key (and a distinct device identity) into several checkouts,
- * standing in for the pairing/approval dance the real flow uses to distribute it.
- *
- * Integration tests that are about something else -- live fan-out, reconnects, handoffs --
- * still run fully encrypted this way, which is the point: it keeps them exercising the
- * default rather than tempting anyone to switch encryption off to make them simple.
- */
-export async function shareTestKeyring(workspaceId: string, directories: string[]): Promise<void> {
-  const shared = createKeyring(workspaceId);
-  for (const directory of directories) {
-    await saveKeyring(directory, { ...shared, device: generateDeviceKeyPair() });
-  }
 }

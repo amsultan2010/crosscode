@@ -1,9 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
-import type { CaptureKind, Claim, Handoff, Intent, Task, Validation } from "@crosscode/protocol";
+import type { CaptureKind } from "@crosscode/protocol";
 import { daemonConnectionSchema, type DaemonConnection } from "@crosscode/protocol";
-import type { PendingSemanticReview, SemanticReview } from "@crosscode/core";
-import type { CheckpointRecord, ConflictArtifactRecord } from "./state.js";
-import type { SemanticReviewRecord, StoredOperation } from "./types.js";
+import type { LocalOperation } from "./types.js";
 import { daemonConnectionPath } from "./runtime.js";
 
 type Status = {
@@ -15,9 +13,6 @@ type Status = {
   dirty: boolean;
   workspaceId: string;
   replicaId: string;
-  tasks: number;
-  claims: number;
-  proposals: number;
   materializationPaused: boolean;
   eventSequence: number;
   remoteCursor: number;
@@ -71,36 +66,8 @@ export class DaemonClient {
 
   status(): Promise<Status> { return this.request("GET", "/v1/status"); }
   workspace(): Promise<{ root: string; workspaceId: string; replicaId: string; actorId: string }> { return this.request("GET", "/v1/workspace"); }
-  workspaceAutonomy(): Promise<{ tier: 0 | 1 | 2 }> { return this.request("GET", "/v1/workspace/autonomy"); }
-  setWorkspaceAutonomy(tier: 0 | 1 | 2): Promise<{ tier: 0 | 1 | 2 }> { return this.request("PUT", "/v1/workspace/autonomy", { tier }); }
-  tasks(): Promise<Task[]> { return this.request("GET", "/v1/tasks"); }
-  createTask(input: { title: string; intent?: string; paths?: string[]; status?: Task["status"] }): Promise<Task> { return this.request("POST", "/v1/tasks", input); }
-  createClaim(input: { taskId: string; kind: Claim["kind"]; target: string; mode: Claim["mode"]; expiresAt?: string }): Promise<Claim> { return this.request("POST", "/v1/claims", input); }
-  claims(): Promise<Claim[]> { return this.request("GET", "/v1/claims"); }
-  releaseClaim(id: string): Promise<Claim> { return this.request("POST", `/v1/claims/${encodeURIComponent(id)}/release`, {}); }
-  updateTask(id: string, input: { title: string; intent?: string; paths?: string[]; status?: Task["status"] }): Promise<Task> { return this.request("POST", `/v1/tasks/${encodeURIComponent(id)}`, input); }
-  operations(): Promise<StoredOperation[]> { return this.request("GET", "/v1/operations"); }
-  analyze(id: string): Promise<{ operation: StoredOperation; analysis: string }> { return this.request("GET", `/v1/operations/${encodeURIComponent(id)}/analysis`); }
-  diff(id: string): Promise<Array<{ path: string; base?: string; local?: string; proposed?: string; classification: string; risk: string; requiresApproval: boolean; dependents?: string[]; mergedCandidate?: string }>> { return this.request("GET", `/v1/operations/${encodeURIComponent(id)}/diff`); }
-  artifacts(id: string): Promise<ConflictArtifactRecord[]> { return this.request("GET", `/v1/operations/${encodeURIComponent(id)}/artifacts`); }
-  accept(id: string, options?: { reviewApprovals?: Record<string, string> }): Promise<StoredOperation> { return this.request("POST", `/v1/operations/${encodeURIComponent(id)}/accept`, options ?? {}); }
-  reject(id: string): Promise<StoredOperation> { return this.request("POST", `/v1/operations/${encodeURIComponent(id)}/reject`, {}); }
-  requestSemanticReview(operationId: string, path: string, providerId: string): Promise<SemanticReviewRecord> { return this.request("POST", `/v1/operations/${encodeURIComponent(operationId)}/reviews`, { path, providerId }); }
-  semanticReviews(operationId: string): Promise<SemanticReviewRecord[]> { return this.request("GET", `/v1/operations/${encodeURIComponent(operationId)}/reviews`); }
-  acceptSemanticReview(reviewId: string): Promise<SemanticReviewRecord> { return this.request("POST", `/v1/reviews/${encodeURIComponent(reviewId)}/accept`, {}); }
-  rejectSemanticReview(reviewId: string): Promise<SemanticReviewRecord> { return this.request("POST", `/v1/reviews/${encodeURIComponent(reviewId)}/reject`, {}); }
-  pendingSemanticReviews(): Promise<PendingSemanticReview[]> { return this.request("GET", "/v1/semantic-reviews/pending"); }
-  submitSemanticReview(requestId: string, review: SemanticReview): Promise<{ ok: true }> { return this.request("POST", `/v1/semantic-reviews/${encodeURIComponent(requestId)}/submit`, review); }
-  checkpoints(): Promise<CheckpointRecord[]> { return this.request("GET", "/v1/checkpoints"); }
-  checkpoint(message?: string): Promise<{ ref: string; commit: string; tree: string }> { return this.request("POST", "/v1/checkpoints", message ? { message } : {}); }
-  inspectCheckpoint(ref: string): Promise<{ ref: string; commit: string; tree: string; files: string[] }> { return this.request("POST", "/v1/checkpoints/inspect", { ref }); }
-  restoreCheckpoint(ref: string, path: string): Promise<{ restored: string }> { return this.request("POST", "/v1/checkpoints/restore", { ref, path }); }
-  capture(intent: string, kind?: CaptureKind): Promise<StoredOperation> { return this.request("POST", "/v1/transactions", kind ? { intent, kind } : { intent }); }
-  validate(profile: string): Promise<Validation[]> { return this.request("POST", "/v1/validate", { profile }); }
-  publish(input: { branch: string; profile: string; message?: string; dryRun?: boolean }): Promise<{ branch: string; tree: string; changedPaths: Array<{ path: string; kind: "add" | "modify" | "delete" }> } | { branch: string; commit: string; tree: string; previous?: string }> { return this.request("POST", "/v1/publish", input); }
-  requestHandoff(input: { operationId: string; note?: string }): Promise<Handoff> { return this.request("POST", "/v1/handoffs", input); }
-  respondHandoff(id: string, decision: "accepted" | "declined"): Promise<Handoff> { return this.request("POST", `/v1/handoffs/${encodeURIComponent(id)}/respond`, { decision }); }
-  publishIntent(input: { text: string; taskId?: string }): Promise<Intent> { return this.request("POST", "/v1/intents", input); }
+  operations(): Promise<LocalOperation[]> { return this.request("GET", "/v1/operations"); }
+  capture(intent: string, kind?: CaptureKind): Promise<LocalOperation> { return this.request("POST", "/v1/transactions", kind ? { intent, kind } : { intent }); }
 
   private async request<T>(method: "GET" | "POST" | "PUT", path: string, body?: unknown): Promise<T> {
     let response: Response;

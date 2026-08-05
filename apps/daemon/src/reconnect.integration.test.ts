@@ -19,7 +19,7 @@ function repository(): Promise<string> {
 }
 
 describe.skipIf(!databaseUrl)("PostgreSQL daemon reconnect", () => {
-  it("uploads an offline event once and downloads it as an unapplied proposal", async () => {
+  it("uploads an offline event once and downloads it without writing it to the working tree", async () => {
     const store = new PgStore(databaseUrl!);
     await store.migrate();
     const sender_ = await provisionTestPrincipal(store, { workspaceName: "reconnect-test", actorId: "sender" });
@@ -54,7 +54,7 @@ describe.skipIf(!databaseUrl)("PostgreSQL daemon reconnect", () => {
 
       const page = await store.listOperations(sender_.principal.workspaceId, 0, 100);
       expect(page.status === "ok" && page.items).toHaveLength(1);
-      expect([...receiver.operations.values()].filter((operation) => operation.status === "proposed")).toHaveLength(1);
+      expect([...receiver.operations.values()]).toHaveLength(1);
       expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe("one\n");
     } finally {
       await new Promise<void>((resolveClose) => server.close(() => resolveClose()));

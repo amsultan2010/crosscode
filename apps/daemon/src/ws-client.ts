@@ -5,23 +5,13 @@ import {
   wsSubscribeRequestSchema,
   type DaemonConfig,
   type PresenceUpdate,
-  type RemoteClaim,
-  type RemoteHandoff,
-  type RemoteIntent,
-  type RemoteOperation,
-  type RemoteTask,
-  type RemoteValidation
+  type RemoteOperation
 } from "@crosscode/protocol";
 export type AccessTokenProvider = { getValidAccessToken(): Promise<string> };
 
 export type LiveSyncCallbacks = {
   onOperation: (operation: RemoteOperation) => void;
   onPresence?: (presence: PresenceUpdate) => void;
-  onTask?: (task: RemoteTask) => void;
-  onClaim?: (claim: RemoteClaim) => void;
-  onHandoff?: (handoff: RemoteHandoff) => void;
-  onIntent?: (intent: RemoteIntent) => void;
-  onValidation?: (validation: RemoteValidation) => void;
 };
 
 export type LiveSyncOptions = {
@@ -97,11 +87,6 @@ export class LiveSyncClient {
       if (!message.success) return;
       if (message.data.type === "operation") this.callbacks.onOperation(message.data.operation);
       else if (message.data.type === "presence") this.callbacks.onPresence?.(message.data.presence);
-      else if (message.data.type === "task") this.callbacks.onTask?.(message.data.task);
-      else if (message.data.type === "claim") this.callbacks.onClaim?.(message.data.claim);
-      else if (message.data.type === "handoff") this.callbacks.onHandoff?.(message.data.handoff);
-      else if (message.data.type === "intent") this.callbacks.onIntent?.(message.data.intent);
-      else this.callbacks.onValidation?.(message.data.validation);
     });
     socket.on("close", () => {
       if (this.socket === socket) this.socket = undefined;

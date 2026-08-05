@@ -128,7 +128,7 @@ async function ensureSignedIn(
       );
     }
     report(`Signing in to ${options.serviceUrl} as ${email}…`);
-    const { config: updated, user } = await login(directory, { email, password, serviceUrl: options.serviceUrl });
+    const { config: updated, user } = await login(directory, { email, password });
     return adoptAccountIdentity(directory, updated, user.email);
   }
 
@@ -145,7 +145,6 @@ async function ensureSignedIn(
   report("Opening your browser to sign in or create an account…");
   const { config: updated, user } = await browserLogin(directory, {
     webUrl: resolveWebUrl(options.web),
-    serviceUrl: options.serviceUrl,
     openBrowser: options.browser !== false,
     onUrl: (url) => report(options.browser === false ? `Open this URL to sign in:\n${url}` : `Opening ${url}`)
   });

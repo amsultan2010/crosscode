@@ -35,28 +35,6 @@ describe("daemon live sync client", () => {
     expect(operations).toEqual(["op-1"]);
   });
 
-  it("triggers the handoff and intent callbacks promptly when a live fan-out frame arrives", async () => {
-    const service = await startFakeService((socket) => {
-      socket.once("message", () => {
-        socket.send(JSON.stringify({ type: "subscribed", cursor: 0 }));
-        socket.send(JSON.stringify({ type: "handoff", handoff: remoteHandoff("handoff-1") }));
-        socket.send(JSON.stringify({ type: "intent", intent: remoteIntent("intent-1") }));
-      });
-    });
-    const handoffs: string[] = [];
-    const intents: string[] = [];
-    const client = new LiveSyncClient(identity, { url: service.url }, tokenProvider, {
-      onOperation: () => {},
-      onHandoff: (handoff) => handoffs.push(handoff.handoff.id),
-      onIntent: (intent) => intents.push(intent.intent.id)
-    });
-    clients.push(client);
-    client.start();
-    await waitFor(() => handoffs.includes("handoff-1") && intents.includes("intent-1"));
-    expect(handoffs).toEqual(["handoff-1"]);
-    expect(intents).toEqual(["intent-1"]);
-  });
-
   it("ignores malformed and unauthenticated frames without crashing, and keeps working afterward", async () => {
     let attempt = 0;
     const service = await startFakeService((socket) => {
@@ -168,25 +146,6 @@ async function waitFor(condition: () => boolean, timeoutMs = 2_000): Promise<voi
   }
 }
 
-function remoteHandoff(id: string) {
-  return {
-    eventId: id,
-    workspaceId: identity.workspaceId,
-    senderReplicaId: "replica-b",
-    handoff: { id, operationId: "operation-1", requestedBy: "actor-b", status: "pending", createdAt: "2026-01-01T00:00:00.000Z" },
-    updatedAt: "2026-01-01T00:00:00.000Z"
-  };
-}
-
-function remoteIntent(id: string) {
-  return {
-    eventId: id,
-    workspaceId: identity.workspaceId,
-    senderReplicaId: "replica-b",
-    intent: { id, actorId: "actor-b", text: "Rename foo to bar", createdAt: "2026-01-01T00:00:00.000Z" },
-    updatedAt: "2026-01-01T00:00:00.000Z"
-  };
-}
 
 function remoteOperation(id: string, projectId: string | null = null) {
   return {

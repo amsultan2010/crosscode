@@ -3,13 +3,6 @@ import { promisify } from "node:util";
 
 const exec = promisify(execFile);
 const SERVICE_NAME = "crosscode-supabase-session";
-/**
- * The workspace encryption keyring lives under its own service name rather than sharing
- * the session's: the two have different lifetimes (a session is replaced on every login,
- * a keyring must survive one) and `crosscode logout` deletes the session entry, which
- * would otherwise take the key -- and with it every proposal in the workspace's history.
- */
-export const KEYRING_SERVICE_NAME = "crosscode-workspace-keyring";
 
 /**
  * Shells out to the OS-native secret store rather than depending on a native npm module
