@@ -3,8 +3,8 @@
 //
 // Selection is mechanical on purpose. A test file is PostgreSQL-gated exactly when it reads
 // CROSSCODE_TEST_DATABASE_URL, because that read is what makes it skip itself. Discovering the
-// suites from that gate — rather than from a filename convention or a literal list in
-// package.json — means a new gated suite is picked up with nothing to remember to edit. The
+// suites from that gate, rather than from a filename convention or a literal list in
+// package.json, means a new gated suite is picked up with nothing to remember to edit. The
 // literal list is what left prune.test.ts and live-handoff-intent.integration.test.ts running
 // in no job at all. A `*.integration.test.ts` convention would not work either: publish,
 // semantic-review, and uninstall carry that name and need no database.

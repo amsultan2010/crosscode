@@ -587,7 +587,7 @@ describe("service HTTP boundary", () => {
         cancelAtPeriodEnd: false,
         currentPeriodEnd: null,
         billingOwnerActorId: "actor-1",
-        // $7.50/month billed annually is $75.00 — ten months for twelve.
+        // $7.50/month billed annually is $75.00, ten months for twelve.
         priceCents: 7_500
       }
     });

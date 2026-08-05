@@ -3,7 +3,7 @@
 // markdown sources. Run automatically before dev/build (see package.json) so the
 // site can never drift from the markdown source of truth. Do not hand-edit the
 // generated docs/*.html files listed in GENERATED_HTML below, or public/docs/*.md,
-// or public/llms.txt / public/llms-full.txt — edit the root docs/*.md instead.
+// or public/llms.txt / public/llms-full.txt. Edit the root docs/*.md instead.
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -360,7 +360,7 @@ function generateLlmsFullTxt() {
   ];
 
   const parts = [
-    "# Crosscode — full documentation bundle",
+    "# Crosscode: full documentation bundle",
     "",
     "Concatenation of every docs/*.md source in this repository, for LLMs/agents",
     "that want the complete reference in a single fetch. See /llms.txt for a",

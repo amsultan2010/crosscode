@@ -157,7 +157,7 @@ export type BillingOptions = {
 
 const JSON_TYPE = "application/json";
 
-// Supabase-issued access tokens only carry the auth.users id (sub) — they no longer
+// Supabase-issued access tokens only carry the auth.users id (sub). They no longer
 // embed a workspaceId/replicaId the way Crosscode-issued tokens did. Every authenticated
 // request must therefore say which workspace it targets via this header, since
 // authenticate() runs before (and, for GET routes, without) a request body to read a
