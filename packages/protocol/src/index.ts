@@ -336,3 +336,5 @@ export const wsErrorMessageSchema = z.object({
   message: z.string().min(1)
 }).strict();
 export type WsErrorMessage = z.infer<typeof wsErrorMessageSchema>;
+
+export * from "./sync.js";
