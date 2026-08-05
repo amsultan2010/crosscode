@@ -8,8 +8,7 @@
   ],
   "functions": {
     "api/[...path].ts": {
-      "maxDuration": 30,
-      "runtime": "nodejs24.x"
+      "maxDuration": 30
     }
   }
 }
