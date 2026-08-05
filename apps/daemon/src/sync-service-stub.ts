@@ -4,10 +4,13 @@ import { WebSocketServer, type WebSocket } from "ws";
 import {
   changeSchema,
   listChangesQuerySchema,
+  presenceSchema,
   publishChangesRequestSchema,
   registerSyncReplicaRequestSchema,
+  wsPresenceSchema,
   wsSubscribeSchema,
-  type Change
+  type Change,
+  type Presence
 } from "@crosscode/protocol";
 
 /**
@@ -20,7 +23,7 @@ import {
  * everything else that speaks it.
  */
 
-type Subscriber = { socket: WebSocket; projectId: string; branch: string; replicaId: string };
+type Subscriber = { socket: WebSocket; projectId: string; branch: string; replicaId: string; presence: Presence };
 
 export type SyncServiceStub = {
   url: string;
@@ -97,14 +100,42 @@ export async function startSyncServiceStub(): Promise<SyncServiceStub> {
     }
   });
 
+  // Presence, like the real gateway: each connection's latest self-report is kept and the
+  // whole room is told who else is in it. It is how a peer's HEAD travels, so a daemon test
+  // that skipped it would not be testing the path the service actually provides.
+  const publishPresence = (room: Subscriber) => {
+    for (const subscriber of subscribers) {
+      if (subscriber.projectId !== room.projectId || subscriber.branch !== room.branch) continue;
+      const peers = [...subscribers]
+        .filter((peer) => peer.projectId === room.projectId && peer.branch === room.branch && peer.replicaId !== subscriber.replicaId)
+        .map((peer) => peer.presence);
+      subscriber.socket.send(JSON.stringify({ type: "presence", peers }));
+    }
+  };
+
   const sockets = new WebSocketServer({ server, path: "/v1/stream" });
   sockets.on("connection", (socket) => {
+    let subscriber: Subscriber | undefined;
     socket.on("message", (data) => {
-      const parsed = wsSubscribeSchema.safeParse(JSON.parse(data.toString()));
-      if (!parsed.success) return;
-      const subscriber: Subscriber = { socket, ...parsed.data };
-      subscribers.add(subscriber);
-      socket.once("close", () => subscribers.delete(subscriber));
+      const message: unknown = JSON.parse(data.toString());
+      if (!subscriber) {
+        const parsed = wsSubscribeSchema.safeParse(message);
+        if (!parsed.success) return;
+        const { projectId, branch, replicaId } = parsed.data;
+        subscriber = { socket, projectId, branch, replicaId, presence: presenceSchema.parse({ replicaId, actor: replicaId, branch, paths: [] }) };
+        subscribers.add(subscriber);
+        socket.once("close", () => {
+          subscribers.delete(subscriber!);
+          publishPresence(subscriber!);
+        });
+        publishPresence(subscriber);
+        return;
+      }
+      const presence = wsPresenceSchema.safeParse(message);
+      const own = presence.success ? presence.data.peers.find((peer) => peer.replicaId === subscriber!.replicaId) : undefined;
+      if (!own) return;
+      subscriber.presence = own;
+      publishPresence(subscriber);
     });
   });
 

@@ -183,7 +183,14 @@ export const presenceSchema = z.object({
   actor: z.string().min(1),
   branch: z.string().min(1),
   /** Paths touched recently, so an agent can answer "who is working on what". */
-  paths: z.array(z.string().min(1)).max(50)
+  paths: z.array(z.string().min(1)).max(50),
+  /**
+   * The commit this replica's branch is on. Crosscode never syncs commits, but a peer that
+   * has committed is a peer whose teammates now need to pull, and this is the only thing on
+   * the wire that says so. Optional: a replica that has not announced one is unknown, not
+   * up to date.
+   */
+  head: z.string().min(1).optional()
 }).strict();
 export type Presence = z.infer<typeof presenceSchema>;
 
@@ -227,7 +234,14 @@ export const syncStatusSchema = z.object({
   paused: z.boolean(),
   cursor: z.number().int().nonnegative(),
   pendingConflicts: z.number().int().nonnegative(),
-  peers: z.array(presenceSchema)
+  peers: z.array(presenceSchema),
+  /** The commit this checkout is on, so an agent can see it move. Absent before the first commit. */
+  head: z.string().min(1).nullable().optional(),
+  /**
+   * Something the agent should act on that is not a conflict -- today, only "a teammate has
+   * committed, this checkout needs a pull". Absent when there is nothing to say.
+   */
+  notice: z.string().min(1).optional()
 }).strict();
 export type SyncStatus = z.infer<typeof syncStatusSchema>;
 

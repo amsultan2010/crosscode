@@ -77,9 +77,9 @@ export class SyncServiceClient {
     return changesResponseSchema.parse(await this.request("GET", `/v1/changes?${query}`));
   }
 
-  async presence(paths: string[], actor: string): Promise<void> {
+  async presence(paths: string[], actor: string, head?: string): Promise<void> {
     if (!this.connected) return;
-    const message = { type: "presence" as const, peers: [presenceSchema.parse({ replicaId: this.requireReplicaId(), actor, branch: this.branch, paths: paths.slice(0, 50) })] };
+    const message = { type: "presence" as const, peers: [presenceSchema.parse({ replicaId: this.requireReplicaId(), actor, branch: this.branch, paths: paths.slice(0, 50), ...(head ? { head } : {}) })] };
     this.socket!.send(JSON.stringify(message));
   }
 

@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import type { SyncStatus } from "@crosscode/protocol";
+// The agent surface, imported as the agent's MCP client reaches it: the real tool
+// dispatcher over the real loopback API, not a stand-in for either.
+import { connectToDaemon } from "../../mcp-server/src/daemon-api.js";
+import { callSyncTool } from "../../mcp-server/src/index.js";
 import { DaemonClient } from "./client.js";
 import { writeSyncConfig } from "./sync-config.js";
 import { SyncDaemon, type SyncDaemonOptions } from "./sync-daemon.js";
@@ -74,6 +79,16 @@ async function type(root: string, path: string, content: string): Promise<void> 
 }
 
 const read = (root: string, path: string) => readFile(join(root, path), "utf8").catch(() => null);
+
+const git = async (root: string, ...args: string[]) => (await exec("git", ["-C", root, ...args])).stdout.trim();
+const head = (root: string) => git(root, "rev-parse", "HEAD");
+
+/** A real commit, the way the user makes one: git only, nothing through the daemon. */
+async function commit(root: string, paths: string[], message: string): Promise<string> {
+  await git(root, "add", "--", ...paths);
+  await git(root, "commit", "-qm", message);
+  return head(root);
+}
 
 // Convergence is a real distributed handshake over real sockets and real git, so the only
 // honest deadline is "longer than a loaded machine takes". 20s was under that on a 4-vCPU
@@ -240,6 +255,124 @@ describe("the daemon around the engine", () => {
     await rm(join(roots[0]!, ".git", "MERGE_HEAD"));
     await waitFor("alice to resume and resync", () => allEqual(roots, "a.txt", "mid-merge\n"));
     expect(alice.status().paused).toBe(false);
+  }, 60_000);
+
+  it("notices a plain commit on the same branch without republishing anything", async () => {
+    const service = await startSyncServiceStub();
+    services.push(service);
+    const origin = await seedOrigin({ "a.txt": "a\n", "b.txt": "b\n" });
+    const roots = await Promise.all(["alice", "bob"].map((name) => checkout(origin, name, service)));
+    const [alice, bob] = [await start(roots[0]!), await start(roots[1]!)];
+    await waitFor("both connected", async () => alice.status().connected && bob.status().connected);
+
+    // Two uncommitted edits, both agreed with bob.
+    await type(roots[0]!, "a.txt", "alice edits a\n");
+    await type(roots[0]!, "b.txt", "alice edits b\n");
+    await waitFor("a.txt at bob", () => allEqual(roots, "a.txt", "alice edits a\n"));
+    await waitFor("b.txt at bob", () => allEqual(roots, "b.txt", "alice edits b\n"));
+    const published = service.changes.length;
+
+    // Only a.txt is committed. Neither the branch check nor the operation check fires.
+    const committed = await commit(roots[0]!, ["a.txt"], "commit a");
+    await waitFor("alice to notice the commit", async () => alice.status().head === committed);
+
+    // Several poll and debounce cycles later, nothing has gone out: a.txt matches HEAD, and
+    // b.txt is still agreed at the bytes bob holds rather than reset back to the seed.
+    await new Promise((next) => setTimeout(next, 600));
+    // ...and a full sweep, the widest thing that ever publishes, still finds nothing to say.
+    // This is where resetToHead() would broadcast b.txt again with a base bob never agreed to.
+    await alice.setPaused(true);
+    await alice.setPaused(false);
+    await alice.drain();
+    expect(service.changes.length).toBe(published);
+    expect(alice.engine.shadowHash("a.txt")).toBe(await git(roots[0]!, "rev-parse", "HEAD:a.txt"));
+    expect(alice.engine.shadowHash("b.txt")).toBe(await git(roots[0]!, "hash-object", "b.txt"));
+    expect(alice.conflicts()).toHaveLength(0);
+    expect(await read(roots[1]!, "b.txt")).toBe("alice edits b\n");
+  }, 60_000);
+
+  it("tells the teammate's agent to pull when a peer commits, and leaves their tree alone", async () => {
+    const service = await startSyncServiceStub();
+    services.push(service);
+    const origin = await seedOrigin({ "a.txt": "a\n", "notes.txt": "notes\n" });
+    const roots = await Promise.all(["alice", "bob"].map((name) => checkout(origin, name, service)));
+    const [alice, bob] = [await start(roots[0]!), await start(roots[1]!)];
+    await waitFor("both connected", async () => alice.status().connected && bob.status().connected);
+
+    // Alice and bob end up holding the same uncommitted edit, and bob has work of his own.
+    await type(roots[0]!, "a.txt", "shared, and uncommitted\n");
+    await waitFor("a.txt at bob", () => allEqual(roots, "a.txt", "shared, and uncommitted\n"));
+    await type(roots[1]!, "notes.txt", "bob's own uncommitted work\n");
+    await waitFor("notes.txt at alice", () => allEqual(roots, "notes.txt", "bob's own uncommitted work\n"));
+    const bobHead = await head(roots[1]!);
+
+    await commit(roots[0]!, ["a.txt"], "alice commits the shared edit");
+
+    const notice = await waitFor("bob's pull notice", async () => bob.status().notice);
+    expect(notice).toContain("git pull");
+    expect(notice).toContain("main");
+    // Nothing was done to bob's checkout to make that pull succeed: same HEAD, same bytes,
+    // and a.txt is still the modified-but-uncommitted file it was.
+    expect(await head(roots[1]!)).toBe(bobHead);
+    expect(await read(roots[1]!, "a.txt")).toBe("shared, and uncommitted\n");
+    expect(await read(roots[1]!, "notes.txt")).toBe("bob's own uncommitted work\n");
+    expect(await git(roots[1]!, "status", "--porcelain")).toContain("a.txt");
+    expect(bob.conflicts()).toHaveLength(0);
+    // Alice is ahead, not behind: bob's HEAD is an ancestor of hers, so she is told nothing.
+    expect(alice.status().notice).toBeUndefined();
+  }, 60_000);
+
+  it("clears the notice once the teammate pulls, without republishing what the pull brought in", async () => {
+    const service = await startSyncServiceStub();
+    services.push(service);
+    const origin = await seedOrigin({ "a.txt": "a\n" });
+    const roots = await Promise.all(["alice", "bob"].map((name) => checkout(origin, name, service)));
+    const [alice, bob] = [await start(roots[0]!), await start(roots[1]!)];
+    await waitFor("both connected", async () => alice.status().connected && bob.status().connected);
+    await type(roots[0]!, "a.txt", "shared, and uncommitted\n");
+    await waitFor("a.txt at bob", () => allEqual(roots, "a.txt", "shared, and uncommitted\n"));
+
+    await commit(roots[0]!, ["a.txt"], "alice commits the shared edit");
+    await waitFor("bob's pull notice", async () => bob.status().notice);
+    const published = service.changes.length;
+
+    // The remedy the notice describes, run by hand the way the agent would run it: the
+    // local change is byte-identical to what is landing, so it is dropped and then pulled.
+    await git(roots[1]!, "checkout", "--", "a.txt");
+    await git(roots[1]!, "pull", "-q", "--no-rebase", roots[0]!, "main");
+
+    await waitFor("bob's notice to clear", async () => (bob.status().notice === undefined ? true : undefined));
+    expect(await head(roots[1]!)).toBe(await head(roots[0]!));
+    expect(await read(roots[1]!, "a.txt")).toBe("shared, and uncommitted\n");
+    // The pull is git's business. Nothing about it goes on the wire, in either direction.
+    await new Promise((next) => setTimeout(next, 400));
+    await bob.drain();
+    expect(service.changes.length).toBe(published);
+    expect(bob.conflicts()).toHaveLength(0);
+    expect(bob.engine.shadowHash("a.txt")).toBe(await git(roots[1]!, "rev-parse", "HEAD:a.txt"));
+  }, 60_000);
+
+  it("hands that notice to the agent through the MCP status tool", async () => {
+    const service = await startSyncServiceStub();
+    services.push(service);
+    const origin = await seedOrigin({ "a.txt": "a\n" });
+    const roots = await Promise.all(["alice", "bob"].map((name) => checkout(origin, name, service)));
+    const [alice, bob] = [await start(roots[0]!), await start(roots[1]!)];
+    await waitFor("both connected", async () => alice.status().connected && bob.status().connected);
+    await type(roots[0]!, "a.txt", "shared, and uncommitted\n");
+    await waitFor("a.txt at bob", () => allEqual(roots, "a.txt", "shared, and uncommitted\n"));
+
+    await commit(roots[0]!, ["a.txt"], "alice commits");
+    await waitFor("bob's pull notice", async () => bob.status().notice);
+
+    // The agent's path: the MCP server's own dispatcher, over the daemon's loopback API.
+    delete process.env.CROSSCODE_DAEMON_URL;
+    const result = await callSyncTool(await connectToDaemon(roots[1]!), "status", {});
+    const status = result.status as SyncStatus;
+
+    expect(status.head).toBe(await head(roots[1]!));
+    expect(status.notice).toContain("git pull");
+    expect(result.conflicts).toEqual([]);
   }, 60_000);
 
   it("refuses a second daemon for the same worktree", async () => {

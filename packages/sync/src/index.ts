@@ -16,7 +16,9 @@ export { isDenied, isSafeRelativePath } from "./paths.js";
 export {
   currentBranch,
   hashBlob,
+  headCommit,
   inProgressOperation,
+  isAncestor,
   readBlob,
   repositoryRoot,
   trackedPaths,

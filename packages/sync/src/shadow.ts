@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EMPTY_TREE, git, gitText, gitTextOrNull } from "./git.js";
+import { EMPTY_TREE, git, gitRaw, gitText, gitTextOrNull } from "./git.js";
 
 /**
  * `refs/crosscode/shadow` -- a commit whose tree is the last state this checkout and its
@@ -31,6 +31,27 @@ export const BACKUP_REF = "refs/crosscode/backup";
 
 export type TreeEntry = { mode: string; hash: string };
 
+/**
+ * Every blob in a tree, by path. A treeish this repository cannot resolve -- HEAD before
+ * the first commit -- reads as empty rather than throwing, because "no commit yet" and
+ * "commit with no files" mean the same thing to everything that calls this.
+ */
+async function readTree(root: string, treeish: string): Promise<Map<string, TreeEntry>> {
+  const entries = new Map<string, TreeEntry>();
+  const result = await gitRaw(root, ["ls-tree", "-r", "-z", treeish]);
+  if (result.status !== 0) return entries;
+  for (const record of result.stdout.toString("utf8").split("\0")) {
+    if (!record) continue;
+    // "<mode> <type> <hash>\t<path>" -- the tab is what makes a path with spaces safe.
+    const tab = record.indexOf("\t");
+    if (tab < 0) continue;
+    const [mode, , hash] = record.slice(0, tab).split(" ");
+    if (!mode || !hash) continue;
+    entries.set(record.slice(tab + 1), { mode, hash });
+  }
+  return entries;
+}
+
 export class ShadowTree {
   private readonly entries = new Map<string, TreeEntry>();
   /** Changes not yet written to the ref. null means "removed". */
@@ -54,16 +75,7 @@ export class ShadowTree {
 
   private async load(): Promise<void> {
     this.entries.clear();
-    const listing = (await git(this.root, ["ls-tree", "-r", "-z", this.ref])).toString("utf8");
-    for (const record of listing.split("\0")) {
-      if (!record) continue;
-      // "<mode> <type> <hash>\t<path>" -- the tab is what makes a path with spaces safe.
-      const tab = record.indexOf("\t");
-      if (tab < 0) continue;
-      const [mode, , hash] = record.slice(0, tab).split(" ");
-      if (!mode || !hash) continue;
-      this.entries.set(record.slice(tab + 1), { mode, hash });
-    }
+    for (const [path, entry] of await readTree(this.root, this.ref)) this.entries.set(path, entry);
   }
 
   /** The blob hash we last agreed on for `path`, or null if the shadow has no such path. */
@@ -104,6 +116,37 @@ export class ShadowTree {
     const commit = await gitText(this.root, ["commit-tree", tree, ...(parent ? ["-p", parent] : []), "-m", "crosscode shadow reset"]);
     await git(this.root, ["update-ref", this.ref, commit]);
     await this.load();
+  }
+
+  /**
+   * Moves the agreed state from one commit to another *without* discarding what the peers
+   * agreed to. This is the answer to a commit or a pull on the branch we are already on,
+   * where -- unlike a branch switch -- the working tree was not replaced wholesale.
+   *
+   * Per path, against the commit we last saw (`from`) and the one HEAD moved to (`to`):
+   *
+   * - the shadow still agrees with `from` -> nothing uncommitted was ever synced for this
+   *   path, so it follows `to`. That is what stops a `git pull` from republishing every
+   *   file the merge rewrote: the bytes git just wrote are committed bytes, out of
+   *   Crosscode's scope, and a peer who has not pulled must not receive them.
+   * - the shadow differs from `from` -> that difference *is* an uncommitted edit this
+   *   checkout and its peers agreed on, and a commit does not un-agree it. Keep it, or the
+   *   next sweep republishes work everybody already has, advertising a baseHash the peer
+   *   never agreed to and inviting a merge against the wrong ancestor.
+   *
+   * A path committed away (present in `from`, absent from `to`, never edited locally)
+   * leaves the shadow, so nothing is published for a file git itself deleted.
+   */
+  async rebaseOnto(from: string | null, to: string): Promise<void> {
+    const before = from ? await readTree(this.root, from) : new Map<string, TreeEntry>();
+    const after = await readTree(this.root, to);
+    for (const path of new Set([...this.entries.keys(), ...after.keys()])) {
+      // undefined on both sides compares equal, which is the "neither knows this path" case.
+      if (this.entries.get(path)?.hash !== before.get(path)?.hash) continue;
+      const target = after.get(path);
+      if (target) this.set(path, target.hash, target.mode);
+      else this.remove(path);
+    }
   }
 
   get dirty(): boolean {

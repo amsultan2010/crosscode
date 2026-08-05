@@ -79,6 +79,20 @@ export async function repositoryRoot(directory: string): Promise<string> {
   return gitText(directory, ["rev-parse", "--show-toplevel"]);
 }
 
+/** The commit HEAD points at, or null in a repository with no commits yet. */
+export async function headCommit(root: string): Promise<string | null> {
+  return gitTextOrNull(root, ["rev-parse", "--verify", "-q", "HEAD^{commit}"]);
+}
+
+/**
+ * Whether `commit` is already contained in `descendant`. False when either is unknown to
+ * this repository, which is the answer that matters: a peer's commit we have never fetched
+ * is not one we contain, so we are the one that has to pull.
+ */
+export async function isAncestor(root: string, commit: string, descendant: string): Promise<boolean> {
+  return (await gitRaw(root, ["merge-base", "--is-ancestor", commit, descendant])).status === 0;
+}
+
 export async function currentBranch(root: string): Promise<string> {
   const branch = await gitTextOrNull(root, ["branch", "--show-current"]);
   return branch || "HEAD";
