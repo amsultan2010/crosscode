@@ -91,7 +91,7 @@ export function renderJoin(root, state) {
     <p>Paste these two lines into your terminal. That's the whole setup.</p>
     <pre id="join-commands"><code>${escapeHtml(block)}</code></pre>
     <button type="button" class="button" data-copy-target="join-commands">Copy</button>
-    <p class="muted">Don't have the CLI yet? <code>npm install -g @crosscode/cli</code></p>`;
+    <p class="muted">Don't have the CLI yet? <code>npm install -g crosscode-cli</code></p>`;
 }
 
 function escapeHtml(value) {

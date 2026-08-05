@@ -16,7 +16,7 @@ and vice versa. It never touches commits, branches, or remotes. Do the following
 2. From this project's Git root, run:
 
    ```
-   npm install -g @crosscode/cli && crosscode start
+   npm install -g crosscode-cli && crosscode start
    ```
 
    `start` does the whole setup: it signs me in with GitHub, attaches this checkout to a
@@ -41,7 +41,7 @@ Crosscode to me unless there is a conflict you cannot merge on your own.
 
 ## Notes for whoever is embedding this
 
-- Nothing is cloned and nothing is built. The published `@crosscode/cli` package carries the
+- Nothing is cloned and nothing is built. The published `crosscode-cli` package carries the
   CLI, the daemon, and the MCP server. Node 24 is the only requirement.
 - `crosscode start` writes the MCP entry for Claude Code, Cursor, Gemini CLI, and OpenCode.
   Codex CLI's config is TOML holding model, approval, and sandbox settings, so `start` only
