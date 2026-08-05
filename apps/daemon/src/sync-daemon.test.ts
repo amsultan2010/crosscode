@@ -75,7 +75,11 @@ async function type(root: string, path: string, content: string): Promise<void> 
 
 const read = (root: string, path: string) => readFile(join(root, path), "utf8").catch(() => null);
 
-async function waitFor<T>(description: string, probe: () => Promise<T | undefined>, timeoutMs = 20_000): Promise<T> {
+// Convergence is a real distributed handshake over real sockets and real git, so the only
+// honest deadline is "longer than a loaded machine takes". 20s was under that on a 4-vCPU
+// runner while the tests themselves were allowed 60s, so a slow-but-progressing sync failed
+// with budget to spare. Stay just inside the test timeout instead.
+async function waitFor<T>(description: string, probe: () => Promise<T | undefined>, timeoutMs = 45_000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   let last: unknown;
   while (Date.now() < deadline) {
