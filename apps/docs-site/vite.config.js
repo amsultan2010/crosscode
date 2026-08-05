@@ -28,7 +28,9 @@ export default defineConfig({
         passwordReset: resolve(root, "auth/reset.html"),
         cliLogin: resolve(root, "auth/cli.html"),
         // One page for every /join/:code; vercel.json rewrites the code into it.
-        join: resolve(root, "join.html")
+        join: resolve(root, "join.html"),
+        // Where `crosscode start` sends a terminal to be signed in.
+        device: resolve(root, "device.html")
       }
     }
   }

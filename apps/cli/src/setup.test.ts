@@ -69,7 +69,7 @@ function stubEnvironment(overrides: { service?: Partial<SyncService> } = {}) {
     createService: () => service,
     signIn: async () => {
       calls.signIn += 1;
-      return SESSION;
+      return { session: SESSION, githubToken: "gho_test" };
     },
     createDaemon: () => daemon,
     // The real installer, not a stub: whether installing twice duplicates anything is the
@@ -176,6 +176,47 @@ describe("crosscode join <code>", () => {
     expect(result.agent).toMatchObject({ mcp: { changed: true }, skill: { changed: true }, hooks: { changed: true } });
   });
 
+  /**
+   * The one place `join` is deliberately not idempotent. Redemption has to prove to GitHub
+   * that this person can read the repository, and the token that proves it is Supabase's
+   * `provider_token` -- issued to the browser at sign-in and never persisted, so a stored
+   * session cannot carry one. Reusing the stored session would mean reaching the redeem
+   * call with nothing to offer and being refused.
+   */
+  it("signs in again in a checkout that is already signed in, because redeeming needs a fresh GitHub token", async () => {
+    const root = await checkout();
+    const { environment, calls } = stubEnvironment();
+    const redeemedWith: (string | undefined)[] = [];
+    environment.createService = () => ({
+      createProject: async () => { throw new Error("not used"); },
+      createInvite: async () => { throw new Error("not used"); },
+      redeemInvite: async (_code: string, githubToken: string) => {
+        calls.redeemInvite += 1;
+        redeemedWith.push(githubToken);
+        return { projectId: "project-from-invite", repo: "acme/app", cloneCommand: "git clone git@github.com:acme/app.git && cd app" };
+      }
+    });
+
+    await setup(root, environment, { code: "CC-7F3A-9C2E" });
+    const second = await setup(root, environment, { code: "CC-7F3A-9C2E" });
+
+    expect(calls.signIn).toBe(2);
+    expect(second.signedIn).toBe("just-now");
+    expect(redeemedWith).toEqual(["gho_test", "gho_test"]);
+  });
+
+  it("refuses to redeem at all when the sign-in produced no GitHub token, rather than being denied by the service", async () => {
+    const root = await checkout();
+    const { environment, calls } = stubEnvironment();
+    environment.signIn = async () => {
+      calls.signIn += 1;
+      return { session: SESSION, githubToken: undefined };
+    };
+
+    await expect(setup(root, environment, { code: "CC-7F3A-9C2E" })).rejects.toMatchObject({ code: "SIGN_IN_FAILED" });
+    expect(calls.redeemInvite).toBe(0);
+  });
+
   // Syncing one repo's working tree into another's is the worst thing this command could do.
   it("refuses a code redeemed in the wrong checkout, and says how to fix it", async () => {
     const root = await checkout("acme/other");
@@ -194,21 +235,29 @@ describe("crosscode join <code>", () => {
  */
 describe("the service client speaks the contract", () => {
   it("redeems an invite at POST /v1/invites/:code/redeem", async () => {
-    const seen: { url: string; method?: string; authorization?: string }[] = [];
+    const seen: { url: string; method?: string; authorization?: string; github?: string }[] = [];
     const service = httpSyncService("https://service.example", "token", (async (url: URL, init: RequestInit) => {
-      seen.push({ url: String(url), method: init.method, authorization: (init.headers as Record<string, string>).authorization });
-      return Response.json({ projectId: "p1", repo: "acme/app", cloneCommand: "git clone git@github.com:acme/app.git && cd app" });
+      const headers = init.headers as Record<string, string>;
+      seen.push({ url: String(url), method: init.method, authorization: headers.authorization, github: headers["x-crosscode-github-token"] });
+      return Response.json({ ok: true, data: { projectId: "p1", repo: "acme/app", cloneCommand: "git clone git@github.com:acme/app.git && cd app" } });
     }) as unknown as typeof fetch);
 
-    await service.redeemInvite("CC-7F3A-9C2E");
+    await service.redeemInvite("CC-7F3A-9C2E", "gho_test");
 
-    expect(seen).toEqual([{ url: "https://service.example/v1/invites/CC-7F3A-9C2E/redeem", method: "POST", authorization: "Bearer token" }]);
+    // The GitHub token rides in its own header: the service asks GitHub whether this
+    // person can read the repository before it lets them into the room.
+    expect(seen).toEqual([{
+      url: "https://service.example/v1/invites/CC-7F3A-9C2E/redeem",
+      method: "POST",
+      authorization: "Bearer token",
+      github: "gho_test"
+    }]);
   });
 
   it("rejects a response that does not match the contract rather than passing it on", async () => {
-    const service = httpSyncService("https://service.example", "token", (async () => Response.json({ projectId: "p1" })) as unknown as typeof fetch);
+    const service = httpSyncService("https://service.example", "token", (async () => Response.json({ ok: true, data: { projectId: "p1" } })) as unknown as typeof fetch);
 
-    await expect(service.redeemInvite("CC-7F3A-9C2E")).rejects.toThrow();
+    await expect(service.redeemInvite("CC-7F3A-9C2E", "gho_test")).rejects.toThrow();
   });
 
   it("reports an expired sign-in as its own code", async () => {

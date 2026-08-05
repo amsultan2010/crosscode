@@ -34,17 +34,27 @@ export type SyncService = {
   createProject(request: CreateProjectRequest): Promise<SyncProject>;
   /** `POST /v1/invites`. */
   createInvite(request: CreateInviteRequest): Promise<SyncInvite>;
-  /** `POST /v1/invites/:code/redeem`. Fails when the caller has no access to the repo. */
-  redeemInvite(code: string): Promise<RedeemSyncInviteResponse>;
+  /**
+   * `POST /v1/invites/:code/redeem`. Fails when the caller has no access to the repo.
+   *
+   * `githubToken` is the invitee's own GitHub OAuth token, which the service asks GitHub
+   * about before it lets anybody into a room -- an invite code is forwardable, so the
+   * repository is the gate. It comes out of the sign-in that just happened; see
+   * SignInResult in auth.ts.
+   */
+  redeemInvite(code: string, githubToken: string): Promise<RedeemSyncInviteResponse>;
 };
 
+/** The credential header the redeem route reads. Mirrors GITHUB_TOKEN_HEADER in the service. */
+const GITHUB_TOKEN_HEADER = "x-crosscode-github-token";
+
 export function httpSyncService(baseUrl: string, accessToken: string, fetchImpl: typeof fetch = fetch): SyncService {
-  async function post<T>(path: string, body: unknown, schema: { parse: (value: unknown) => T }, describe: string): Promise<T> {
+  async function post<T>(path: string, body: unknown, schema: { parse: (value: unknown) => T }, describe: string, headers: Record<string, string> = {}): Promise<T> {
     // Absolute path onto an origin: `new URL` discards any path the base carries, which is
     // why SERVICE_URL is origin-only.
     const response = await fetchImpl(new URL(path, baseUrl), {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
+      headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}`, ...headers },
       body: JSON.stringify(body)
     }).catch((error: Error) => {
       throw new CliError("SERVICE_UNREACHABLE", `${describe} could not reach ${baseUrl}: ${error.message}`, "Check your network connection and try again.");
@@ -57,12 +67,18 @@ export function httpSyncService(baseUrl: string, accessToken: string, fetchImpl:
         response.status === 401 ? "Your sign-in has expired. Run `crosscode start` to sign in again." : undefined
       );
     }
-    return schema.parse(await response.json());
+    // The service wraps every answer in `{ ok, data }`; the contract describes what is
+    // inside that, so the envelope comes off before the schema sees it.
+    const payload: unknown = await response.json();
+    return schema.parse(typeof payload === "object" && payload !== null && "data" in payload ? (payload as { data: unknown }).data : payload);
   }
 
   return {
     createProject: (request) => post("/v1/projects", createProjectRequestSchema.parse(request), syncProjectSchema, "Creating the project"),
     createInvite: (request) => post("/v1/invites", createInviteRequestSchema.parse(request), syncInviteSchema, "Creating the invite"),
-    redeemInvite: (code) => post(`/v1/invites/${encodeURIComponent(code)}/redeem`, {}, redeemSyncInviteResponseSchema, "Redeeming the invite")
+    redeemInvite: (code, githubToken) => post(
+      `/v1/invites/${encodeURIComponent(code)}/redeem`, {}, redeemSyncInviteResponseSchema, "Redeeming the invite",
+      { [GITHUB_TOKEN_HEADER]: githubToken }
+    )
   };
 }

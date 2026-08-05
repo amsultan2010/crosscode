@@ -24,6 +24,8 @@
 export type AnalyticsEvent =
   /** A person reached the service for the first time. The closest honest measure of "installs". */
   | "user_activated"
+  /** Somebody finished a device sign-in in a browser, so a terminal is now signed in. */
+  | "device_authorized"
   | "project_created"
   | "invite_created"
   | "invite_redeemed"

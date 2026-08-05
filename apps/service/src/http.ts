@@ -17,7 +17,7 @@ import { redactPath } from "@crosscode/core";
 import { z, ZodError } from "zod";
 import type { JWTVerifyGetKey } from "jose";
 import { checkGitHubRepoAccess, verifySupabaseAccessToken, type GitHubIdentity, type RepoAccessChecker } from "./auth.js";
-import { PgStore, StoreConflictError, StoreUnauthorizedError } from "./store.js";
+import { hashDeviceCode, normalizeUserCode, PgStore, StoreConflictError, StoreUnauthorizedError } from "./store.js";
 import { attachWebSocketGateway, type WebSocketGateway } from "./ws.js";
 import type { Analytics } from "./analytics.js";
 
@@ -77,6 +77,8 @@ type Caller = {
   userId: string;
   email: string | undefined;
   github: GitHubIdentity | undefined;
+  /** When the presented access token stops being accepted. Only the bind route reads it. */
+  expiresAt: string;
 };
 
 /**
@@ -94,6 +96,45 @@ const IP_RATE_PER_MINUTE = 3_000;
 const IDENTITY_RATE_PER_MINUTE = 600;
 /** Replica registration is once-per-checkout; nobody legitimately does it in volume. */
 const IDENTITY_REPLICA_RATE_PER_MINUTE = 30;
+/**
+ * The device routes are the only unauthenticated ones, so the per-identity layer cannot
+ * reach them and the per-IP ceiling is the whole of what runs before the database is
+ * touched. A person signs in a handful of times a day and their CLI polls twelve times a
+ * minute, so this is ten daemons' worth of headroom and still two orders of magnitude
+ * below the general ceiling.
+ */
+const DEVICE_IP_RATE_PER_MINUTE = 120;
+/**
+ * And a second ceiling per device code, because an office shares one egress address and
+ * must not be throttled by a neighbour's spinning CLI. Twelve polls a minute is the
+ * advertised interval; thirty is that with room to retry.
+ *
+ * Neither counter is what makes guessing a device code hopeless -- both live in this
+ * instance's memory, and a function platform runs many instances. The 256 bits in the code
+ * are what does that. These keep an impatient client off the database.
+ */
+const DEVICE_CODE_RATE_PER_MINUTE = 30;
+/** How long a handshake stays open, and how often the CLI is asked to poll it. */
+const DEVICE_CODE_TTL_SECONDS = 900;
+const DEVICE_POLL_INTERVAL_SECONDS = 5;
+
+const devicePollRequestSchema = z.object({ deviceCode: z.string().min(1).max(512) }).strict();
+
+/**
+ * What the /device page posts once its visitor has signed in with GitHub.
+ *
+ * The access token is deliberately not in here: it arrives in the Authorization header and
+ * is stored only after jwtVerify has accepted it, so a caller cannot bind a session whose
+ * access token is not their own. The refresh token cannot be verified by anyone but
+ * Supabase, and travels with it because a CLI that could not refresh would be signed out
+ * within the hour.
+ */
+const deviceBindRequestSchema = z.object({
+  userCode: z.string().min(1).max(32),
+  refreshToken: z.string().min(1).max(4_096),
+  /** Supabase's `provider_token`. See DeviceSession in store.ts for why it matters. */
+  githubToken: z.string().min(1).max(4_096).optional()
+}).strict();
 
 const JSON_TYPE = "application/json";
 
@@ -185,7 +226,7 @@ async function handleRequest(
   const remote = clientAddress(request, options.trustProxy);
   // Layer one, pre-auth: per-IP. In memory, where being approximate costs nothing and a
   // round-trip per request would cost real latency.
-  if (!limiter.take(`ip:${remote}:${route}`, IP_RATE_PER_MINUTE)) {
+  if (!limiter.take(`ip:${remote}:${route}`, route.startsWith("POST /v1/auth/") ? DEVICE_IP_RATE_PER_MINUTE : IP_RATE_PER_MINUTE)) {
     response.setHeader("retry-after", "60");
     sendError(response, 429, "Rate limit exceeded");
     return;
@@ -208,8 +249,91 @@ async function handleRequest(
     return;
   }
 
-  const caller = await authenticate(request, options);
   const bodyLimit = options.bodyLimitBytes ?? 1_048_576;
+
+  // The two halves of the device handshake the CLI drives. Both are before authenticate()
+  // and therefore exempt from the bearer catch-all, which is not a hole: a terminal that
+  // has never signed in has no token to present, and producing one is the entire purpose
+  // of these two routes. What stands in for a credential is the device code itself -- 256
+  // bits, minted by the service, hashed at rest, and good for fifteen minutes.
+
+  if (method === "POST" && url.pathname === "/v1/auth/github/device") {
+    const started = await options.store.startDeviceCode({ expiresInSeconds: DEVICE_CODE_TTL_SECONDS });
+    send(response, 201, {
+      deviceCode: started.deviceCode,
+      userCode: started.userCode,
+      verificationUrl: new URL("/device", options.appUrl ?? DEFAULT_APP_URL).toString(),
+      intervalSeconds: DEVICE_POLL_INTERVAL_SECONDS,
+      expiresInSeconds: Math.max(1, Math.round((Date.parse(started.expiresAt) - Date.now()) / 1_000))
+    });
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/v1/auth/github/device/token") {
+    const body = devicePollRequestSchema.parse(await readJson(request, Math.min(bodyLimit, 4_096)));
+    // Keyed on the hash, not the code: the code is a credential and this map outlives the
+    // request by a minute.
+    if (!limiter.take(`device:${hashDeviceCode(body.deviceCode)}`, DEVICE_CODE_RATE_PER_MINUTE)) {
+      response.setHeader("retry-after", "60");
+      throw new HttpError(429, "Rate limit exceeded");
+    }
+    const claimed = await options.store.claimDeviceCode(body.deviceCode);
+    // Each refusal is a different thing for the person at the terminal to do, so each gets
+    // its own status rather than a blanket 400. A code that never existed and one that
+    // expired are told apart on purpose: neither reveals anything, because a caller who
+    // does not hold a device code cannot reach either answer.
+    if (claimed.status === "unknown") throw new HttpError(404, "Device code is not valid");
+    if (claimed.status === "expired") throw new HttpError(410, "Device code has expired");
+    if (claimed.status === "consumed") throw new HttpError(409, "Device code has already been used");
+    if (claimed.status === "pending") {
+      send(response, 200, { status: "pending" });
+      return;
+    }
+    const { githubToken, ...session } = claimed.session;
+    // The GitHub token rides beside the session rather than inside it, because the session
+    // is the shape the CLI writes to disk (syncDaemonConfigSchema, and it is strict) and a
+    // GitHub OAuth token is not something to leave in a file. The CLI uses it once, in
+    // memory, to redeem an invite.
+    send(response, 200, { status: "complete", session, ...(githubToken ? { githubToken } : {}) });
+    return;
+  }
+
+  const caller = await authenticate(request, options);
+
+  // The browser's half of the handshake, and the only authenticated one: whoever posts
+  // here has just signed in with GitHub on getcrosscode.dev/device and is handing that
+  // session to the terminal that printed the code they typed.
+  if (method === "POST" && url.pathname === "/v1/auth/github/device/bind") {
+    const body = deviceBindRequestSchema.parse(await readJson(request, Math.min(bodyLimit, 16_384)));
+    // A Supabase project can have other providers enabled, and a session from one of them
+    // would sign the CLI in as somebody with no GitHub identity -- which every later route
+    // that checks repository access needs. Refused here, where the person can still go and
+    // sign in the right way, rather than at the first invite they try to redeem.
+    if (!caller.github) throw new HttpError(403, "Sign in with GitHub to authorize a terminal");
+    const userCode = normalizeUserCode(body.userCode);
+    if (!userCode) throw new HttpError(400, "That is not a Crosscode confirmation code");
+    const bound = await options.store.bindDeviceCode({
+      userCode,
+      userId: caller.userId,
+      session: {
+        // Re-read rather than taken from the body: this is the token authenticate() just
+        // verified, so the session handed to the CLI is provably the caller's own.
+        accessToken: bearerToken(request),
+        refreshToken: body.refreshToken,
+        expiresAt: caller.expiresAt,
+        ...(body.githubToken ? { githubToken: body.githubToken } : {})
+      }
+    });
+    if (bound.status === "unknown") throw new HttpError(404, "That confirmation code is not valid");
+    if (bound.status === "expired") throw new HttpError(410, "That confirmation code has expired");
+    if (bound.status === "consumed") throw new HttpError(409, "That confirmation code has already been used");
+    // Not "you already did this": a second bind on a live code is somebody else's
+    // handshake being redirected, and the honest answer to that is no.
+    if (bound.status === "already-bound") throw new HttpError(409, "That confirmation code is already signed in");
+    options.analytics?.capture("device_authorized", caller.userId);
+    send(response, 200, { status: "bound" });
+    return;
+  }
 
   // Creating a project and redeeming an invite are both reachable by someone who belongs
   // to nothing yet, so they provision the user row the rest of the schema references.
@@ -372,7 +496,7 @@ async function authenticate(request: IncomingMessage, options: RequestOptions): 
   }
   // Outside the try: a 429 from the quota must not be swallowed and reported as a bad token.
   options.chargeIdentity?.(`user:${claims.userId}`);
-  return { userId: claims.userId, email: claims.email, github: claims.github };
+  return { userId: claims.userId, email: claims.email, github: claims.github, expiresAt: claims.expiresAt };
 }
 
 /** A non-negative integer query parameter, or undefined so the schema's default applies. */
@@ -515,6 +639,9 @@ function rateLimitRoute(method: string, pathname: string): string {
   const route = `${method} ${pathname}`;
   return new Set([
     "GET /healthz",
+    "POST /v1/auth/github/device",
+    "POST /v1/auth/github/device/token",
+    "POST /v1/auth/github/device/bind",
     "POST /v1/projects",
     "POST /v1/invites",
     "POST /v1/replicas",

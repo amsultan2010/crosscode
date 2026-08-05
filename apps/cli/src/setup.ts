@@ -74,11 +74,20 @@ export async function setup(directory: string, environment: Environment, options
 
   const existing = await readConfig(repository.root);
   const session = existing?.service.session;
-  if (session) report("Already signed in for this checkout.");
-  const activeSession = session ?? await environment.signIn({ serviceUrl: environment.serviceUrl, openBrowser: options.openBrowser !== false, report });
+  // Redeeming an invite needs the invitee's own GitHub OAuth token, and a stored session
+  // does not carry one: Supabase issues it to the browser at sign-in and never persists it,
+  // so it exists for exactly as long as the handshake that produced it. `join` therefore
+  // signs in even in a checkout that is already signed in, rather than failing at the
+  // redeem call with nothing to offer.
+  const reuseSession = session && !options.code;
+  if (reuseSession) report("Already signed in for this checkout.");
+  const signedIn = reuseSession
+    ? undefined
+    : await environment.signIn({ serviceUrl: environment.serviceUrl, openBrowser: options.openBrowser !== false, report });
+  const activeSession = signedIn?.session ?? session!;
 
   const service = environment.createService(activeSession.accessToken);
-  const { projectId, repo, origin } = await resolveProject(service, existing, localRepo, repository.root, options.code, report);
+  const { projectId, repo, origin } = await resolveProject(service, existing, localRepo, repository.root, options.code, signedIn?.githubToken, report);
 
   const config: SyncDaemonConfig = { projectId, repo, service: { url: environment.serviceUrl, session: activeSession } };
   await writeConfig(repository.root, config);
@@ -96,7 +105,7 @@ export async function setup(directory: string, environment: Environment, options
     repo,
     projectId,
     branch: repository.branch,
-    signedIn: session ? "already" : "just-now",
+    signedIn: reuseSession ? "already" : "just-now",
     project: origin,
     daemon,
     agent
@@ -117,10 +126,18 @@ async function resolveProject(
   localRepo: string,
   repoRoot: string,
   code: string | undefined,
+  githubToken: string | undefined,
   report: (line: string) => void
 ): Promise<{ projectId: string; repo: string; origin: SetupResult["project"] }> {
   if (code) {
-    const redeemed = await service.redeemInvite(code);
+    if (!githubToken) {
+      throw new CliError(
+        "SIGN_IN_FAILED",
+        "The GitHub sign-in did not return a token to check your access to the repository with",
+        "Sign in again with `crosscode join <code>`. If it keeps happening, the sign-in page could not read your GitHub authorization."
+      );
+    }
+    const redeemed = await service.redeemInvite(code, githubToken);
     // The invite is for a specific repo, and the point of the join page's verification is
     // that the invitee genuinely has access to it. Running `join` in the wrong checkout
     // would otherwise start syncing one repo's files into another's working tree.
