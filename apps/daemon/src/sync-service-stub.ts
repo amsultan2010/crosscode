@@ -123,6 +123,10 @@ export async function startSyncServiceStub(): Promise<SyncServiceStub> {
     async close() {
       for (const subscriber of [...subscribers]) subscriber.socket.terminate();
       sockets.close();
+      // `server.close` only stops new connections; it waits for the open ones, and the
+      // daemon's fetch keeps its sockets alive between requests. Without this the close
+      // never resolves and the test's teardown hook dies on its own timeout instead.
+      server.closeAllConnections();
       await new Promise<void>((closed) => server.close(() => closed()));
     }
   };
