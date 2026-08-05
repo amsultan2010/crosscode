@@ -1,5 +1,5 @@
 import type { AddressInfo } from "node:net";
-import type { HandoffRequestedEvent, IntentPublishedEvent, TransactionCreatedEvent, WsFanOutMessage, WsSubscribeAck } from "@crosscode/protocol";
+import type { TransactionCreatedEvent, WsFanOutMessage, WsSubscribeAck } from "@crosscode/protocol";
 import { contentHash } from "@crosscode/core";
 import { WebSocket } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
@@ -182,48 +182,6 @@ describe("service WebSocket fan-out", () => {
     });
   });
 
-  it("fans out a live handoff and intent to other replicas while excluding the sender", async () => {
-    const handoffEvent = makeHandoffEvent();
-    const remoteHandoff = { eventId: handoffEvent.id, workspaceId: membershipA.workspaceId, senderReplicaId: replicaA, handoff: handoffEvent.payload, updatedAt: "2026-01-01T00:00:01.000Z" };
-    const intentEvent = makeIntentEvent();
-    const remoteIntent = { eventId: intentEvent.id, workspaceId: membershipA.workspaceId, senderReplicaId: replicaA, intent: intentEvent.payload, updatedAt: "2026-01-01T00:00:01.000Z" };
-    const store = {
-      resolveMembership: async (userId: string) => membershipByUserId(userId),
-      assertReplicaOwnership: async () => null,
-      getCursor: async () => 0,
-      recordSessionStart: async () => {},
-      recordSessionEnd: async () => {},
-      upsertHandoff: async () => remoteHandoff,
-      upsertIntent: async () => remoteIntent
-    } as unknown as PgStore;
-    const base = await listen(store);
-    const tokenA = await signToken(membershipA.userId);
-    const tokenB = await signToken(membershipB.userId);
-    const { socket: socketA } = await connect(base, membershipA, replicaA, tokenA);
-    const { socket: socketB } = await connect(base, membershipB, replicaB, tokenB);
-    await nextMessage(socketA); // presence.online for replica-b, ignored here
-
-    const httpBase = base.replace("ws://", "http://");
-    const accessToken = await signToken(membershipA.userId);
-
-    const handoffReceiverMessage = nextMessage(socketB);
-    const handoffResponse = await fetch(`${httpBase}/v1/handoffs`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membershipA.workspaceId },
-      body: JSON.stringify({ event: handoffEvent })
-    });
-    expect(handoffResponse.status).toBe(200);
-    expect(await handoffReceiverMessage).toEqual({ type: "handoff", handoff: expect.objectContaining({ handoff: expect.objectContaining({ id: handoffEvent.id }) }) });
-
-    const intentReceiverMessage = nextMessage(socketB);
-    const intentResponse = await fetch(`${httpBase}/v1/intents`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}`, [WORKSPACE_HEADER]: membershipA.workspaceId },
-      body: JSON.stringify({ event: intentEvent })
-    });
-    expect(intentResponse.status).toBe(200);
-    expect(await intentReceiverMessage).toEqual({ type: "intent", intent: expect.objectContaining({ intent: expect.objectContaining({ id: intentEvent.id }) }) });
-  });
 });
 
 async function signToken(userId: string): Promise<string> {
@@ -292,84 +250,6 @@ function storedOperation(event: TransactionCreatedEvent, projectId: string | nul
     event: { ...event, serverSequence: 1 }
   };
 }
-
-function makeHandoffEvent(): HandoffRequestedEvent {
-  return {
-    id: "handoff-1",
-    schemaVersion: 1,
-    workspaceId: membershipA.workspaceId,
-    replicaId: replicaA,
-    actorId: membershipA.actorId,
-    type: "handoff.requested",
-    clientSequence: 1,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    payload: { id: "handoff-1", operationId: "operation-1", requestedBy: membershipA.actorId, status: "pending", createdAt: "2026-01-01T00:00:00.000Z" }
-  };
-}
-
-function makeIntentEvent(): IntentPublishedEvent {
-  return {
-    id: "intent-1",
-    schemaVersion: 1,
-    workspaceId: membershipA.workspaceId,
-    replicaId: replicaA,
-    actorId: membershipA.actorId,
-    type: "intent.published",
-    clientSequence: 1,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    payload: { id: "intent-1", actorId: membershipA.actorId, text: "Rename foo to bar", createdAt: "2026-01-01T00:00:00.000Z" }
-  };
-}
-
-describe("workspace-token subscribers", () => {
-  // A paired install (`crosscode join --pair`) holds a `ccw_` token and no Supabase
-  // session. It already reaches the ingest and read surface over HTTP with that exact
-  // credential, so refusing it here only left pairing on the polling loop.
-  it("accepts a ccw_ workspace token in the handshake", async () => {
-    const store = {
-      resolveWorkspaceToken: async () => ({ ...membershipA, replicaId: replicaA }),
-      resolveMembership: async () => { throw new Error("should not verify a JWT for a workspace token"); },
-      assertReplicaOwnership: async () => null,
-      getCursor: async () => 4,
-      recordSessionStart: async () => {},
-      recordSessionEnd: async () => {}
-    } as unknown as PgStore;
-    const base = await listen(store);
-    const { socket, first } = await connect(base, membershipA, replicaA, "ccw_paired-device-token");
-    expect(first).toEqual({ type: "subscribed", cursor: 4 });
-    socket.close();
-  });
-
-  it("refuses a workspace token scoped to a different workspace", async () => {
-    const store = {
-      // The token resolves fine -- it is simply scoped elsewhere, and must not be able to
-      // subscribe to a workspace it does not name just by asking for it.
-      resolveWorkspaceToken: async () => ({ ...membershipB, workspaceId: "workspace-2", replicaId: replicaB }),
-      assertReplicaOwnership: async () => null,
-      getCursor: async () => 0,
-      recordSessionStart: async () => {},
-      recordSessionEnd: async () => {}
-    } as unknown as PgStore;
-    const base = await listen(store);
-    const { socket, first } = await connect(base, membershipA, replicaA, "ccw_other-workspace-token");
-    expect(first).toEqual({ type: "error", message: "Subscription rejected" });
-    socket.close();
-  });
-
-  it("refuses a revoked workspace token", async () => {
-    const store = {
-      resolveWorkspaceToken: async () => { throw new StoreUnauthorizedError("Workspace token is invalid or revoked"); },
-      assertReplicaOwnership: async () => null,
-      getCursor: async () => 0,
-      recordSessionStart: async () => {},
-      recordSessionEnd: async () => {}
-    } as unknown as PgStore;
-    const base = await listen(store);
-    const { socket, first } = await connect(base, membershipA, replicaA, "ccw_revoked-token");
-    expect(first).toEqual({ type: "error", message: "Subscription rejected" });
-    socket.close();
-  });
-});
 
 describe("session bookkeeping failures", () => {
   it("survives a store failure while closing a socket instead of crashing the process", async () => {

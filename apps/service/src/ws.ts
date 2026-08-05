@@ -5,14 +5,8 @@ import {
   wsFanOutMessageSchema,
   wsSubscribeAckSchema,
   wsSubscribeRequestSchema,
-  WORKSPACE_TOKEN_PREFIX,
   type PresenceStatus,
-  type RemoteClaim,
-  type RemoteHandoff,
-  type RemoteIntent,
   type RemoteOperation,
-  type RemoteTask,
-  type RemoteValidation,
   type WsFanOutMessage
 } from "@crosscode/protocol";
 import type { JWTVerifyGetKey } from "jose";
@@ -27,11 +21,6 @@ export type WebSocketGatewayOptions = {
 
 export type WebSocketGateway = {
   broadcastOperation: (workspaceId: string, operation: RemoteOperation, excludeReplicaId: string) => void;
-  broadcastTask: (workspaceId: string, task: RemoteTask, excludeReplicaId: string) => void;
-  broadcastClaim: (workspaceId: string, claim: RemoteClaim, excludeReplicaId: string) => void;
-  broadcastHandoff: (workspaceId: string, handoff: RemoteHandoff, excludeReplicaId: string) => void;
-  broadcastIntent: (workspaceId: string, intent: RemoteIntent, excludeReplicaId: string) => void;
-  broadcastValidation: (workspaceId: string, validation: RemoteValidation, excludeReplicaId: string) => void;
 };
 
 const STREAM_PATH = "/v1/stream";
@@ -86,21 +75,6 @@ export function attachWebSocketGateway(server: Server, options: WebSocketGateway
   return {
     broadcastOperation(workspaceId, operation, excludeReplicaId) {
       broadcast(connectionsByWorkspace, workspaceId, { type: "operation", operation }, excludeReplicaId);
-    },
-    broadcastTask(workspaceId, task, excludeReplicaId) {
-      broadcast(connectionsByWorkspace, workspaceId, { type: "task", task }, excludeReplicaId);
-    },
-    broadcastClaim(workspaceId, claim, excludeReplicaId) {
-      broadcast(connectionsByWorkspace, workspaceId, { type: "claim", claim }, excludeReplicaId);
-    },
-    broadcastHandoff(workspaceId, handoff, excludeReplicaId) {
-      broadcast(connectionsByWorkspace, workspaceId, { type: "handoff", handoff }, excludeReplicaId);
-    },
-    broadcastIntent(workspaceId, intent, excludeReplicaId) {
-      broadcast(connectionsByWorkspace, workspaceId, { type: "intent", intent }, excludeReplicaId);
-    },
-    broadcastValidation(workspaceId, validation, excludeReplicaId) {
-      broadcast(connectionsByWorkspace, workspaceId, { type: "validation", validation }, excludeReplicaId);
     }
   };
 }
@@ -161,25 +135,12 @@ function handleConnection(
   });
 }
 
-/**
- * Resolves whichever credential the daemon offered to the membership it acts as. A
- * `ccw_` workspace token is accepted alongside a Supabase access token so a paired
- * install (`crosscode join --pair`) gets live sync too instead of silently falling
- * back to the polling loop -- it already reaches the ingest/read surface over HTTP
- * with the same credential, and the token names its own workspace, so subscribing
- * grants it nothing it did not already have.
- */
+/** Resolves the Supabase access token the daemon offered to the membership it acts as. */
 async function resolveSubscriber(
   options: WebSocketGatewayOptions,
   credential: string,
   workspaceId: string
 ): Promise<Membership> {
-  if (credential.startsWith(WORKSPACE_TOKEN_PREFIX)) {
-    const resolved = await options.store.resolveWorkspaceToken(credential);
-    if (resolved.workspaceId !== workspaceId) throw new Error("Workspace token is scoped to a different workspace");
-    const { replicaId: _replicaId, ...membership } = resolved;
-    return membership;
-  }
   const claims = await verifySupabaseAccessToken(credential, options.jwks, options.supabaseUrl);
   return options.store.resolveMembership(claims.userId, workspaceId);
 }

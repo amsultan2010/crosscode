@@ -22,26 +22,12 @@ import type { WebSocketGateway } from "./ws.js";
  *   hosted pub/sub -- Supabase Realtime is the obvious one, since the daemon already depends
  *   on @supabase/supabase-js -- carries the notification instead.
  * - **Process-local state.** Every instance starts cold and shares nothing, so the
- *   in-memory rate limiter counts per instance rather than globally. Routes whose limit is
- *   a security control rather than a courtesy must be backed by the database instead; see
- *   the durable limiter wired in below.
- * - **The history-retention sweep.** main.ts runs it on an interval, which needs a process
- *   that stays alive; there is none here. It is deliberately not started per request --
- *   that would put a delete of the largest table on a user's latency path. Until this
- *   deployment has a scheduled invocation (a platform cron calling a guarded endpoint, or
- *   `pnpm service:prune` from anywhere with CROSSCODE_RETENTION_DATABASE_URL), operation
- *   history on the function platform grows unbounded regardless of plan. Reads stay
- *   correct either way: nothing is deleted, so no cursor is ever refused.
+ *   in-memory rate limiter counts per instance rather than globally.
  */
 
 /** Broadcasts have nowhere to go without a persistent process; dropping them is safe. */
 const silentGateway: WebSocketGateway = {
-  broadcastOperation: () => {},
-  broadcastTask: () => {},
-  broadcastClaim: () => {},
-  broadcastHandoff: () => {},
-  broadcastIntent: () => {},
-  broadcastValidation: () => {}
+  broadcastOperation: () => {}
 };
 
 export type ServerlessHandler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
@@ -88,9 +74,6 @@ function buildHandler(environment: NodeJS.ProcessEnv): { handler: ServerlessHand
     // infrastructure in front, so it is the trustworthy client address and the socket
     // address is the load balancer.
     trustProxy: true,
-    // Non-negotiable here: instances share no memory, so the pairing-code brute-force
-    // defence has to be counted in the database or it is not a defence at all.
-    durableRateLimits: true,
     allowedOrigins: parseAllowedOrigins(environment.CROSSCODE_ALLOWED_ORIGINS),
     gateway: silentGateway
   });

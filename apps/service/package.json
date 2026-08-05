@@ -5,9 +5,7 @@
   "scripts": {
     "build": "node ../../scripts/build-serverless.mjs",
     "start": "tsx src/main.ts",
-    "migrate": "tsx src/migrate.ts",
-    "billing-sweep": "tsx src/billing-sweep.ts",
-    "provision": "tsx src/provision-admin.ts"
+    "migrate": "tsx src/migrate.ts"
   },
   "dependencies": {
     "@crosscode/core": "workspace:*",

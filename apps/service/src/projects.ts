@@ -1,8 +1,8 @@
 // Contract B (docs/onboarding-contracts.md): a project is keyed within a workspace by its
 // normalized git remote when one exists, else by an absolute repo root path. This module
-// owns that key derivation -- it is the dedup key, so every writer (POST /v1/projects,
-// replica registration, and the pairing claim handler) must go through these helpers
-// rather than storing whatever string the daemon happened to report.
+// owns that key derivation -- it is the dedup key, so every writer (POST /v1/projects and
+// replica registration) must go through these helpers rather than storing whatever string
+// the daemon happened to report.
 
 const SCHEME = /^([a-z][a-z0-9+.-]*):\/\//i;
 // scp-style shorthand: [user@]host:path, with no scheme and a path that is not a drive
