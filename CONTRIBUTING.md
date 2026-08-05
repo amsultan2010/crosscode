@@ -1,10 +1,10 @@
 # Contributing to Crosscode
 
-Thanks for your interest in contributing. Crosscode is a local-first coordination
-layer for developers and coding agents working in separate checkouts of the same
-Git repository. [README.md](./README.md) covers what it does, and
-[BUILD_INSTRUCTIONS.md](./BUILD_INSTRUCTIONS.md) is the authoritative
-milestone-by-milestone status of what is implemented and tested.
+Thanks for your interest in contributing. Crosscode is real-time codebase sync
+between teammates: you edit a file, their checkout updates within seconds, and
+the only interruption is a same-line conflict, which goes to their own coding
+agent. [README.md](./README.md) covers what it does, and [PLAN.md](./PLAN.md) is
+the single source of truth for what is built so far.
 
 ## Before you start
 
@@ -13,13 +13,14 @@ milestone-by-milestone status of what is implemented and tested.
   before you invest time in an implementation. That covers new features,
   protocol or schema changes, and anything touching the daemon/service trust
   boundary.
-- Check [BUILD_INSTRUCTIONS.md](./BUILD_INSTRUCTIONS.md) for current scope
-  decisions. In particular: Crosscode is CLI-first. The supported product
-  surface is the daemon + MCP server, plus the CLI as the daemon's local tool.
-  There is no web UI for coordination work and no editor extension, and PRs
-  adding either will be declined. The multi-tenant backend in `apps/service`
-  (workspaces, memberships, invites, pairing codes, billing) is alive and
-  maintained; it has no browser front end.
+- Scope decisions to know about, all of them settled in [PLAN.md](./PLAN.md).
+  Crosscode is CLI-first: the supported surface is the daemon and the MCP server,
+  plus the CLI as the daemon's local tool. There is no web app, no TUI, and no
+  editor extension, so PRs adding one will be declined. The hard limits are five
+  CLI commands, four MCP tools, and one skill; a PR that adds a sixth command or
+  a fifth tool needs to argue for it first. Crosscode surfaces conflicts and
+  never resolves them itself, so changes that make Crosscode judge, classify, or
+  review a change are out of scope.
 
 ## Development setup
 
@@ -40,25 +41,24 @@ pnpm build
 pnpm test
 ```
 
-For the full coordination-service setup (Supabase project, environment
-variables, migrations, workspace provisioning), see the "Set up Supabase and
-run the coordination service" section of [README.md](./README.md).
-
 ## Workspace layout
 
-This is a pnpm workspace. The apps under `apps/` are:
+This is a pnpm workspace. The packages under `packages/` hold the wire contract
+(`protocol`) and the merge core (`core`, `git`). The apps under `apps/` are:
 
 - `apps/cli`: the daemon's local admin/setup CLI (`pnpm crosscode -- <command>`)
-- `apps/daemon`: the per-worktree daemon, the sole local authority for capture,
-  checkpoints, and sync (`pnpm daemon`)
+- `apps/daemon`: the per-checkout daemon, the sole local authority for capture,
+  the shadow ref, and sync (`pnpm daemon`)
 - `apps/mcp-server`: the standards-compliant MCP server that editors and agents
   connect to. It talks to the daemon over its authenticated loopback HTTP API
   (`pnpm mcp`)
 - `apps/service`: the coordination service, holding Supabase-hosted PostgreSQL
   operations, auth, and audit records (`pnpm service`)
-- `apps/docs-site`: the website, meaning the landing page, the auth pages
-  (sign-up, sign-in, password reset, and the `crosscode login` callback), and
-  the docs generated from the root `docs/*.md` (`pnpm docs:dev` / `docs:build`)
+- `apps/docs-site`: the website, meaning the landing page, the join page, the
+  auth pages, and the docs generated from the root `docs/*.md`
+  (`pnpm docs:dev` / `docs:build`). The auth pages still implement the removed
+  email/password `crosscode login` flow and do not match the CLI's GitHub
+  device-code sign-in; they need a decision rather than a copy edit
 
 ## Running tests
 
@@ -87,10 +87,10 @@ and pull request.
   cover.
 - Keep PRs focused. One change per PR.
 - Describe what changed and why in the PR description; use the PR template.
-- If your change touches the daemon/service trust boundary (auth, RLS,
-  validation, exclusions, checkpoints), call that out explicitly in the PR
-  description. [docs/security.md](./docs/security.md) has the current security
-  model.
+- If your change touches the daemon/service trust boundary (auth, RLS, the
+  shadow ref, the apply rule, or the secret denylist), call that out explicitly
+  in the PR description. [docs/security.md](./docs/security.md) has the current
+  security model.
 - Do not commit secrets, `.env` files, or real Supabase credentials.
 
 ## Reporting bugs and requesting features

@@ -70,37 +70,49 @@
 
     <div class="docs-content">
       <h1>Current limitations</h1>
-      <p class="subtitle">Taken directly from this repository's README.md.</p>
+      <p class="subtitle">
+        What is not built yet, and what is built but rough. Crosscode is pre-1.0 and this page
+        is deliberately blunt.
+      </p>
 
-      <h2>Setup and hosting</h2>
+      <h2>Not shipped yet</h2>
       <ul>
-        <li>There is no hosted or managed coordination service yet. Your team runs a Supabase project (or a plain Postgres instance for local-only testing) and the service itself. This is the main setup cost.</li>
-        <li>There is no production website deployed yet, so <code>crosscode login</code> has no default sign-in page to open and fails with <code>WEB_URL_REQUIRED</code>. Pass <code>--web &lt;url&gt;</code> or set <code>CROSSCODE_WEB_URL</code>, or use the headless <code>--email</code>/<code>--password</code> path, which needs neither.</li>
-        <li>Billing is a placeholder: the plan and usage data model and its enforcement helpers exist, but no payment provider is wired up, so nothing is charged or actually limited.</li>
-        <li>Workspace, membership, invite, and billing management is CLI- and API-only. There is no web UI for any of it, by decision. The website is landing, sign-up/sign-in, and docs.</li>
-        <li>Deliberately not published to npm or any editor marketplace. The supported surface is the daemon + MCP server, run from a cloned checkout. Editors like VS Code and Cursor connect via MCP; there is no supported editor extension.</li>
+        <li><code>@crosscode/cli</code> is not published to npm. The install command on this site and in the README describes the intended experience, not something you can run today. Until it ships, run the CLI from a clone with <code>pnpm crosscode -- &lt;command&gt;</code>.</li>
+        <li>GitHub OAuth sign-in is still landing, which means <code>crosscode start</code> cannot yet complete the sign-in step end to end on a clean machine.</li>
+        <li>The Claude Code and Codex pre-edit hooks are written but not verified firing before every file edit. Until they are, an agent finds out about a conflict on its next tool call rather than before it writes.</li>
+        <li>The full quickstart has not been verified on a fresh machine, so treat the under-60-seconds claim as a target rather than a measurement.</li>
       </ul>
 
-      <h2>Operational hardening</h2>
+      <h2>Privacy and hosting</h2>
       <ul>
-        <li>Production PostgreSQL role grants still need environment-specific deployment hardening. Retention is opt-in and admin-only (<code>pnpm service:prune -- --older-than-days &lt;n&gt;</code>); tables that cursor reconnect depends on are deliberately never pruned.</li>
-        <li>Supabase refresh tokens go in the OS keychain when one is available (macOS Keychain, Linux Secret Service); otherwise, including on Windows, the mode-<code>0600</code> Git-directory config file is used instead. The workspace encryption keyring follows the same rule.</li>
-        <li><strong>End-to-end encryption covers file payloads, not everything.</strong> File contents, paths, diffs, content hashes, and change intents are sealed. Task titles, claim targets, published intents, handoff notes, and validation output are <em>not</em> encrypted yet, and can contain paths and descriptions of what you're working on. The <a href="/docs/privacy.html">privacy page</a> states this plainly rather than letting "end-to-end encrypted" imply more than it currently covers.</li>
-        <li>Adding a device to an encrypted workspace needs a human to compare a fingerprint on both machines. That is deliberate, because auto-granting to whatever device the service listed would let the service ask for the key and get it, but it does mean pairing is not fully unattended.</li>
-        <li>Losing every copy of a workspace key is unrecoverable: we hold no copy, which is the same fact as being unable to read your code. It costs the coordination history, not source code, since the repository is an ordinary Git repository throughout. <code>crosscode key export</code> produces a recovery code worth keeping.</li>
+        <li><strong>There is no end-to-end encryption.</strong> Files are encrypted in transit and at rest under keys the service manages, so someone with production access could read the files you sync. The <a href="/docs/privacy.html">privacy page</a> lists exactly what is stored. E2E was built once and removed: it cost a device-pairing ceremony, a keyring, rotation, and recovery paths, for a product whose durable artifact is a Git repository you already have.</li>
+        <li>Hosted only. There is no supported self-hosted deployment of the coordination service. The software is MIT licensed, so you may run your own, but it is not a supported configuration.</li>
+        <li>Billing does not exist. The hosted service is free, no payment provider is wired up, and nothing is chargeable.</li>
+        <li>Workspaces, invites, and projects are CLI and API only. There is no web app for syncing and there will not be one. This site is a landing page, sign-in, and docs.</li>
+        <li>Deliberately no editor extension. MCP is the only integration contract, so editors connect the same way agents do.</li>
       </ul>
 
-      <h2>Analysis depth</h2>
+      <h2>Performance and robustness</h2>
       <ul>
-        <li>Binary files are shared base64-encoded and materialized byte-exactly, but any conflict involving one requires human approval, since hunk-level merge analysis is text-only.</li>
-        <li>Renames are tracked as first-class rename changes; a rename that conflicts with pending work on either path, moves into or out of a critical path, or whose source has diverged locally always requires approval.</li>
-        <li>Dependency-impact analysis for <code>.ts</code>/<code>.tsx</code> is a syntactic AST walk, not a type-checker-backed analysis.</li>
+        <li>Watcher performance on a large monorepo has not been measured. A file watcher over a very large tree is not free, and this is a known risk rather than a solved problem.</li>
+        <li>Battery and CPU cost over a real workday have not been measured.</li>
+        <li>Three-way convergence is proven for two replicas. More than two has not been exercised end to end.</li>
+        <li>Under sustained typing, a hot file can defer indefinitely: the ten-second rule has no ceiling on it yet.</li>
+        <li>Large files and binaries are handled but not tuned. Binaries are never merged, so concurrent binary edits are always a conflict.</li>
+        <li>The retention job and resync behaviour under bad networks still need hardening.</li>
+      </ul>
+
+      <h2>Known risks</h2>
+      <ul>
+        <li>Writing to a file that has an unsaved editor buffer, or one an agent is part-way through editing, is the sharpest edge in the product.</li>
+        <li>Syncing a secret would be a serious incident, which is why untracked files are never sent and the denylist drops credential-shaped paths before capture rather than filtering later.</li>
       </ul>
 
       <div class="callout">
-        This is a functionality-first, pre-1.0 project. Do not treat anything on
-        this page, or absent from the <a href="/docs/index.html">what works
-        today</a> list, as available.
+        Do not treat anything absent from <a href="/docs/index.html">what works today</a> as
+        available. The repository's
+        <a href="https://github.com/amsultan2010/crosscode/blob/main/PLAN.md">PLAN.md</a> is
+        the single source of truth for what is done.
       </div>
     </div>
   </main>

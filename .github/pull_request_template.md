@@ -18,8 +18,8 @@
 
 ## Security / trust-boundary impact
 
-<!-- Does this touch auth, RLS, checkpoint/materialization safety, excluded
-     paths, or anything else described in docs/security.md? If yes, describe
+<!-- Does this touch auth, RLS, the shadow ref, the apply rule, the secret
+     denylist, or anything else described in docs/security.md? If yes, describe
      the impact. If no, say "None". -->
 
 ## Related issues

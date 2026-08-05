@@ -71,136 +71,110 @@
     <div class="docs-content">
       <h1>CLI reference</h1>
       <p class="subtitle">
-        The <code>crosscode</code> CLI is minimal and scriptable. Every command
-        supports a stable <code>--json</code> output mode for agents and scripts;
-        default human output is concise. From a cloned checkout, invoke it with
-        <code>pnpm crosscode &lt;command&gt;</code>.
+        Five commands, and that is all of them. The CLI holds no sync state: it talks to the
+        local daemon over an authenticated loopback HTTP API, and so does the MCP server.
       </p>
 
       <div class="callout">
-        <strong>Agents:</strong> don't parse this page or <code>--help</code>. Run
-        <code>crosscode commands --json</code> for the entire command tree &mdash;
-        every command, argument, option, and description &mdash; as machine-readable
-        JSON. See the <a href="/docs/install.html">install &amp; quickstart guide</a>
-        for these commands in context.
+        Anything that is not on this page does not exist. Crosscode used to have around
+        forty-five commands covering tasks, claims, handoffs, proposals, checkpoints,
+        validation profiles, and billing. They were removed, not hidden.
       </div>
 
-      <h2>Getting set up</h2>
+      <h2>Global flags</h2>
       <table>
         <thead>
-          <tr><th>Command</th><th>Purpose</th></tr>
+          <tr><th>Flag</th><th>Purpose</th></tr>
         </thead>
         <tbody>
-          <tr><td><code>crosscode init</code></td><td>Initialize local Crosscode state for this checkout. Run this first; <code>signup</code> and <code>login</code> both need it.</td></tr>
-          <tr><td><code>crosscode signup --email &lt;email&gt; --password &lt;password&gt; --service &lt;url&gt;</code></td><td>Create an account, log in, and get a personal workspace in one step. Prompts for the credentials if you leave them off in a real terminal.</td></tr>
-          <tr><td><code>crosscode login --web &lt;site-url&gt;</code></td><td>Sign in through the browser; the CLI collects the session on a loopback callback. <code>--web</code> (or <code>CROSSCODE_WEB_URL</code>) is required, as there is no default site yet. Add <code>--no-browser</code> to print the URL instead.</td></tr>
-          <tr><td><code>crosscode login --email &lt;email&gt; --password &lt;password&gt;</code></td><td>The headless sign-in, for agents and CI. No browser, no TTY, no <code>--web</code>. Tokens are never printed.</td></tr>
-          <tr><td><code>crosscode logout</code></td><td>Clear the stored Supabase session for this checkout.</td></tr>
-          <tr><td><code>crosscode join --workspace &lt;id&gt; | --invite &lt;code&gt; | --pair &lt;code&gt;</code></td><td>Join someone else's workspace. <code>--pair</code> works before any login.</td></tr>
-          <tr><td><code>crosscode status</code></td><td>Show repository, daemon, outbox, cursor, and service health.</td></tr>
+          <tr><td><code>--json</code></td><td>Print compact JSON on one line instead of pretty-printed JSON</td></tr>
+          <tr><td><code>--version</code>, <code>-V</code></td><td>Print the CLI version</td></tr>
+          <tr><td><code>--help</code></td><td>Print usage for the program or a command</td></tr>
         </tbody>
       </table>
 
-      <h2>Declaring what you're working on</h2>
-      <table>
-        <thead>
-          <tr><th>Command</th><th>Purpose</th></tr>
-        </thead>
-        <tbody>
-          <tr><td><code>crosscode task create "Implement checkout API" --path server/routes/checkout</code></td><td>Declare a task and the paths it covers, so others can see it.</td></tr>
-          <tr><td><code>crosscode claim path src/checkout --task &lt;id&gt;</code></td><td>Advertise an advisory claim on a path for a task.</td></tr>
-          <tr><td><code>crosscode intent "Add paymentStatus to CheckoutResponse" --task &lt;id&gt;</code></td><td>Publish a plain-language intent for a task.</td></tr>
-          <tr><td><code>crosscode handoff request &lt;operation-id&gt; --note "..."</code></td><td>Ask someone else to take over reviewing an operation you produced.</td></tr>
-          <tr><td><code>crosscode handoff respond &lt;id&gt; --decision accepted|declined</code></td><td>Answer a handoff request.</td></tr>
-        </tbody>
-      </table>
-
-      <h2>Reviewing incoming work</h2>
-      <table>
-        <thead>
-          <tr><th>Command</th><th>Purpose</th></tr>
-        </thead>
-        <tbody>
-          <tr><td><code>crosscode proposals list</code></td><td>List remote operations awaiting review in this checkout.</td></tr>
-          <tr><td><code>crosscode proposals inspect &lt;id&gt;</code></td><td>Show a proposal and a readable analysis of what it would do.</td></tr>
-          <tr><td><code>crosscode proposals diff &lt;id&gt;</code></td><td>Show the per-path diff: base, local, and proposed content, plus classification and risk.</td></tr>
-          <tr><td><code>crosscode proposals artifacts &lt;id&gt;</code></td><td>Show conflict artifacts recorded for a proposal.</td></tr>
-          <tr><td><code>crosscode accept &lt;operation-id&gt;</code></td><td>Apply a proposal, after re-checking the local base and creating a checkpoint.</td></tr>
-          <tr><td><code>crosscode reject &lt;operation-id&gt;</code></td><td>Reject a proposal; no local files are changed.</td></tr>
-        </tbody>
-      </table>
-
-      <h2>Safety net, validation, and publishing</h2>
-      <table>
-        <thead>
-          <tr><th>Command</th><th>Purpose</th></tr>
-        </thead>
-        <tbody>
-          <tr><td><code>crosscode checkpoint [--message "..."]</code></td><td>Create a hidden Git checkpoint without moving <code>HEAD</code> or the index.</td></tr>
-          <tr><td><code>crosscode checkpoint inspect &lt;ref&gt;</code></td><td>Show what a checkpoint contains.</td></tr>
-          <tr><td><code>crosscode checkpoint restore &lt;ref&gt; &lt;path&gt;</code></td><td>Restore a single path from a checkpoint.</td></tr>
-          <tr><td><code>crosscode validate [--profile fast]</code></td><td>Run commands from a committed <code>.crosscode/config.yaml</code> validation profile. Arbitrary commands are never accepted as arguments.</td></tr>
-          <tr><td><code>crosscode publish --branch &lt;branch&gt; --profile &lt;name&gt; [--dry-run]</code></td><td>Create ordinary commits on a branch from accepted, validated state. Both flags are required. Prompts for confirmation unless you pass <code>--yes</code>. Never force-pushes.</td></tr>
-          <tr><td><code>crosscode run -- &lt;tool-and-arguments&gt;</code></td><td>Run a local command with the daemon context available. Propagates that command's own exit code.</td></tr>
-        </tbody>
-      </table>
-
-      <h2>Workspace settings</h2>
-      <table>
-        <thead>
-          <tr><th>Command</th><th>Purpose</th></tr>
-        </thead>
-        <tbody>
-          <tr><td><code>crosscode workspace autonomy get</code></td><td>Show how much this workspace applies automatically.</td></tr>
-          <tr><td><code>crosscode workspace autonomy set &lt;0|1|2&gt;</code></td><td>Set it: <code>0</code> always ask, <code>1</code> auto-apply only when clean, <code>2</code> auto-apply always. Owner/admin only.</td></tr>
-          <tr><td><code>crosscode billing status --workspace &lt;id&gt;</code></td><td>Read the workspace's plan and usage counters. Reads the service database directly, so it needs <code>DATABASE_URL</code> set. Nothing is charged today &mdash; see <a href="/docs/limitations.html">limitations</a>.</td></tr>
-          <tr><td><code>crosscode commands</code></td><td>Print the full command tree as machine-readable JSON.</td></tr>
-        </tbody>
-      </table>
-
-      <h2>Encryption keys</h2>
+      <h2>crosscode start</h2>
       <p>
-        File payloads are end-to-end encrypted by default, under a workspace key that never
-        reaches the coordination service. These commands manage it. See
-        <a href="/docs/privacy.html">privacy</a> for what stays visible either way.
+        Sets this checkout up end to end, and is safe to re-run. It signs you in with GitHub,
+        attaches the checkout to a project, starts the daemon, and installs the MCP server,
+        the skill, and the pre-edit hooks for your coding agent.
       </p>
-      <table>
-        <thead>
-          <tr><th>Command</th><th>Purpose</th></tr>
-        </thead>
-        <tbody>
-          <tr><td><code>crosscode pair</code></td><td>Mint a pairing code for another machine, then hand it the workspace key once you have confirmed the fingerprint it prints. Run <code>crosscode join --pair &lt;code&gt;</code> on the other machine.</td></tr>
-          <tr><td><code>crosscode key status</code></td><td>Show which key epochs this checkout holds, and this device's fingerprint for someone else to compare.</td></tr>
-          <tr><td><code>crosscode key devices</code></td><td>List every device that has registered an encryption key with this workspace, with fingerprints. A device you don't recognise here is what to look for.</td></tr>
-          <tr><td><code>crosscode key approve &lt;replica-id&gt; --fingerprint &lt;shown&gt;</code></td><td>Grant the workspace key to a device that joined by invite rather than pairing. The fingerprint is checked before anything is sent.</td></tr>
-          <tr><td><code>crosscode key rotate</code></td><td>Start a new key epoch and grant it to every already-approved device. Run it after removing a member: everything from then on is unreadable to them.</td></tr>
-          <tr><td><code>crosscode key export</code></td><td>Print a recovery code &mdash; the only copy of the key that can exist off your devices. Keep it in a password manager; we cannot reissue it.</td></tr>
-          <tr><td><code>crosscode key import &lt;recovery-code&gt;</code></td><td>Restore the workspace key on a machine from a recovery code.</td></tr>
-          <tr><td><code>crosscode key init</code></td><td>Create the workspace's first key. Only possible while no device holds one; normally the daemon does this for you.</td></tr>
-          <tr><td><code>crosscode key forget</code></td><td>Delete this checkout's copy of the key. Local only, and irreversible without a recovery code or another paired device.</td></tr>
-        </tbody>
-      </table>
-
-      <h2>JSON output and exit codes</h2>
+      <pre><code>crosscode start
+crosscode start --no-browser   # print the sign-in URL instead of opening a browser</code></pre>
       <p>
-        Every command accepts a position-independent <code>--json</code> flag.
-        Scripts and agents should always pass it: stdout becomes exactly one line
-        of compact JSON, <code>{"value":…}</code> on success and
-        <code>{"error":{"code":…,"message":…,"hint":…}}</code> on failure, with
-        nothing else written to stdout. Default (non-JSON) output is for humans
-        reading a terminal and is not a stable interface.
+        Use <code>--no-browser</code> on a remote shell or in CI. Restart your agent afterwards
+        so it picks up the new MCP server.
       </p>
+
+      <h2>crosscode invite</h2>
+      <p>Prints a link that invites a teammate to this project. The link is the whole output.</p>
+      <pre><code>crosscode invite
+# https://getcrosscode.dev/join/7f3a9c2e</code></pre>
       <p>
-        Exit code <code>0</code> on success and <code>1</code> on any error, with
-        the failure described by <code>error.code</code>. The one exception is
-        <code>crosscode run</code>, which passes the wrapped command's exit code
-        through unchanged. The error codes worth branching on are listed in the
-        repository's
-        <a href="https://github.com/amsultan2010/crosscode/blob/main/README.md#for-coding-agents">README</a>.
+        The join page checks the invitee actually has access to the repository before it hands
+        them anything.
+      </p>
+
+      <h2>crosscode join &lt;code&gt;</h2>
+      <p>
+        Redeems an invite code in this checkout, then sets it up exactly as <code>start</code>
+        would. The code is a positional argument in the form printed by the join page.
+      </p>
+      <pre><code>crosscode join CC-7F3A-9C2E
+crosscode join CC-7F3A-9C2E --no-browser</code></pre>
+
+      <h2>crosscode status</h2>
+      <p>Shows what this checkout's daemon is doing.</p>
+      <pre><code>crosscode status --json</code></pre>
+      <pre><code>{
+  "value": {
+    "branch": "main",
+    "connected": true,
+    "paused": false,
+    "cursor": 412,
+    "pendingConflicts": 0,
+    "peers": []
+  }
+}</code></pre>
+      <p>
+        <code>peers</code> lists who else is working on this branch and which paths they
+        touched recently. Presence is in-memory in the service, so it reflects right now
+        rather than history.
+      </p>
+
+      <h2>crosscode stop</h2>
+      <p>
+        Stops the daemon for this checkout. Syncing stops; nothing is uninstalled and nothing
+        in your repository changes.
+      </p>
+      <pre><code>crosscode stop</code></pre>
+
+      <h2>Output envelope</h2>
+      <p>
+        With <code>--json</code>, success is wrapped in <code>value</code> so it is symmetric
+        with the failure shape, and an agent can branch on which key is present. Progress goes
+        to stderr, so stdout stays a single parseable object.
+      </p>
+      <pre><code>{"value": {"branch": "main", "connected": true, ...}}
+{"error": {"code": "NOT_A_GIT_REPOSITORY", "message": "Crosscode runs inside a Git repository", "hint": "cd into your project first."}}</code></pre>
+      <p>
+        Without <code>--json</code> the value is printed bare, because the envelope is only
+        noise for a human reader. Common error codes are
+        <code>NOT_A_GIT_REPOSITORY</code>, <code>USAGE_ERROR</code>, and
+        <code>COMMAND_FAILED</code>.
+      </p>
+
+      <h2>The MCP server</h2>
+      <p>
+        The same package installs a <code>crosscode-mcp</code> binary, which is what your
+        coding agent connects to. It exposes four tools, <code>status</code>,
+        <code>conflicts</code>, <code>resolve</code>, and <code>pause</code>, and every
+        response carries any pending conflicts whether the tool was asked for them or not. See
+        <a href="/docs/mcp-clients.html">MCP client setup</a>.
       </p>
 
       <div class="docs-next">
-        <a href="/docs/limitations.html">Next: Limitations →</a>
+        <a href="/docs/limitations.html">Next: Current limitations →</a>
       </div>
     </div>
   </main>

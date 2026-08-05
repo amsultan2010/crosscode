@@ -71,198 +71,98 @@
     <div class="docs-content">
       <h1>Install &amp; quickstart</h1>
       <p class="subtitle">
-        Crosscode is run entirely on your own machines. The coordination service
-        is not hosted for you today: you host it yourself, backed by a Supabase
-        project (or a plain Postgres instance for local-only testing).
+        One command sets up a checkout end to end. Everything below happens in the repository
+        you actually want to work on.
       </p>
+
+      <div class="callout">
+        <strong>Pre-1.0.</strong> <code>@crosscode/cli</code> is not published to npm yet, so
+        the install command below describes what installing will look like rather than
+        something you can run today. Until it ships, run the CLI from a clone of the
+        repository with <code>pnpm crosscode -- &lt;command&gt;</code>. See
+        <a href="/docs/limitations.html">current limitations</a>.
+      </div>
 
       <h2>Prerequisites</h2>
       <ul>
         <li>Node.js 24 or newer</li>
-        <li>pnpm 11</li>
-        <li>Git</li>
-        <li>A Supabase project, or Docker Desktop/another Docker-compatible runtime for local-only testing against a plain Postgres instance</li>
+        <li>Git, and a checkout of the repository you want to sync</li>
+        <li>A GitHub account with access to that repository</li>
       </ul>
 
-      <h2>Install dependencies</h2>
+      <h2>Install and start</h2>
+      <pre><code>npm install -g @crosscode/cli
+cd your-repo
+crosscode start</code></pre>
+
+      <p>
+        <code>crosscode start</code> does the whole setup and is safe to re-run. It signs you
+        in with GitHub, attaches this checkout to a project, starts the background daemon, and
+        installs the MCP server, the <code>crosscode</code> skill, and the pre-edit hooks for
+        your coding agent.
+      </p>
+      <p>
+        It prints a GitHub sign-in URL and opens it. On a remote shell or in CI, pass
+        <code>--no-browser</code> to print the URL instead of opening one. Restart your coding
+        agent afterwards, or reconnect its MCP servers, so it picks up the new
+        <code>crosscode</code> server.
+      </p>
+
+      <h2>Bring in a teammate</h2>
+      <pre><code>crosscode invite</code></pre>
+      <p>
+        That prints a link. They open it, sign in with GitHub, and the page checks they
+        actually have access to the repository before giving them two lines to paste:
+      </p>
+      <pre><code>git clone git@github.com:acme/app.git &amp;&amp; cd app
+crosscode join CC-7F3A-9C2E</code></pre>
+      <p>
+        <code>join</code> redeems the code and then sets the checkout up exactly as
+        <code>start</code> would. That is the entire onboarding. From there both checkouts are
+        in sync.
+      </p>
+
+      <h2>Day to day</h2>
+      <p>
+        Nothing. That is the intended experience: edits move between checkouts on their own,
+        and a conflict goes to your coding agent rather than to you. The two remaining commands
+        exist for when you want to look:
+      </p>
+      <pre><code>crosscode status     # branch, connected, paused, who else is on this branch
+crosscode stop       # stop syncing this checkout</code></pre>
+
+      <h2>What syncs</h2>
+      <ul>
+        <li>Tracked files only. Untracked files are never sent</li>
+        <li>Never <code>.env*</code>, <code>*.pem</code>, <code>*.key</code>, or anything else credential-shaped, even when Git tracks it</li>
+        <li>Only within one project and one branch name. Different branches do not sync</li>
+        <li>Never a file you or your agent touched in the last ten seconds</li>
+      </ul>
+      <p>
+        Your commits, branches, index, stash, and remotes are never touched, and nothing here
+        pushes. To undo anything Crosscode wrote:
+      </p>
+      <pre><code>git checkout refs/crosscode/shadow -- &lt;path&gt;</code></pre>
+
+      <h2>Hand the setup to your agent</h2>
+      <p>
+        There is a ready-made prompt that runs the same steps and wires up the MCP config
+        itself. Paste
+        <a href="https://github.com/amsultan2010/crosscode/blob/main/docs/install-prompt.md">the install prompt</a>
+        into Claude Code, Codex CLI, OpenCode, Cursor, or any MCP-capable agent. Codex CLI's
+        config is TOML and <code>start</code> does not write it, so Codex users add a
+        three-line entry by hand: see <a href="/docs/mcp-clients.html">MCP client setup</a>.
+      </p>
+
+      <h2>Running from a clone</h2>
+      <p>For working on Crosscode itself, or for running the CLI before it is on npm:</p>
       <pre><code>pnpm install
-pnpm build
-pnpm test</code></pre>
-
-      <h2>Set up Supabase and run the coordination service</h2>
+pnpm build          # typecheck + bundle
+pnpm test           # vitest
+pnpm crosscode -- status --json</code></pre>
       <p>
-        The coordination service verifies Supabase-issued JWTs and stores
-        workspace/operation state in Supabase-hosted PostgreSQL. Create a
-        Supabase project (or use an existing one), then from its project
-        settings collect the project URL, the <code>anon</code> public key, the
-        <code>service_role</code> key, and the pooled Postgres connection
-        string (Project Settings &rarr; API / Database).
-      </p>
-      <pre><code>export SUPABASE_URL="https://&lt;project-ref&gt;.supabase.co"
-export SUPABASE_SERVICE_ROLE_KEY="&lt;project service_role key&gt;"
-export DATABASE_URL="&lt;Supabase pooled connection string&gt;"
-export MIGRATION_DATABASE_URL="${DATABASE_URL}"
-pnpm service:migrate
-pnpm service</code></pre>
-
-      <p>
-        Supabase signs access tokens with an asymmetric key (ES256 by default),
-        verified via the project's public JWKS endpoint
-        (<code>&lt;SUPABASE_URL&gt;/auth/v1/.well-known/jwks.json</code>) &mdash;
-        there is no shared JWT secret to configure. The service defaults to
-        <code>http://127.0.0.1:8788</code>. Plain HTTP is allowed only on
-        loopback; to bind to another interface, configure both
-        <code>CROSSCODE_TLS_KEY</code> and <code>CROSSCODE_TLS_CERT</code>.
-      </p>
-
-      <table>
-        <thead>
-          <tr><th>Variable</th><th>Purpose</th><th>Default</th></tr>
-        </thead>
-        <tbody>
-          <tr><td><code>SUPABASE_URL</code></td><td>Supabase project URL, used to verify access tokens</td><td>required</td></tr>
-          <tr><td><code>DATABASE_URL</code></td><td>Supabase-hosted PostgreSQL connection string</td><td>required</td></tr>
-          <tr><td><code>SUPABASE_SERVICE_ROLE_KEY</code></td><td>Used only by admin-side <code>service:provision</code>; never distribute to members</td><td>required for provisioning</td></tr>
-          <tr><td><code>CROSSCODE_SERVICE_HOST</code></td><td>Listen address</td><td><code>127.0.0.1</code></td></tr>
-          <tr><td><code>CROSSCODE_SERVICE_PORT</code></td><td>Listen port</td><td><code>8788</code></td></tr>
-          <tr><td><code>CROSSCODE_TLS_KEY</code></td><td>TLS private-key path</td><td>unset</td></tr>
-          <tr><td><code>CROSSCODE_TLS_CERT</code></td><td>TLS certificate path</td><td>unset</td></tr>
-        </tbody>
-      </table>
-
-      <p>
-        Run <code>pnpm service:migrate</code> with a migration-owner connection
-        before starting a new service version. Migration
-        <code>004_supabase_auth.sql</code> enables Row Level Security and maps
-        members to Supabase's <code>auth.users</code>; <code>005_rls_hardening.sql</code>
-        adds the remaining RLS policies. <code>infra/docker-compose.yml</code> is
-        for local/CI testing against a plain Postgres instance only &mdash;
-        production points <code>DATABASE_URL</code> at Supabase.
-      </p>
-
-      <h2>Get an account and connect this checkout</h2>
-      <p>
-        Everything below happens in the repository you actually want to work on,
-        not in the Crosscode checkout. <code>init</code> has to come first &mdash;
-        it writes the local state that <code>signup</code> and <code>login</code>
-        both need.
-      </p>
-      <pre><code>pnpm crosscode init --json</code></pre>
-
-      <p>
-        If you don't have an account yet, create one straight from the terminal.
-        This signs you up, logs you in, and provisions a personal workspace, so
-        there is nothing else to join:
-      </p>
-      <pre><code>pnpm crosscode signup --email alice@example.com --password &lt;password&gt; --service http://127.0.0.1:8788 --json</code></pre>
-
-      <p>
-        If the account already exists, sign in instead. In a real terminal,
-        <code>login</code> opens the sign-in page in your browser and the CLI
-        collects the session on a loopback callback:
-      </p>
-      <pre><code>pnpm crosscode login --web &lt;site-url&gt; --service http://127.0.0.1:8788</code></pre>
-
-      <div class="callout">
-        <code>--web</code> (or the <code>CROSSCODE_WEB_URL</code> environment
-        variable) is <strong>required</strong>. There is no production site
-        deployed yet, so there is no default to fall back on and bare
-        <code>crosscode login</code> fails with <code>WEB_URL_REQUIRED</code>.
-        Point it at your own deployment of this site, or at
-        <code>http://localhost:5173</code> while running <code>pnpm docs:dev</code>.
-      </div>
-
-      <p>
-        For a headless machine or an agent with no browser, pass credentials
-        directly instead. This path needs no <code>--web</code> at all:
-      </p>
-      <pre><code>pnpm crosscode login --email alice@example.com --password &lt;password&gt; --service http://127.0.0.1:8788 --json</code></pre>
-
-      <p>
-        Either way, the CLI authenticates directly against Supabase Auth and
-        stores the resulting session (access token in memory, refresh token in
-        the OS keychain when available, otherwise the local mode-<code>0600</code>
-        daemon config). Tokens are never printed. This machine then registers
-        itself automatically the first time the daemon starts with a logged-in
-        session and no <code>replicaId</code> yet &mdash; there is no separate
-        enrollment step or token to distribute.
-      </p>
-      <p>Start the daemon:</p>
-      <pre><code>pnpm daemon</code></pre>
-
-      <p>To join someone else's workspace instead of using your personal one:</p>
-      <pre><code>pnpm crosscode join --workspace &lt;workspaceId&gt;   # or --invite &lt;code&gt;, or --pair &lt;code&gt;</code></pre>
-
-      <p>
-        Administrators of a self-hosted deployment can still create or invite a
-        Supabase Auth user by email with <code>pnpm service:provision</code>
-        (using <code>SUPABASE_SERVICE_ROLE_KEY</code>), but it is no longer
-        required for the common case. Use <code>viewer</code> instead of
-        <code>member</code> there to create a read-only member: viewers may
-        download operations but cannot upload them.
-      </p>
-
-      <h2>Normal workflow</h2>
-      <p>With the daemon running:</p>
-      <pre><code># Repository, daemon, outbox, cursor, and service health
-pnpm crosscode status --json
-
-# Declare local work
-pnpm crosscode task create "Implement checkout API" --path server/routes/checkout --json
-pnpm crosscode claim path server/routes/checkout --task &lt;task-id&gt; --json
-
-# Create or inspect safety checkpoints
-pnpm crosscode checkpoint --message "before integration" --json
-pnpm crosscode checkpoint inspect &lt;checkpoint-ref&gt; --json
-
-# Review remote work
-pnpm crosscode proposals list --json
-pnpm crosscode proposals inspect &lt;operation-id&gt; --json
-
-# Materialize only after an explicit decision
-pnpm crosscode accept &lt;operation-id&gt; --json
-pnpm crosscode reject &lt;operation-id&gt; --json
-
-# Run commands from a committed validation profile
-pnpm crosscode validate --profile fast --json</code></pre>
-
-      <p>
-        The daemon continues capturing work while the service is unavailable.
-        Pending outbound events survive daemon restarts. When connectivity
-        returns, the daemon retries the same immutable event IDs, records
-        acknowledgements, downloads operations after its saved cursor, and stores
-        remote operations as proposals without changing files.
-      </p>
-
-      <h2>Validation configuration</h2>
-      <p>Validation commands and exclusions come only from committed <code>.crosscode/config.yaml</code> at <code>HEAD</code>:</p>
-      <pre><code>version: 1
-validation:
-  profiles:
-    fast:
-      commands:
-        - pnpm build
-        - pnpm test
-excludedPaths:
-  - private/**
-  - '**/*.pem'</code></pre>
-      <p>
-        Arbitrary validation commands are not accepted through HTTP or CLI
-        arguments. A validation result records its command, exit code, duration,
-        bounded/redacted output, and exact checkpoint tree. If the tree changes
-        while validation runs, the result is invalidated.
-      </p>
-
-      <h2>Development and verification</h2>
-      <pre><code>pnpm build
-pnpm test
-pnpm audit --audit-level high</code></pre>
-      <p>
-        The current suite covers protocol boundaries, authenticated daemon HTTP,
-        Git checkpoints, filesystem capture, SQLite restart recovery, outbox
-        identity, stale-base refusal, exclusions, binary safety, crash rollback,
-        Git transitions, MCP-to-daemon mapping, and real daemon child-process
-        restart behavior.
+        Contribution setup, the workspace layout, and the Postgres-backed test path are in
+        <a href="https://github.com/amsultan2010/crosscode/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a>.
       </p>
 
       <div class="docs-next">
