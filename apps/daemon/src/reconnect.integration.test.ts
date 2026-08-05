@@ -97,9 +97,11 @@ describe.skipIf(!databaseUrl)("PostgreSQL daemon reconnect", () => {
         await sender.capture(`capture ${content.trim()}`);
         await sender.syncRemote(senderClient);
       }
-      await store.pool.query("UPDATE operations SET created_at = now() - interval '40 days' WHERE workspace_id = $1", [workspaceId]);
-      const swept = await store.pruneOperationsByRetention();
-      expect(swept.find((result) => result.workspaceId === workspaceId)).toMatchObject({ deleted: 3, prunedThrough: 3 });
+      // The retention sweep that used to produce this state was deleted with the rest of the
+      // billing-tier machinery; the state it left behind is what this test is about, so it is
+      // now written directly: every operation gone, and the watermark saying so.
+      await store.pool.query("DELETE FROM operations WHERE workspace_id = $1", [workspaceId]);
+      await store.pool.query("UPDATE workspaces SET operations_pruned_through = 3 WHERE id = $1", [workspaceId]);
 
       await receiver.syncRemote(receiverClient);
 

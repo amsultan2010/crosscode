@@ -196,23 +196,18 @@ export async function redeemInvite(directory: string, code: string): Promise<Dae
 }
 
 /**
- * Drops every credential this checkout holds -- a Supabase session and/or a `ccw_`
- * workspace token. The token case matters: it used to return early whenever there was no
- * session, so logout was a no-op that silently left a live bearer credential on disk.
- *
- * Local only. Revoking a workspace token server-side is a workspace owner's action, since
- * a device cannot be trusted to retire itself.
+ * Drops the Supabase session this checkout holds. Local only.
  */
-export async function logout(directory: string): Promise<{ session: boolean; workspaceToken: boolean }> {
+export async function logout(directory: string): Promise<{ session: boolean }> {
   const config = await readDaemonConfig(directory).catch(() => undefined);
-  if (!config?.service) return { session: false, workspaceToken: false };
-  const cleared = { session: Boolean(config.service.session), workspaceToken: Boolean(config.service.workspaceToken) };
+  if (!config?.service) return { session: false };
+  const cleared = { session: Boolean(config.service.session) };
   if (cleared.session) {
     const supabase = getSupabaseClient();
     await supabase.auth.signOut().catch(() => {});
   }
   await deleteSecret(keychainAccount(config));
-  if (!cleared.session && !cleared.workspaceToken) return cleared;
+  if (!cleared.session) return cleared;
   await writeDaemonConfig(directory, { ...config, service: { url: config.service.url } });
   return cleared;
 }

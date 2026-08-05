@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type {
-  EventEnvelope, Project, RemoteOperation, SyncedTransaction, TransactionCreatedEvent
+  EventEnvelope, Project, RemoteOperation, ChangeTransaction, TransactionCreatedEvent
 } from "@crosscode/protocol";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
 import { hashCanonicalPayload } from "./crypto.js";
@@ -799,7 +799,7 @@ function mapOperation(row: OperationRow): StoredOperation {
     // a value the same way wherever it is stored, so this is byte-for-byte what the
     // dropped operations.transaction column returned -- see the byte-identity assertion
     // in store.integration.test.ts.
-    transaction: row.event.payload as SyncedTransaction,
+    transaction: row.event.payload as ChangeTransaction,
     serverSequence: Number(row.server_sequence),
     createdAt: new Date(row.created_at).toISOString()
   };

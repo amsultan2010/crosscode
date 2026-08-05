@@ -28,22 +28,18 @@ export type CoordinationServiceHooks = {
  * hold a reference to the same identity object observe the newly assigned id.
  */
 export class CoordinationServiceClient implements RemoteSyncTransport {
-  // Exactly one of these is set: a Supabase session (from `crosscode login`) or a
-  // `ccw_` workspace token. The workspace token covers the daemon ingest/read surface
-  // only and cannot be refreshed, so a 401 on it is terminal.
+  // A Supabase session from `crosscode login` is the only credential.
   private session: StoredSession | undefined;
-  private readonly workspaceToken: string | undefined;
 
   constructor(
     private readonly identity: CoordinationServiceIdentity,
     private readonly service: NonNullable<DaemonConfig["service"]>,
     private readonly hooks: CoordinationServiceHooks = {}
   ) {
-    if (!service.session && !service.workspaceToken) {
+    if (!service.session) {
       throw new Error("Run 'crosscode login' before starting the daemon");
     }
     this.session = service.session;
-    this.workspaceToken = service.workspaceToken;
   }
 
   get replicaId(): string | undefined {
@@ -69,12 +65,10 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
   }
 
   /**
-   * The credential the live-sync WebSocket subscribes with: a refreshed Supabase access
-   * token, or the `ccw_` workspace token. The gateway accepts either.
+   * The credential the live-sync WebSocket subscribes with: a refreshed Supabase access token.
    */
   async getValidAccessToken(): Promise<string> {
     if (!this.session) {
-      if (this.workspaceToken) return this.workspaceToken;
       throw new Error("Live sync needs a credential; run 'crosscode login'");
     }
     if (isExpiringSoon(this.session.expiresAt)) await this.refreshAccessToken();
@@ -135,7 +129,7 @@ export class CoordinationServiceClient implements RemoteSyncTransport {
 
   private async authorizedRequest(path: string, method: "GET" | "POST" | "PUT", body?: unknown): Promise<unknown> {
     if (!this.session) {
-      return request(this.service.url, path, method, this.workspaceToken, body, true, this.identity.workspaceId);
+      throw new Error("Run 'crosscode login' before starting the daemon");
     }
     try {
       return await request(this.service.url, path, method, this.session.accessToken, body, true, this.identity.workspaceId);
