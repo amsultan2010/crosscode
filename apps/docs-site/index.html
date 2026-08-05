@@ -77,7 +77,8 @@
 
         <p class="hero-foot reveal">
           Node 24 and a Git checkout. Nothing to deploy. Pre-1.0: sign-in and the agent
-          pre-edit hooks are still landing. <a href="#status">What that means</a>.
+          pre-edit hook are still landing, and nothing here has been run end to end on a
+          clean machine. <a href="#status">What that means</a>.
         </p>
       </div>
 
@@ -327,6 +328,12 @@ crosscode start</code></pre>
         </div>
 
         <p class="note">
+          Sign-in prints a URL and a short code and waits: you open the URL, sign in with
+          GitHub, and type the code. Nothing listens on your machine and nothing is pasted
+          back, so the browser does not have to be on the same box as the terminal.
+        </p>
+
+        <p class="note">
           Restart your agent afterwards so it picks up the new MCP server. To bring a
           teammate in, run <code>crosscode invite</code> and send them the link. They sign in
           with GitHub, the page checks they have access to the repo, and it hands them a
@@ -362,9 +369,10 @@ and vice versa. It never touches commits, branches, or remotes. Do the following
    `start` does the whole setup: it signs me in with GitHub, attaches this checkout to a
    project, starts the background daemon, and installs the Crosscode MCP server, skill,
    and pre-edit hook for you. It is safe to re-run.
-3. It will print a GitHub sign-in URL. Show it to me and wait. I have to open it and sign
-   in before the command finishes. Do not try to sign in for me and do not ask me for
-   credentials.
+3. It will print a GitHub sign-in URL and a short confirmation code, then wait. Show me
+   both and stop there. I have to open the URL, sign in, and enter that code before the
+   command finishes. Do not try to sign in for me, do not ask me for credentials, and do
+   not open the URL yourself — it is my browser session that has to sign in, not yours.
 4. Once `start` reports success, tell me I need to restart you (or reconnect MCP servers)
    for the "crosscode" server to be picked up.
 5. Once reconnected, call the `status` tool once to confirm it works. If it fails, show me
@@ -394,7 +402,8 @@ Crosscode to me unless there is a conflict you cannot merge on your own.</code><
         <div class="status-strip reveal">
           <p class="kicker">Pre-1.0, and honest about it</p>
           <ul>
-            <li>GitHub OAuth and the Claude Code and Codex pre-edit hooks are still landing. The merge core and the wire contract are built and tested.</li>
+            <li>The merge core, the daemon, and the wire contract are built and tested. The two things in front of them are not: GitHub sign-in, which every command needs before it does anything, and the pre-edit hook, which is written but wired to the wrong command so it does not fire.</li>
+            <li>Nothing here has been verified end to end on a clean machine. The quickstart is the intended path, not a measured one, and the same goes for any timing claim you read about onboarding.</li>
             <li>There is no end-to-end encryption. The service can read the files it relays, and the privacy section above lists what it keeps.</li>
             <li>There is no web app for syncing and there will not be one. This site is a landing page, sign-in, and docs.</li>
             <li>The hosted service is free. No payment provider is wired up and nothing is chargeable.</li>

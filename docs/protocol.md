@@ -67,6 +67,20 @@ lifecycle. A conflicted path is quarantined until `resolve` arrives with merged 
 An invite code is the human-typed `CC-7F3A-9C2E` form, and redeeming it verifies the
 invitee has access to the repo.
 
+Sign-in sits in front of all of these and is the one part of the surface that is not
+session-authenticated, because its purpose is to produce a session:
+
+| Route | Request | Response |
+| --- | --- | --- |
+| `POST /v1/auth/github/device` | none | `{ deviceCode, userCode, verificationUrl, intervalSeconds, expiresInSeconds }` |
+| `POST /v1/auth/github/device/token` | `{ deviceCode }` | `{ status: "pending" }` **or** `{ status: "complete", session }` |
+
+`session` is the same `{ accessToken, refreshToken, expiresAt }` that
+`syncDaemonConfig.service.session` already pins, so nothing downstream of sign-in has a
+second shape to learn. The CLI parses these two responses in `apps/cli/src/auth.ts`;
+[the onboarding contracts](../docs/onboarding-contracts.md) have the sequence and the
+reasoning.
+
 `changesResponse` is a union, and the second arm matters: `{ status: "cursor-too-old",
 resyncFrom, retentionDays }` means `since` predates retention and the gap cannot be filled
 incrementally. A daemon must resync from full content rather than read it as "nothing new".
@@ -103,6 +117,6 @@ connection descriptor and an `{ ok, data }` envelope. They are listed in
 
 No operation, task, claim, handoff, intent, snapshot, validation, or review shape, and
 nothing an incoming change has to be approved through. The old transaction-shaped schemas
-still sit in `packages/protocol/src/index.ts`
-because code being replaced still imports them; they are deleted when their last consumer
-is, not before.
+are gone: `packages/protocol/src/index.ts` now holds only the daemon's own on-disk shapes —
+its loopback connection descriptor and the config `crosscode start` writes — and re-exports
+`sync.ts`. The two files together are 282 lines.

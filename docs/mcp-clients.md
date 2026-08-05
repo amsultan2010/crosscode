@@ -120,8 +120,14 @@ whatever instructions file that agent reads.
 
 The hook runs before a file edit and tells the agent about a conflict on that exact file
 *before* it writes over it. Without a hook the agent still finds out on its next tool call;
-the hook just moves the moment earlier. It is the same binary as the MCP server, invoked as
-`crosscode hook`.
+the hook just moves the moment earlier.
+
+The command is **`crosscode-mcp hook`**, not `crosscode hook`. Both bins in the published
+package point at the same file and it dispatches on the name it was invoked under, so
+`crosscode` is the CLI and `crosscode-mcp` is the MCP entrypoint — and the hook is a
+subcommand of the MCP entrypoint, not a sixth CLI command. `crosscode hook` is an unknown
+subcommand and exits with a `USAGE_ERROR`, which a hook runner will read as a hook that
+declined to say anything.
 
 It reads the client's hook payload as JSON on stdin (or takes a path as its argument), and:
 
@@ -141,19 +147,29 @@ It reads the client's hook payload as JSON on stdin (or takes a path as its argu
     "PreToolUse": [
       {
         "matcher": "Edit|Write|MultiEdit|NotebookEdit",
-        "hooks": [{ "type": "command", "command": "crosscode hook" }]
+        "hooks": [{ "type": "command", "command": "crosscode-mcp hook" }]
       }
     ]
   }
 }
 ```
 
+If you ran `crosscode start` on 0.1.0, check this block before trusting it: that release
+wrote `crosscode status --json` here instead. That command ignores stdin, so it never
+learns which file is being edited, prints CLI status JSON rather than a hook response, and
+cannot exit 2 to stop an edit.
+
+Re-running `crosscode start` on a later release rewrites that command in place. It does not
+append a second entry and does not leave the old one alone — an installer that skipped a
+hook it had already written would leave every 0.1.0 user broken forever. Editing the
+`command` string by hand does the same job; nothing else in the entry changes.
+
 ### Codex CLI
 
 Codex's hook configuration lives in `~/.codex/config.toml` and its pre-edit event has moved
 between releases, so `crosscode start` writes the entry only for versions it recognizes and
-leaves the file alone otherwise. The command is the same `crosscode hook`, and the payload
-parser looks for the file path in the shapes Codex has used (`tool_input`, `input`,
+leaves the file alone otherwise. The command is the same `crosscode-mcp hook`, and the
+payload parser looks for the file path in the shapes Codex has used (`tool_input`, `input`,
 `arguments`, or a bare `path`), so the entry does not need updating when the field moves.
 
 Where a client has no pre-edit hook at all, MCP alone covers it. That is the intended
@@ -167,5 +183,5 @@ The hook is a subcommand of the MCP entrypoint, so a source checkout runs it as:
 node_modules/.bin/tsx apps/mcp-server/src/main.ts hook
 ```
 
-The installed `crosscode hook` spelling is what `crosscode start` writes into agent
+The installed `crosscode-mcp hook` spelling is what `crosscode start` writes into agent
 configs.

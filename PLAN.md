@@ -68,7 +68,7 @@ does the work.** Crosscode just delivers the right information at the right mome
 | What syncs | Tracked files only, plus a hard denylist (`.env*`, `*.pem`, `*.key`, credentials). |
 | Agents | MCP is the baseline so every agent works. Hooks are a bonus for Claude Code and Codex. |
 | Offline | Durable change log, ~7 day retention, catch-up on reconnect. |
-| Sign-in | GitHub OAuth. The invite page verifies the invitee actually has repo access. |
+| Sign-in | GitHub OAuth, as a device-code handshake: the CLI prints a URL and a short code, the browser signs in and binds the code. No loopback callback server. The invite page verifies the invitee actually has repo access. |
 | Daemon | Per checkout, started by `crosscode start`, auto-restarts on crash. |
 | Hosting | Hosted only. No self-hosting, no `--service` flag. |
 | Presence | No ambient UI. The agent can see who's working on what via MCP. |
@@ -92,14 +92,22 @@ We built all of this once. That's why we lost the plot.
 
 | | Start | Now | Target |
 |---|---|---|---|
-| CLI commands | ~45 | 4 | **5** — `start` `invite` `join` `status` `stop` |
-| MCP tools | 22 | 1 | **4** — `status` `conflicts` `resolve` `pause` |
-| Skills | 0 | 0 | **1** |
-| DB tables | 24 | 11 | **6** |
-| Source lines | ~13,700 | ~6,000 | **~3,500** |
+| CLI commands | ~45 | 5 | **5** — `start` `invite` `join` `status` `stop` |
+| MCP tools | 22 | 4 | **4** — `status` `conflicts` `resolve` `pause` |
+| Skills | 0 | 1 | **1** |
+| DB tables | 24 | 6 | **7** — the six below plus `device_codes` for sign-in |
+| Source lines | ~13,700 | ~7,200 | **~3,500** |
 
-The remaining gap to target is Phase 3's rewrite, not more deleting. What is left is the
-old transaction-shaped protocol and the routes built on it.
+Counted, not remembered. `.command("` in `apps/cli/src/index.ts`, `TOOL_NAMES` in
+`apps/mcp-server/src/tool-catalog.ts`, `CREATE TABLE` in `apps/service/migrations/`, and
+`find apps/*/src packages/*/src -name '*.ts' -not -name '*.test.ts' | xargs wc -l`.
+
+Four of the five rows are at target. Source lines are not, and the honest reading is that
+the number has gone **up** since the last count: the service and the daemon grew while the
+protocol shrank. The gap is no longer one rewrite waiting to happen — `packages/protocol`
+is already down to 282 lines and holds nothing transaction-shaped. Closing the rest means
+deleting from `apps/service` (2,109) and `apps/daemon` (1,893), and nothing on this page
+authorises that yet.
 
 ---
 
@@ -128,13 +136,21 @@ Phase 2 proved all four of those clauses are load-bearing — the earlier draft 
 lost data silently on concurrent edits, and rebroadcast forever without the shadow advance.
 
 **Six tables:** `users` `projects` `project_members` `invites` `replicas` `file_versions`.
-Presence is in-memory in the websocket gateway.
+Presence is in-memory in the websocket gateway. Sign-in adds a seventh, `device_codes`,
+holding a hashed device code and the user code the browser binds to a session; rows are
+short-lived and single-use.
 
 ---
 
 ## Checklist
 
-**Done:** 1 (strip) · 2 (merge core proven). **Next:** 3. Nothing in 3–7 is started.
+**Done:** 1 (strip) · 2 (merge core proven) · 4 (daemon). **Mostly done:** 3, 5, 6.
+**Not started:** 7 beyond the docs rewrite.
+
+A box is ticked when the thing is on `main` and its verify line was actually run. It is not
+ticked because the design is agreed or the code is written on a branch somewhere. The four
+boxes left open below are open for that reason, and every one of them is a thing a user
+would notice.
 
 Phase 2's proof lives in `spike/` — throwaway, outside the build. Read its README before
 starting Phase 4; port the algorithm, not the code.
@@ -157,9 +173,12 @@ starting Phase 4; port the algorithm, not the code.
 - [x] **Verify:** both sides converge byte-identical with zero interaction; same-line case yields exactly one conflict and writes nothing
 
 ### 3 — Protocol + service
-- [ ] Rewrite `packages/protocol` (~1,000 lines → ~150)
+- [x] Rewrite `packages/protocol` — 282 lines, and nothing transaction-shaped left in it
 - [x] 6-table migration, RLS from day one
-- [ ] GitHub OAuth
+- [ ] GitHub OAuth — `POST /v1/auth/github/device` and `/device/token`, a `device_codes`
+      table, and a `/device` page that binds the code. Neither route exists yet, so an
+      unmatched path falls to the bearer check and `crosscode start` stops at a 401. This
+      one blocks `start`, `invite`, and `join` alike.
 - [x] `POST /v1/projects` · `POST /v1/invites` · `POST /v1/invites/:code/redeem` · `GET /v1/changes?since=` · `POST /v1/changes`
 - [x] Websocket `/v1/stream`
 - [x] **Verify:** two replicas, 100 changes in order; cursor catch-up after forced disconnect
@@ -177,12 +196,21 @@ starting Phase 4; port the algorithm, not the code.
 - [x] `start`: config → GitHub sign-in → project → daemon → install MCP + skill + hooks. Idempotent.
 - [x] `invite` → URL; `/join/:code` page verifies repo access → copy-paste block
 - [x] `join <code>` → redeem → same setup
-- [ ] **Verify:** fresh machine, link to syncing in under 60s, typing only the two given lines
+- [ ] **Verify:** fresh machine, link to syncing in under 60s, typing only the two given
+      lines. Blocked on sign-in above, and unstartable until it lands: all three commands
+      need a session before they do anything. Nobody has run this on a clean machine, so
+      the 60-second figure is a target and no page may print it as a measurement.
 
 ### 6 — Agent surface
 - [x] The `crosscode` skill — what's happening in the background · how to resolve a conflict · when to do nothing
 - [x] 4 MCP tools, conflicts piggybacked on every response
-- [ ] Claude Code + Codex hooks firing before file edits
+- [ ] Claude Code + Codex hooks firing before file edits. The hook itself is written and
+      tested (`apps/mcp-server/src/hook-main.ts`) and is simply never reached: `start`
+      installs `crosscode status --json`, which ignores stdin, never learns which file is
+      being edited, and cannot exit 2. The entrypoint that works is `crosscode-mcp hook`.
+      Until that is corrected the MCP fallback covers it — the agent finds out on its next
+      tool call instead of before the write, which is the degradation this phase exists to
+      remove.
 - [ ] **Verify:** two live agent sessions on one repo; neither mentions Crosscode until a real conflict, which the receiving agent resolves unprompted
 
 ### 7 — Docs + harden
@@ -201,3 +229,16 @@ starting Phase 4; port the algorithm, not the code.
 - A file watcher over a large monorepo isn't free — measure, don't assume
 - Three-way convergence is unproven; the spike only ran two replicas. Test before Phase 4
 - Under sustained typing a hot file can defer forever — deferral needs a ceiling
+- **A same-branch `HEAD` move is invisible to the daemon.** `observeGit` reacts to a branch
+  change and to a rebase/merge/bisect in progress, and to nothing else. A plain
+  `git commit` or `git pull` moves `HEAD` without either, so the shadow keeps pointing at a
+  tree that is no longer what both sides agreed on. Detect it and rebase the shadow; the
+  crux is doing that without discarding genuinely-local uncommitted edits or firing a
+  republish on every commit
+- **`git pull` can refuse where the content is identical, and we do not fix it.** Alice
+  commits and pushes what she and Bob both hold uncommitted; Bob's `git pull` refuses with
+  "your local changes would be overwritten", even though the bytes match. Making it succeed
+  would mean touching Bob's working tree to line it up with a commit, which is exactly the
+  magic this product refuses. The scope of the fix is to notice and to tell Bob's agent, so
+  it can clear the way itself. That leaves a real papercut in place on purpose, and it is
+  the first thing a real team will hit

@@ -26,6 +26,11 @@ crosscode --version
 crosscode status
 ```
 
+If your agent is finding out about conflicts on its next tool call rather than before it
+edits a file, check `.claude/settings.json`: `crosscode start` on 0.1.0 wrote the wrong
+command into the `PreToolUse` hook. Re-running `start` on a later release repairs it in
+place, and [MCP client setup](./mcp-clients.md) has the entry that works.
+
 `status` reports the branch, whether the daemon is connected, whether sync is paused, the
 cursor, pending conflicts, and who else is on the branch. It prints no tokens and no file
 contents.
@@ -59,6 +64,14 @@ Redact anything you would not post publicly. We do not need your source code.
   conflict is resolved, so a half-merged file is never published.
 - **History older than about 7 days is gone.** A checkout that was offline longer is told to
   resynchronize rather than handed a partial history.
+- **`git pull` refuses, and the changes it would bring are ones you already have.** A
+  teammate committed and pushed work the two of you were both holding uncommitted, so git
+  sees local modifications in the way and stops, even though the bytes are identical. This
+  is git behaving correctly and Crosscode declining to intervene: making the pull succeed
+  would mean checking files out on your behalf, and Crosscode never touches your tree
+  around a commit. Ask your agent to clear the way — it can stash, pull, and drop the
+  stash — or do it yourself. Nothing is lost while the pull is outstanding; the two
+  checkouts keep syncing uncommitted files in the meantime.
 
 ## Legal
 

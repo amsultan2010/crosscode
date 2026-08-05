@@ -76,10 +76,11 @@
       </p>
 
       <div class="callout">
-        <strong>Pre-1.0.</strong> <code>crosscode-cli</code> is on npm and the install
-        command below works, but GitHub OAuth sign-in is still landing, so
-        <code>crosscode start</code> cannot yet complete setup end to end. See
-        <a href="/docs/limitations.html">current limitations</a>.
+        <strong>Pre-1.0.</strong> <code>crosscode-cli</code> installs from npm and the
+        command below runs, but GitHub sign-in is still landing, so <code>start</code>,
+        <code>invite</code>, and <code>join</code> all stop at that step for now — each one
+        needs a session first. Nothing on this page has been run end to end on a clean
+        machine. See <a href="/docs/limitations.html">current limitations</a>.
       </div>
 
       <h2>Prerequisites</h2>
@@ -101,10 +102,15 @@ crosscode start</code></pre>
         your coding agent.
       </p>
       <p>
-        It prints a GitHub sign-in URL and opens it. On a remote shell or in CI, pass
-        <code>--no-browser</code> to print the URL instead of opening one. Restart your coding
-        agent afterwards, or reconnect its MCP servers, so it picks up the new
-        <code>crosscode</code> server.
+        Sign-in is a device-code handshake: it prints a URL and a short confirmation code,
+        opens the URL, and waits. You sign in with GitHub and type the code into the page.
+        Nothing listens on your machine and nothing is pasted back into the terminal, so the
+        browser does not have to be on the same machine — pass <code>--no-browser</code> on
+        a remote shell or in CI to print the URL instead of opening one.
+      </p>
+      <p>
+        Restart your coding agent afterwards, or reconnect its MCP servers, so it picks up
+        the new <code>crosscode</code> server.
       </p>
 
       <h2>Bring in a teammate</h2>

@@ -50,16 +50,33 @@ applied, until it is resolved.
 never written to; the write is deferred. Syncing pauses entirely during a rebase, merge, or
 bisect, and resyncs afterwards.
 
+**When `HEAD` moves.** Switching branch is a different room: the daemon resets the shadow to
+the new `HEAD`, drops what was in flight, and rejoins. A commit or a pull on the *same*
+branch is subtler — the branch is unchanged and no git operation is in progress, but the
+tree the shadow points at is no longer what both sides agreed on. The daemon has to notice
+and rebase the shadow onto the new `HEAD` without discarding uncommitted work that is
+genuinely local, and without republishing everything each time somebody commits.
+
+What it deliberately does **not** do is touch your working tree to make `git pull` succeed.
+If a teammate commits and pushes changes you are still holding uncommitted, git refuses the
+pull — "your local changes would be overwritten" — even though the content is identical.
+Crosscode could clear that by checking files out for you, and checking files out on your
+behalf around a commit is exactly the magic invariant 1 exists to forbid. Instead it tells
+your agent a pull is waiting, and your agent, which is allowed to run git, clears the way.
+
 ## Coordination service (`apps/service`)
 
-A store-and-forward relay on Supabase-hosted Postgres. Six tables: `users`, `projects`,
-`project_members`, `invites`, `replicas`, `file_versions`. Presence is in-memory in the
-websocket gateway, not a table.
+A store-and-forward relay on Supabase-hosted Postgres. Six tables carry the product:
+`users`, `projects`, `project_members`, `invites`, `replicas`, `file_versions`. Sign-in
+adds a seventh, `device_codes`, holding short-lived pending sign-ins. Presence is in-memory
+in the websocket gateway, not a table.
 
 Routes: `POST /v1/projects`, `POST /v1/invites`, `POST /v1/invites/:code/redeem`,
-`GET /v1/changes?since=`, `POST /v1/changes`, and the websocket at `/v1/stream`. Sign-in is
-GitHub OAuth, and redeeming an invite verifies the invitee actually has access to the repo.
-Row Level Security is on from the first migration.
+`POST /v1/replicas`, `GET /v1/changes?since=`, `POST /v1/changes`, and the websocket at
+`/v1/stream`. Sign-in adds `POST /v1/auth/github/device` and `/device/token` — the only
+routes exempt from the bearer check, because their whole job is to hand out a session to a
+caller who has none. Redeeming an invite verifies the invitee actually has access to the
+repo. Row Level Security is on from the first migration.
 
 The service assigns sequence numbers and fans changes out. It does not merge, classify, or
 inspect anything. Changes are retained about 7 days; a replica whose cursor is older than
@@ -75,8 +92,9 @@ Neither holds sync state. Both talk to the local daemon's loopback HTTP API.
 The CLI is five commands: `start`, `invite`, `join`, `status`, `stop`.
 
 The MCP server is four tools (`status`, `conflicts`, `resolve`, `pause`) and one pre-edit
-hook. Every tool response carries any pending conflicts, so an agent finds out about one on
-its next call regardless of what that call was for. See
+hook, reached as `crosscode-mcp hook`. Every tool response carries any pending conflicts, so
+an agent finds out about one on its next call regardless of what that call was for; the hook
+only moves that moment earlier, to before a write rather than after. See
 [mcp-clients.md](./mcp-clients.md).
 
 ## Where a conflict goes
