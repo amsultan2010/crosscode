@@ -659,6 +659,24 @@ describe("browser CORS", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("access-control-allow-origin")).toBeNull();
   });
+
+  it("answers GET /health with no credentials and no database call", async () => {
+    // Every property read on this store returns a function that throws when called, so a
+    // route that reaches for the database fails the test instead of passing against a mock
+    // that happily returns rows. The probe has to survive an unreachable database to be
+    // worth anything as a check on the deployed function itself.
+    const hostileStore = new Proxy({}, {
+      get: (_target, property) => () => {
+        throw new Error(`/health called the store: ${String(property)}`);
+      }
+    }) as unknown as PgStore;
+    const base = await listen(hostileStore);
+
+    const response = await fetch(`${base}/health`);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, data: { status: "ok", service: "crosscode-service" } });
+  });
 });
 
 async function signToken(userId: string): Promise<string> {

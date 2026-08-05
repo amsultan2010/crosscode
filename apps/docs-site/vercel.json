@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "node ../../scripts/build-serverless.mjs && npm run build",
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/[...path]" },
     { "source": "/v1/(.*)", "destination": "/api/[...path]" }
