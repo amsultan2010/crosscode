@@ -71,14 +71,13 @@
         </div>
 
         <div class="hero-cmd reveal">
-          <code id="hero-command-text">npm install -g @crosscode/cli</code>
+          <code id="hero-command-text">npm install -g crosscode-cli</code>
           <button class="copy-btn" type="button" data-copy-target="hero-command-text">Copy</button>
         </div>
 
         <p class="hero-foot reveal">
-          Node 24 and a Git checkout. Nothing to deploy. Pre-1.0: the package is not on npm
-          yet, so this is what installing will look like rather than something you can run
-          today. <a href="#status">What that means</a>.
+          Node 24 and a Git checkout. Nothing to deploy. Pre-1.0: sign-in and the agent
+          pre-edit hooks are still landing. <a href="#status">What that means</a>.
         </p>
       </div>
 
@@ -322,7 +321,7 @@
             <span class="panel-path">run in your project</span>
             <button class="copy-btn" type="button" data-copy-target="install-command-text">Copy</button>
           </header>
-          <pre class="code"><code id="install-command-text">npm install -g @crosscode/cli
+          <pre class="code"><code id="install-command-text">npm install -g crosscode-cli
 cd your-repo
 crosscode start</code></pre>
         </div>
@@ -357,7 +356,7 @@ and vice versa. It never touches commits, branches, or remotes. Do the following
 2. From this project's Git root, run:
 
    ```
-   npm install -g @crosscode/cli &amp;&amp; crosscode start
+   npm install -g crosscode-cli &amp;&amp; crosscode start
    ```
 
    `start` does the whole setup: it signs me in with GitHub, attaches this checkout to a
@@ -395,7 +394,6 @@ Crosscode to me unless there is a conflict you cannot merge on your own.</code><
         <div class="status-strip reveal">
           <p class="kicker">Pre-1.0, and honest about it</p>
           <ul>
-            <li><code>@crosscode/cli</code> is not published to npm yet, so the install above describes the product rather than something you can run today.</li>
             <li>GitHub OAuth and the Claude Code and Codex pre-edit hooks are still landing. The merge core and the wire contract are built and tested.</li>
             <li>There is no end-to-end encryption. The service can read the files it relays, and the privacy section above lists what it keeps.</li>
             <li>There is no web app for syncing and there will not be one. This site is a landing page, sign-in, and docs.</li>
@@ -467,7 +465,7 @@ Crosscode to me unless there is a conflict you cannot merge on your own.</code><
         <h2>Put it in your team's repo</h2>
         <p class="lede">One command in the checkout you already have.</p>
         <div class="hero-cmd">
-          <code id="close-command-text">npm install -g @crosscode/cli</code>
+          <code id="close-command-text">npm install -g crosscode-cli</code>
           <button class="copy-btn" type="button" data-copy-target="close-command-text">Copy</button>
         </div>
       </div>

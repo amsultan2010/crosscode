@@ -162,7 +162,7 @@ function isMainModule(): boolean {
  * Both published bins point at this file, and this is what tells them apart.
  *
  * npm only auto-picks a package's executable when every `bin` entry names the same file, so
- * shipping two distinct bin targets made `npx @crosscode/cli start` fail outright with
+ * shipping two distinct bin targets made `npx crosscode-cli start` fail outright with
  * "could not determine executable to run". Pointing both at this file satisfies that rule,
  * and dispatching on the name we were invoked under keeps `crosscode-mcp` working.
  *

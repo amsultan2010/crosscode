@@ -34,7 +34,7 @@ rather than by handing an `Error` to an SDK that serializes whatever it finds:
 - Request bodies, headers, cookies and environment variables are never read.
 
 The tests that hold this are `apps/service/src/observability.test.ts`. There is no
-`@sentry/node` dependency: the daemon ships inside the published `@crosscode/cli` tarball,
+`@sentry/node` dependency: the daemon ships inside the published `crosscode-cli` tarball,
 so a runtime dependency there is one more package every user installs, and Sentry ingest is
 one POST of an envelope.
 

@@ -17,7 +17,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
  *    and it goes through redact() first. See the tests in observability.test.ts.
  *
  * There is no @sentry/node dependency on purpose. The daemon is bundled into the
- * published `@crosscode/cli` tarball (scripts/build.mjs), so every runtime dependency the
+ * published `crosscode-cli` tarball (scripts/build.mjs), so every runtime dependency the
  * reporter needs is one more real npm package users install to run a watcher. Sentry's
  * ingest API is one POST of an envelope, which is the whole transport below.
  */

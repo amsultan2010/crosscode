@@ -1,5 +1,5 @@
 {
-  "name": "@crosscode/cli",
+  "name": "crosscode-cli",
   "version": "0.1.0",
   "description": "Real-time codebase sync between teammates. You edit a file, their checkout updates within seconds; same-line conflicts go to your own coding agent over MCP",
   "license": "MIT",

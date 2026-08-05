@@ -21,9 +21,9 @@
 </p>
 
 > [!IMPORTANT]
-> **Pre-1.0, and honest about it.** `@crosscode/cli` is not published to npm yet, so the
-> quickstart below describes the product rather than something you can install today.
-> GitHub OAuth and the agent pre-edit hooks are still landing. There is no end-to-end
+> **Pre-1.0, and honest about it.** `crosscode-cli` is on npm and the quickstart below
+> installs, but GitHub OAuth and the agent pre-edit hooks are still landing, so
+> `crosscode start` does not yet complete end to end. There is no end-to-end
 > encryption: the coordination service can read the files you sync, which
 > [docs/privacy.md](./docs/privacy.md) spells out in full. [PLAN.md](./PLAN.md) is the
 > single source of truth for what is done.
@@ -138,7 +138,7 @@ then hands them a `git clone` and a `crosscode join`.
 ## Quickstart
 
 ```bash
-npm install -g @crosscode/cli
+npm install -g crosscode-cli
 cd your-repo
 crosscode start
 ```
