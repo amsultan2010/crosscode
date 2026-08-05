@@ -1,5 +1,5 @@
-import { randomBytes, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { readdir, readFile } from "node:fs/promises";
 import type { Change, CreateProjectRequest, FileVersion, SyncProject } from "@crosscode/protocol";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
 
@@ -22,6 +22,34 @@ export type StoredInvite = {
   expiresAt: string;
   redeemedAt: string | null;
 };
+
+/**
+ * What the browser hands over at the end of a device handshake, and what the CLI collects.
+ *
+ * `githubToken` is Supabase's `provider_token`: the invitee's own GitHub OAuth token, which
+ * is the only thing that can answer "can this person read owner/repo?" at invite
+ * redemption. Supabase returns it once, to the browser, at sign-in and never persists it,
+ * so the handshake is the single moment it can be passed on -- see the redeem route in
+ * apps/service/src/http.ts. It is absent when the browser sign-in did not produce one.
+ */
+export type DeviceSession = {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: string;
+  githubToken?: string;
+};
+
+export type StartedDeviceCode = { deviceCode: string; userCode: string; expiresAt: string };
+
+/** Why a bind was refused, or that it took. Each case is a different thing to tell a human. */
+export type DeviceBindResult = { status: "unknown" | "expired" | "consumed" | "already-bound" | "bound" };
+
+export type DeviceClaimResult =
+  | { status: "unknown" }
+  | { status: "expired" }
+  | { status: "consumed" }
+  | { status: "pending" }
+  | { status: "complete"; session: DeviceSession };
 
 /**
  * One page of a room's change log, or a refusal to answer this cursor at all because
@@ -47,16 +75,24 @@ export class PgStore {
   }
 
   /**
-   * One file, applied under a session advisory lock. Every test file that shares a
-   * database calls this at startup, and the DROP/CREATE POLICY statements in it need
-   * ACCESS EXCLUSIVE -- two connections racing to replace the same policy deadlock.
+   * Every file in ../migrations, in filename order, applied under a session advisory lock.
+   * Every test file that shares a database calls this at startup, and the DROP/CREATE
+   * POLICY statements in them need ACCESS EXCLUSIVE -- two connections racing to replace
+   * the same policy deadlock.
+   *
+   * Order is the filename's numeric prefix and nothing else. Each file is idempotent on
+   * its own, so this is a fresh-database bootstrap and a re-run of the whole schema at the
+   * same time; there is no applied-migrations table to consult, and none is wanted.
    */
   async migrate(): Promise<void> {
+    const directory = new URL("../migrations/", import.meta.url);
+    const files = (await readdir(directory)).filter((name) => name.endsWith(".sql")).sort();
     const client = await this.pool.connect();
     try {
       await client.query("SELECT pg_advisory_lock(hashtext('crosscode_migrate'))");
-      const sql = await readFile(new URL("../migrations/001_sync.sql", import.meta.url), "utf8");
-      await client.query(sql);
+      for (const file of files) {
+        await client.query(await readFile(new URL(file, directory), "utf8"));
+      }
     } finally {
       await client.query("SELECT pg_advisory_unlock(hashtext('crosscode_migrate'))");
       client.release();
@@ -214,6 +250,94 @@ export class PgStore {
       );
       await client.query("UPDATE invites SET redeemed_at = now(), redeemed_by = $2 WHERE id = $1", [invite.id, input.userId]);
       return { projectId: invite.project_id, repo: invite.repo };
+    });
+  }
+
+  /* -------------------------------------------------------------------- device codes */
+
+  /**
+   * Opens a handshake: one secret the CLI keeps and one short code the human carries to a
+   * browser.
+   *
+   * Both are minted here rather than by the route, because the device code's only defence
+   * is its entropy and the hashing that goes with it, and one place to get that wrong is
+   * better than two. The raw device code is returned once, to this caller, and never
+   * stored -- what lands in the table is its SHA-256.
+   */
+  async startDeviceCode(input: { expiresInSeconds: number }): Promise<StartedDeviceCode> {
+    // Rows are only ever read by an unexpired lookup, so leaving them would cost nothing
+    // but storage. Deleted anyway: a table of dead credentials, even consumed ones, is a
+    // thing worth not having, and a handshake is exactly when there is time to spare.
+    await this.pool.query("DELETE FROM device_codes WHERE expires_at < now() - interval '1 hour'");
+    const expiresAt = new Date(Date.now() + input.expiresInSeconds * 1_000);
+    for (let attempt = 0; ; attempt += 1) {
+      const deviceCode = randomBytes(32).toString("base64url");
+      const userCode = generateUserCode();
+      try {
+        await this.pool.query(
+          "INSERT INTO device_codes (id, device_code_hash, user_code, expires_at) VALUES ($1, $2, $3, $4)",
+          [randomUUID(), hashDeviceCode(deviceCode), userCode, expiresAt]
+        );
+        return { deviceCode, userCode, expiresAt: expiresAt.toISOString() };
+      } catch (error) {
+        // A live user code collided -- ~40 bits against at most a few hundred open
+        // handshakes, so this effectively never happens, but a retry is cheaper than
+        // handing the caller a conflict they cannot act on.
+        if (!isUniqueViolation(error) || attempt >= 4) throw error;
+      }
+    }
+  }
+
+  /**
+   * The browser's half: attaches the signed-in session to the code the human typed.
+   *
+   * The row is locked for the update so two tabs racing on the same code cannot both
+   * believe they bound it, and a code that is expired, unknown, or already bound is
+   * refused rather than overwritten -- rebinding would let a second person redirect a
+   * handshake the first one has already claimed.
+   */
+  async bindDeviceCode(input: { userCode: string; userId: string; session: DeviceSession }): Promise<DeviceBindResult> {
+    return this.transaction(async (client) => {
+      const found = await client.query<{ id: string; user_id: string | null; expires_at: Date; consumed_at: Date | null }>(
+        "SELECT id, user_id, expires_at, consumed_at FROM device_codes WHERE user_code = $1 FOR UPDATE",
+        [input.userCode]
+      );
+      const row = found.rows[0];
+      if (!row) return { status: "unknown" };
+      if (row.consumed_at) return { status: "consumed" };
+      if (row.expires_at.getTime() <= Date.now()) return { status: "expired" };
+      if (row.user_id) return { status: "already-bound" };
+      await client.query(
+        "UPDATE device_codes SET user_id = $2, session = $3::jsonb WHERE id = $1",
+        [row.id, input.userId, JSON.stringify(input.session)]
+      );
+      return { status: "bound" };
+    });
+  }
+
+  /**
+   * The CLI's half: "has anybody signed in for this code yet?", answered at most once with
+   * a session.
+   *
+   * Collection is a single locked read-and-clear, so a code that is polled twice -- by a
+   * retrying client, or by somebody who found the code in a process listing -- hands over
+   * the tokens to whoever got there first and nothing to anyone after. The row survives
+   * with its `consumed_at` set, purely so the second caller can be told which of the two
+   * things happened.
+   */
+  async claimDeviceCode(deviceCode: string): Promise<DeviceClaimResult> {
+    return this.transaction(async (client) => {
+      const found = await client.query<{ id: string; session: DeviceSession | null; expires_at: Date; consumed_at: Date | null }>(
+        "SELECT id, session, expires_at, consumed_at FROM device_codes WHERE device_code_hash = $1 FOR UPDATE",
+        [hashDeviceCode(deviceCode)]
+      );
+      const row = found.rows[0];
+      if (!row) return { status: "unknown" };
+      if (row.consumed_at) return { status: "consumed" };
+      if (row.expires_at.getTime() <= Date.now()) return { status: "expired" };
+      if (!row.session) return { status: "pending" };
+      await client.query("UPDATE device_codes SET consumed_at = now(), session = NULL WHERE id = $1", [row.id]);
+      return { status: "complete", session: row.session };
     });
   }
 
@@ -420,6 +544,37 @@ function generateInviteCode(): string {
   let code = "";
   for (const byte of bytes) code += INVITE_CODE_ALPHABET[byte % INVITE_CODE_ALPHABET.length];
   return `CC-${code.slice(0, 4)}-${code.slice(4)}`;
+}
+
+/**
+ * The device code's lookup key. Exported because the poll route rate-limits on it and must
+ * key its counters on the same non-reversible value the table holds, rather than keeping
+ * the raw code in a map for a minute.
+ */
+export function hashDeviceCode(deviceCode: string): string {
+  return createHash("sha256").update(deviceCode).digest("hex");
+}
+
+// The code a human copies from their terminal into a browser: WDJB-MJHT. Same alphabet as
+// the invite code -- no O/0, I/1 or S/5 to misread off a screen -- and the same eight
+// characters, which is ~40 bits: far too many to guess inside a fifteen-minute window, and
+// short enough that nobody mistypes it twice.
+function generateUserCode(): string {
+  const bytes = randomBytes(8);
+  let code = "";
+  for (const byte of bytes) code += INVITE_CODE_ALPHABET[byte % INVITE_CODE_ALPHABET.length];
+  return `${code.slice(0, 4)}-${code.slice(4)}`;
+}
+
+/**
+ * The one spelling of a user code the table stores: upper case, one dash in the middle.
+ * A human types it with the dash, without it, or in lower case, and all three are the same
+ * code.
+ */
+export function normalizeUserCode(input: string): string | undefined {
+  const bare = input.trim().toUpperCase().replace(/[\s-]/g, "");
+  if (!/^[A-Z0-9]{8}$/.test(bare)) return undefined;
+  return `${bare.slice(0, 4)}-${bare.slice(4)}`;
 }
 
 function isUniqueViolation(error: unknown): boolean {
