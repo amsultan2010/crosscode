@@ -96,8 +96,13 @@ describe.skipIf(!databaseUrl)("sync service on PostgreSQL", () => {
     expect(changes.map((entry) => entry.sequence)).toEqual(Array.from({ length: 100 }, (_unused, index) => index + 1));
     expect(new Set(changes.map((entry) => entry.version.path)).size).toBe(100);
     expect(new Set(changes.map((entry) => entry.replicaId))).toEqual(new Set([alice, bob]));
-    // Every change carries back the payload that was published, not a rebuilt one.
-    expect(changes[0]!.version).toMatchObject({ path: "src/f0.ts", op: "modify", content: "content of src/f0.ts" });
+    // Every change carries back the payload that was published, not a rebuilt one. Asserted
+    // across all 100 rather than on changes[0]: the ten batches are published concurrently, so
+    // which one is assigned sequences 1-10 is genuinely undecided and pinning f0 to the front
+    // only passed when that race happened to fall the right way.
+    for (const entry of changes) {
+      expect(entry.version).toMatchObject({ path: entry.version.path, op: "modify", content: `content of ${entry.version.path}` });
+    }
   });
 
   it("catches a replica up from its cursor after a forced disconnect", async () => {

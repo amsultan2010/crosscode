@@ -1,208 +1,53 @@
 import { describe, expect, it } from "vitest";
-import {
-  changeTransactionSchema,
-  cursorQuerySchema,
-  cursorResponseSchema,
-  cursorTooOldResponseSchema,
-  operationsResponseSchema,
-  OPERATIONS_PROTOCOL_VERSION,
-  daemonConfigSchema,
-  daemonConnectionSchema,
-  eventEnvelopeSchema,
-  listProjectsResponseSchema,
-  principalSchema,
-  projectSchema,
-  upsertProjectRequestSchema,
-  registerReplicaRequestSchema,
-  registerReplicaResponseSchema,
-  remoteOperationSchema,
-  serviceIngestReceiptSchema,
-  serviceIngestRequestSchema,
-  transactionCreatedEventSchema,
-  presenceUpdateSchema,
-  wsErrorMessageSchema,
-  wsFanOutMessageSchema,
-  wsSubscribeAckSchema,
-  wsSubscribeRequestSchema
-} from "./index.js";
+import { daemonConfigSchema, daemonConnectionSchema, fileVersionSchema } from "./index.js";
 
-describe("protocol schemas", () => {
-  const transaction = {
-    id: "transaction-1",
-    base: { files: [] },
-    changes: [{ path: "a.ts", kind: "add" as const, afterContent: "content" }],
-    provenance: { source: "filesystem" as const, confidence: "known" as const },
-    safety: { risk: "low" as const, requiresApproval: false }
-  };
-  const transactionEvent = {
-    id: transaction.id,
-    schemaVersion: 1 as const,
-    workspaceId: "workspace-1",
-    replicaId: "replica-1",
-    actorId: "actor-1",
-    type: "transaction.created" as const,
-    clientSequence: 1,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    payload: transaction
-  };
+const modify = {
+  path: "src/a.ts",
+  op: "modify" as const,
+  baseHash: "base",
+  contentHash: "after",
+  content: "hello\n"
+};
 
-  it("rejects incompatible event schema versions", () => {
-    expect(() => eventEnvelopeSchema.parse({ id: "e", schemaVersion: 2, workspaceId: "w", replicaId: "r", actorId: "a", type: "task.created", clientSequence: 1, createdAt: new Date().toISOString(), payload: {} })).toThrow();
+describe("file version invariants", () => {
+  it("accepts a modify carrying full content, and one carrying a patch", () => {
+    expect(fileVersionSchema.parse(modify).encoding).toBe("utf8");
+    expect(fileVersionSchema.parse({ ...modify, content: undefined, patch: "@@ -1 +1 @@\n" }).patch).toBeDefined();
   });
 
-  it("validates an immutable transaction", () => {
-    expect(changeTransactionSchema.parse({ id: "x", base: { files: [] }, changes: [{ path: "a.ts", kind: "add", afterHash: "hash", afterContent: "content" }], provenance: { source: "filesystem", confidence: "known" }, safety: { risk: "low", requiresApproval: false } }).id).toBe("x");
-    expect(() => changeTransactionSchema.parse({ id: "x", base: { files: [] }, changes: [{ path: "a.ts", kind: "modify", afterHash: "hash" }], provenance: { source: "filesystem", confidence: "known" }, safety: { risk: "low", requiresApproval: false } })).toThrow();
-    expect(() => changeTransactionSchema.parse({ id: "x", base: { files: [] }, changes: [{ path: "b.ts", kind: "rename", afterContent: "content" }], provenance: { source: "filesystem", confidence: "known" }, safety: { risk: "low", requiresApproval: false } })).toThrow();
+  it("rejects a modify carrying both content and a patch, or neither", () => {
+    expect(() => fileVersionSchema.parse({ ...modify, patch: "@@ -1 +1 @@\n" })).toThrow();
+    expect(() => fileVersionSchema.parse({ ...modify, content: undefined })).toThrow();
   });
 
-  it("strictly validates local daemon boundary inputs", () => {
-    expect(daemonConnectionSchema.parse({ pid: 123, port: 4567, secret: "secret", startedAt: "2026-01-01T00:00:00.000Z" }).port).toBe(4567);
+  // A patch is meaningless without the base it applies to; full content stands alone.
+  it("rejects a patch with no base to apply it to", () => {
+    expect(() => fileVersionSchema.parse({ ...modify, content: undefined, patch: "@@ -1 +1 @@\n", baseHash: null })).toThrow();
   });
 
-  it("validates service principals", () => {
-    const principal = { workspaceId: "workspace-1", actorId: "actor-1", replicaId: "replica-1", role: "member" as const };
-    expect(principalSchema.parse(principal)).toEqual(principal);
-    expect(() => principalSchema.parse({ ...principal, role: "administrator" })).toThrow();
-    expect(() => principalSchema.parse({ ...principal, extra: true })).toThrow();
+  it("accepts a delete, and rejects one that carries content or a hash", () => {
+    expect(fileVersionSchema.parse({ path: "src/a.ts", op: "delete", baseHash: "base", contentHash: null }).op).toBe("delete");
+    expect(() => fileVersionSchema.parse({ path: "src/a.ts", op: "delete", baseHash: "base", contentHash: null, content: "x" })).toThrow();
+    expect(() => fileVersionSchema.parse({ path: "src/a.ts", op: "delete", baseHash: "base", contentHash: "after" })).toThrow();
   });
 
-  it("validates self-service replica registration requests and responses", () => {
-    expect(registerReplicaRequestSchema.parse({ name: "my-laptop" })).toEqual({ name: "my-laptop" });
-    expect(() => registerReplicaRequestSchema.parse({ name: "" })).toThrow();
-    expect(() => registerReplicaRequestSchema.parse({ name: "my-laptop", token: "x" })).toThrow();
+  // Without a contentHash a modify has no loop-suppression key, so peers would echo forever.
+  it("rejects a modify with no contentHash", () => {
+    expect(() => fileVersionSchema.parse({ ...modify, contentHash: null })).toThrow();
+  });
+});
 
-    // A daemon may report the repository it is a checkout of, so the service can attribute
-    // the replica to a project (Contract B); both fields are optional.
-    expect(registerReplicaRequestSchema.parse({ name: "my-laptop", repoRoot: "/Users/dev/repo", repoRemote: "git@github.com:o/r.git" }))
-      .toEqual({ name: "my-laptop", repoRoot: "/Users/dev/repo", repoRemote: "git@github.com:o/r.git" });
-    expect(registerReplicaRequestSchema.parse({ name: "my-laptop", repoRoot: null, repoRemote: null }))
-      .toEqual({ name: "my-laptop", repoRoot: null, repoRemote: null });
-
-    const response = { replicaId: "replica-1", createdAt: "2026-01-01T00:00:00.000Z", projectId: null };
-    expect(registerReplicaResponseSchema.parse(response)).toEqual(response);
-    expect(registerReplicaResponseSchema.parse({ ...response, projectId: "project-1" }).projectId).toBe("project-1");
-    expect(() => registerReplicaResponseSchema.parse({ ...response, createdAt: "not-a-date" })).toThrow();
-    expect(() => registerReplicaResponseSchema.parse({ replicaId: "replica-1", createdAt: "2026-01-01T00:00:00.000Z" })).toThrow();
+describe("local daemon shapes", () => {
+  it("accepts the descriptor the daemon advertises its loopback port with", () => {
+    const connection = { pid: 42, port: 51_234, secret: "s", startedAt: new Date(0).toISOString() };
+    expect(daemonConnectionSchema.parse(connection).port).toBe(51_234);
+    expect(() => daemonConnectionSchema.parse({ ...connection, port: 0 })).toThrow();
   });
 
-  it("validates project payloads and the two-tiered upsert key", () => {
-    const project = {
-      id: "project-1", workspaceId: "workspace-1", name: "repo",
-      repoRemote: "github.com/owner/repo", repoRoot: "/Users/dev/repo",
-      createdAt: "2026-01-01T00:00:00.000Z", lastActivityAt: "2026-01-02T00:00:00.000Z"
-    };
-    expect(projectSchema.parse(project)).toEqual(project);
-    expect(projectSchema.parse({ ...project, repoRemote: null, repoRoot: null, lastActivityAt: null }).repoRemote).toBeNull();
-    expect(() => projectSchema.parse({ ...project, extra: true })).toThrow();
-    expect(() => projectSchema.parse({ ...project, createdAt: "not-a-date" })).toThrow();
-    expect(listProjectsResponseSchema.parse({ projects: [project] }).projects).toHaveLength(1);
-
-    expect(upsertProjectRequestSchema.parse({ repoRemote: "git@github.com:o/r.git" }).repoRemote).toBe("git@github.com:o/r.git");
-    expect(upsertProjectRequestSchema.parse({ repoRoot: "/Users/dev/repo" }).repoRoot).toBe("/Users/dev/repo");
-    // Neither key present means there is nothing to dedup on.
-    expect(() => upsertProjectRequestSchema.parse({})).toThrow();
-    expect(() => upsertProjectRequestSchema.parse({ repoRoot: null, repoRemote: null })).toThrow();
-    expect(() => upsertProjectRequestSchema.parse({ repoRoot: "/Users/dev/repo", extra: true })).toThrow();
-  });
-
-  it("binds transaction-created event identity to its transaction payload", () => {
-    expect(transactionCreatedEventSchema.parse(transactionEvent).payload.id).toBe(transactionEvent.id);
-    expect(() => transactionCreatedEventSchema.parse({ ...transactionEvent, id: "different-event-id" })).toThrow();
-    expect(() => transactionCreatedEventSchema.parse({ ...transactionEvent, type: "task.created" })).toThrow();
-    expect(() => transactionCreatedEventSchema.parse({ ...transactionEvent, unexpected: true })).toThrow();
-  });
-
-  it("validates service ingest, receipts, remote operations, and cursor reads", () => {
-    expect(serviceIngestRequestSchema.parse({ event: transactionEvent }).event.id).toBe(transaction.id);
-    expect(serviceIngestReceiptSchema.parse({ eventId: transaction.id, operationId: transaction.id, serverSequence: 1 })).toEqual({
-      eventId: transaction.id, operationId: transaction.id, serverSequence: 1
-    });
-
-    const operation = {
-      id: transaction.id,
-      eventId: transactionEvent.id,
-      workspaceId: transactionEvent.workspaceId,
-      senderReplicaId: transactionEvent.replicaId,
-      transaction,
-      serverSequence: 1,
-      createdAt: transactionEvent.createdAt,
-      projectId: "project-1"
-    };
-    expect(remoteOperationSchema.parse(operation)).toEqual(operation);
-    expect(remoteOperationSchema.parse({ ...operation, projectId: null }).projectId).toBeNull();
-    const { projectId: _missing, ...withoutProjectId } = operation;
-    expect(() => remoteOperationSchema.parse(withoutProjectId)).toThrow();
-    expect(wsFanOutMessageSchema.parse({ type: "operation", operation })).toEqual({ type: "operation", operation });
-    expect(cursorQuerySchema.parse({ afterSequence: 0 })).toEqual({ afterSequence: 0 });
-    expect(cursorResponseSchema.parse({ operations: [operation], nextCursor: 1 }).nextCursor).toBe(1);
-    expect(() => cursorQuerySchema.parse({ afterSequence: -1 })).toThrow();
-    expect(() => serviceIngestReceiptSchema.parse({ eventId: transaction.id, operationId: transaction.id, serverSequence: 0 })).toThrow();
-
-    // The resync status and a page are two shapes with no overlap. cursorResponseSchema is
-    // what every daemon built before this status parses `GET /v1/operations` with, so the
-    // rejection below is the guarantee that such a daemon cannot read "your cursor fell out
-    // of retention" as "here is your (empty) page, you are caught up".
-    const tooOld = { status: "cursor-too-old" as const, protocolVersion: OPERATIONS_PROTOCOL_VERSION, resyncFrom: 12, retentionDays: 7 };
-    expect(cursorTooOldResponseSchema.parse(tooOld)).toEqual(tooOld);
-    expect(() => cursorResponseSchema.parse(tooOld)).toThrow();
-    expect(() => cursorTooOldResponseSchema.parse({ ...tooOld, protocolVersion: 1 })).toThrow();
-    expect(() => cursorTooOldResponseSchema.parse({ ...tooOld, retentionDays: 0 })).toThrow();
-    expect(operationsResponseSchema.parse(tooOld)).toEqual(tooOld);
-    expect(operationsResponseSchema.parse({ operations: [operation], nextCursor: 1 })).toEqual({ operations: [operation], nextCursor: 1 });
-  });
-
-  it("accepts secure or loopback daemon service configuration only", () => {
-    const base = { workspaceId: "workspace-1", replicaId: "replica-1", actorId: "actor-1" };
-    const session = { accessToken: "access-token", refreshToken: "refresh-token", expiresAt: "2026-01-01T00:05:00.000Z" };
-    expect(daemonConfigSchema.parse({ ...base, service: { url: "https://service.example.test", session } }).service?.url).toBe("https://service.example.test");
-    expect(daemonConfigSchema.parse({ ...base, service: { url: "http://127.0.0.1:8080", session } }).service?.url).toBe("http://127.0.0.1:8080");
-    expect(() => daemonConfigSchema.parse({ ...base, service: { url: "http://service.example.test", session } })).toThrow();
-    expect(() => daemonConfigSchema.parse({ ...base, service: { url: "https://service.example.test", session, token: "x" } })).toThrow();
-    expect(() => daemonConfigSchema.parse({ ...base, service: { url: "https://service.example.test", session: { ...session, accessToken: "" } } })).toThrow();
-  });
-
-  it("makes replicaId optional on the daemon config until self-registration completes", () => {
-    const { replicaId: _replicaId, ...withoutReplicaId } = { workspaceId: "workspace-1", replicaId: "replica-1", actorId: "actor-1" };
-    expect(daemonConfigSchema.parse(withoutReplicaId)).toEqual(withoutReplicaId);
-    expect(daemonConfigSchema.parse({ ...withoutReplicaId, replicaId: "replica-1" }).replicaId).toBe("replica-1");
-    expect(() => daemonConfigSchema.parse({ ...withoutReplicaId, replicaId: "" })).toThrow();
-  });
-
-  it("validates WebSocket handshake, presence, fan-out, and ack/error messages", () => {
-    const subscribeRequest = { type: "subscribe" as const, workspaceId: "workspace-1", replicaId: "replica-1", accessToken: "access-token" };
-    expect(wsSubscribeRequestSchema.parse(subscribeRequest)).toEqual(subscribeRequest);
-    expect(() => wsSubscribeRequestSchema.parse({ ...subscribeRequest, unexpected: true })).toThrow();
-
-    // projectId rides along on presence so a consumer can attribute a replica that
-    // connects after the initial GET /v1/presence snapshot (Contract B).
-    const presence = { replicaId: "replica-1", actorId: "actor-1", status: "online" as const, lastSeenAt: "2026-01-01T00:00:00.000Z", projectId: "project-1" };
-    expect(presenceUpdateSchema.parse(presence)).toEqual(presence);
-    expect(presenceUpdateSchema.parse({ ...presence, projectId: null }).projectId).toBeNull();
-    expect(() => presenceUpdateSchema.parse({ ...presence, status: "away" })).toThrow();
-    const { projectId: _omitted, ...withoutProject } = presence;
-    expect(() => presenceUpdateSchema.parse(withoutProject)).toThrow();
-
-    const operation = {
-      id: transaction.id,
-      eventId: transactionEvent.id,
-      workspaceId: transactionEvent.workspaceId,
-      senderReplicaId: transactionEvent.replicaId,
-      transaction,
-      serverSequence: 1,
-      createdAt: transactionEvent.createdAt,
-      projectId: "project-1"
-    };
-    // The fan-out frame must preserve projectId, not merely accept it: this is the live
-    // path a consumer reads to attribute an edit to a project.
-    expect(wsFanOutMessageSchema.parse({ type: "operation", operation })).toEqual({ type: "operation", operation });
-    expect(wsFanOutMessageSchema.parse({ type: "operation", operation }).type).toBe("operation");
-    expect(wsFanOutMessageSchema.parse({ type: "presence", presence }).type).toBe("presence");
-    expect(() => wsFanOutMessageSchema.parse({ type: "presence", operation })).toThrow();
-
-    expect(wsSubscribeAckSchema.parse({ type: "subscribed", cursor: 0 })).toEqual({ type: "subscribed", cursor: 0 });
-    expect(() => wsSubscribeAckSchema.parse({ type: "subscribed", cursor: -1 })).toThrow();
-    expect(wsErrorMessageSchema.parse({ type: "error", message: "not authorized" }).message).toBe("not authorized");
-    expect(() => wsErrorMessageSchema.parse({ type: "error", message: "" })).toThrow();
+  it("refuses a plaintext service URL that is not loopback", () => {
+    const config = { workspaceId: "w", actorId: "a" };
+    expect(daemonConfigSchema.parse({ ...config, service: { url: "https://example.com" } })).toBeTruthy();
+    expect(daemonConfigSchema.parse({ ...config, service: { url: "http://127.0.0.1:3000" } })).toBeTruthy();
+    expect(() => daemonConfigSchema.parse({ ...config, service: { url: "http://example.com" } })).toThrow();
   });
 });

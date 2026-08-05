@@ -21,8 +21,11 @@ BEGIN;
 -- The authenticated caller's id, or NULL for an unauthenticated connection. Mirrors what
 -- Supabase's auth.uid() does, but reads the claim directly so this file also applies to a
 -- plain Postgres (a local test database has no `auth` schema).
+-- search_path is pinned empty: a mutable one lets a caller resolve the function's
+-- references against a schema they control.
 CREATE OR REPLACE FUNCTION crosscode_uid() RETURNS uuid
   LANGUAGE sql STABLE
+  SET search_path = ''
   AS $$
     SELECT nullif(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub', '')::uuid;
   $$;
