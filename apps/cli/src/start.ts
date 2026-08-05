@@ -15,10 +15,10 @@ import { type McpClient, type McpRegistration, registerMcpServer, resolveMcpLaun
 /**
  * `crosscode start` -- the one command between a stranger and a running, synced daemon.
  *
- * Every step it performs already existed as its own command (`init`, `login`, `join`, the
- * daemon that an MCP tool call would have started, and a hand-written MCP config). What did
- * not exist was the path through them, and a five-command setup is where a first-time user
- * is lost, not at any one of the five. So this adds no new capability on purpose: it is the
+ * Every step it performs already existed as its own command (init, sign-in, join, the daemon
+ * that an MCP tool call would have started, and a hand-written MCP config). What did not
+ * exist was the path through them, and a five-command setup is where a first-time user is
+ * lost, not at any one of the five. So this adds no new capability on purpose: it is the
  * ordering, plus the defaults that make every flag optional.
  *
  * Each step is idempotent and skipped when already satisfied, so re-running it in a
@@ -29,7 +29,6 @@ export type StartOptions = {
   email?: string;
   password?: string;
   web?: string;
-  service?: string;
   /** false when --no-browser was passed: print the sign-in URL instead of opening it. */
   browser?: boolean;
   /** false when --no-mcp was passed. */
@@ -45,7 +44,7 @@ export type StartResult = {
   workspaceId: string;
   workspaceName?: string;
   actorId: string;
-  service: { url: string; signedIn: boolean; paired: boolean };
+  service: { url: string; signedIn: boolean };
   daemon: { alreadyRunning: boolean };
   mcp?: { client: McpClient; path: string; command: string; args: string[] };
 };
@@ -62,7 +61,7 @@ export async function start(directory: string, options: StartOptions = {}): Prom
   }
 
   let config = await ensureInitialized(directory, report);
-  const serviceUrl = options.service ?? config.service?.url ?? resolveDefaultServiceUrl();
+  const serviceUrl = config.service?.url ?? resolveDefaultServiceUrl();
 
   config = await ensureSignedIn(directory, config, { ...options, serviceUrl }, report);
   config = await ensureWorkspace(directory, config, report);
@@ -75,14 +74,14 @@ export async function start(directory: string, options: StartOptions = {}): Prom
     workspaceId: config.workspaceId,
     workspaceName: config.workspaceName,
     actorId: config.actorId,
-    service: { url: config.service?.url ?? serviceUrl, signedIn: Boolean(config.service?.session), paired: Boolean(config.service?.workspaceToken) },
+    service: { url: config.service?.url ?? serviceUrl, signedIn: Boolean(config.service?.session) },
     daemon,
     mcp: mcp && { client: mcp.registration.client, path: mcp.registration.path, command: mcp.launch.command, args: mcp.launch.args }
   };
 }
 
 /**
- * `crosscode init`, minus the failure when it has already run. Existence of the file is
+ * Initialization, minus the failure when it has already run. Existence of the file is
  * checked separately from reading it so that a config whose session moved to the OS
  * keychain and cannot be read surfaces that error instead of being silently overwritten.
  */
@@ -107,9 +106,6 @@ async function ensureInitialized(directory: string, report: (line: string) => vo
  * both a "Sign in" and a "Sign up" tab, so account creation and returning both land here
  * with no flag to choose between them -- which is the whole reason the browser flow is the
  * default rather than prompting for a password in the terminal.
- *
- * A checkout paired with `crosscode join --pair` already holds a workspace token and is
- * left alone: it is deliberately attached to a workspace without a user account.
  */
 async function ensureSignedIn(
   directory: string,
@@ -121,11 +117,6 @@ async function ensureSignedIn(
     report("Already signed in for this checkout.");
     return config;
   }
-  if (config.service?.workspaceToken) {
-    report("This checkout is paired to a workspace with a device token; leaving it as it is.");
-    return config;
-  }
-
   const email = options.email ?? process.env.CROSSCODE_EMAIL;
   const password = options.password ?? process.env.CROSSCODE_PASSWORD;
   if (email || password) {
@@ -133,7 +124,7 @@ async function ensureSignedIn(
       throw new CliError(
         "USAGE_ERROR",
         "The headless sign-in needs both --email and --password",
-        "Pass both flags (or set CROSSCODE_EMAIL and CROSSCODE_PASSWORD), or drop them to sign in in a browser. Creating an account headlessly is `crosscode signup`."
+        "Pass both flags (or set CROSSCODE_EMAIL and CROSSCODE_PASSWORD), or drop them to sign in in a browser."
       );
     }
     report(`Signing in to ${options.serviceUrl} as ${email}…`);
@@ -148,7 +139,7 @@ async function ensureSignedIn(
     throw new CliError(
       "LOGIN_NOT_INTERACTIVE",
       "Signing in through a browser needs a terminal; this process has no TTY",
-      "Pass --no-browser to print the sign-in URL, or --email <email> --password <password> for the headless sign-in. New accounts: `crosscode signup`."
+      "Pass --no-browser to print the sign-in URL, or --email <email> --password <password> for the headless sign-in."
     );
   }
   report("Opening your browser to sign in or create an account…");
@@ -165,8 +156,8 @@ async function ensureSignedIn(
 /**
  * The account's email becomes this replica's actorId, because that is what the service
  * records as a member's actor_id (it comes from the verified token's email claim). Leaving
- * the local Unix username in place would attribute this checkout's presence, claims, and
- * proposals to an actor the workspace has never heard of.
+ * the local Unix username in place would attribute this checkout's presence to an actor the
+ * workspace has never heard of.
  */
 async function adoptAccountIdentity(directory: string, config: DaemonConfig, email: string): Promise<DaemonConfig> {
   if (!email || config.actorId === email) return config;
