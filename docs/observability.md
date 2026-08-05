@@ -135,8 +135,20 @@ link click on the landing page and the form submit that follows it are one event
 ### 7. Confirm the health route the uptime job watches
 
 `.github/workflows/uptime.yml` probes `https://www.getcrosscode.dev/api/v1/health` by
-default. If the route ends up anywhere else, set a repository variable instead of editing
-the workflow: **Settings, Secrets and variables, Actions, Variables, New repository
+default, **and that is the wrong path.** The service answers health at `/health` and
+`/healthz`, so behind the `/api` prefix the live routes are:
+
+```
+https://www.getcrosscode.dev/api/health     → 200
+https://www.getcrosscode.dev/api/healthz    → 200
+https://www.getcrosscode.dev/api/v1/health  → 401   ← what the workflow probes
+```
+
+There is no `/v1/health`; the path falls through to the bearer check like any other
+unmatched route. So the check fails on every run and reports an outage that is not
+happening — the worst possible state for an alert, because it teaches everyone to ignore
+it. Point it at `/api/health`, either by fixing the default in the workflow or by setting a
+repository variable: **Settings, Secrets and variables, Actions, Variables, New repository
 variable**, named `CROSSCODE_HEALTH_URL`.
 
 ### 8. Create the `uptime` label
@@ -157,9 +169,9 @@ A GitHub issue nobody is watching is not an alert. Do one of these:
   channel you actually read.
 
 Then run the workflow by hand once (**Actions, Uptime, Run workflow**) and check the run
-log. Today, with the API answering 500, this run should open an issue. That is the
-end-to-end proof that the alert path works, and it is worth doing before the API is fixed
-rather than after.
+log. Point `CROSSCODE_HEALTH_URL` at a path you know is broken first, confirm an issue
+opens, then point it back at `/api/health` and confirm the issue closes. Proving both
+directions is the point: an alert that fires is only half of a working alert path.
 
 ## What the uptime check does
 
@@ -182,7 +194,8 @@ after two consecutive failures, and keep this workflow as the backstop.
 
 ### When the uptime check fires
 
-1. Open the URL yourself. `curl -i https://www.getcrosscode.dev/api/v1/health`.
+1. Open the URL yourself. `curl -i https://www.getcrosscode.dev/api/health`. A 401 here
+   means the probe URL is wrong, not that the service is down — see step 7.
 2. If it answers 500, read the Vercel function logs for the deployment:
    **Vercel, the project, Logs**, filter on status 500. The `ERR_MODULE_NOT_FOUND` class of
    failure appears there and nowhere else, because the function never gets far enough to
@@ -196,10 +209,11 @@ after two consecutive failures, and keep this workflow as the backstop.
 
 ## Daemon crash reporting
 
-The daemon runs on a user's machine, watching their checkout. `docs/privacy.md` says the
-service cannot read your code and that encryption is on by default with nothing to switch
-on. A reporter that defaulted to sending anything from a developer's laptop would
-contradict that page, so daemon reporting needs two variables, not one:
+The daemon runs on a user's machine, watching their checkout. `docs/privacy.md` is blunt
+that the coordination service can read the files you sync, and the only reason that is
+survivable is that the list of what leaves your machine is short and stated. A crash
+reporter that switched itself on and started sending from a developer's laptop would add an
+unlisted item to that list. So daemon reporting needs two variables, not one:
 
 ```bash
 export CROSSCODE_ERROR_REPORTING=on
@@ -214,14 +228,15 @@ basename plus line number, which daemon stage failed (`startup`, `watch`, `publi
 `sync`), and the daemon version. What is not sent: file contents, paths, diffs, repository
 name, remote URL, email, workspace id, device id.
 
-For a self-hoster's own Sentry project, use a separate project from the service so daemon
-noise does not bury service outages.
+Use a separate Sentry project from the service, so daemon noise from user machines does not
+bury a service outage.
 
-## Coordination note
+## Where the include actually is
 
-`apps/docs-site/src/analytics.js` is a standalone module. It needs
-`<script type="module" src="/src/analytics.js"></script>` in `apps/docs-site/index.html`,
-which another workstream owns. It needs the same include in `apps/docs-site/auth/signup.html`
-for the two sign-up events to fire from the sign-up page itself. Without the second include,
-`sign_up_started` still fires from a click on a link to `/auth/signup.html` on the landing
-page, and `sign_up_completed` never fires.
+`apps/docs-site/src/analytics.js` is a standalone module and has to be included per page.
+It is included in `apps/docs-site/index.html` and **not** in
+`apps/docs-site/auth/signup.html`. So today `landing_page_view` and
+`install_prompt_copied` fire, `sign_up_started` fires from a click on the landing page's
+link to `/auth/signup.html`, and `sign_up_completed` never fires at all — the module is not
+loaded on the page where the form is submitted. Read the funnel accordingly, or add the
+same include to the sign-up page.

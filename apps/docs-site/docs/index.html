@@ -143,6 +143,13 @@
       </p>
 
       <h2>What works today</h2>
+      <p>
+        Below is what is built and tested. What is <em>not</em> yet is short and specific:
+        GitHub sign-in, which every command needs before it does anything, and the pre-edit
+        hook, which is written but registered under the wrong command. Neither has been run
+        end to end on a clean machine. <a href="/docs/limitations.html">Current
+        limitations</a> is the page that says so in full, and it is worth reading first.
+      </p>
 
       <h3>The merge core</h3>
       <ul>
@@ -157,7 +164,7 @@
         <li>One per checkout, started by <code>crosscode start</code>, restarted automatically if it crashes</li>
         <li>Watches tracked files with a hard denylist, and debounces about 300ms per file so an edit is sent once it settles</li>
         <li>Never writes a file you or your agent touched in the last ten seconds</li>
-        <li>Pauses during a rebase, merge, or bisect, then resyncs</li>
+        <li>Pauses during a rebase, merge, or bisect, then resyncs. A plain commit or pull on the branch you are already on is a different case, and one it does not yet notice</li>
         <li>Reconnects and catches up from its cursor, or resyncs from full content when the cursor is too old</li>
         <li>Binds to loopback only, with a mode-<code>0600</code> connection descriptor in the Git directory</li>
       </ul>
@@ -165,7 +172,7 @@
       <h3>The service</h3>
       <ul>
         <li>A store-and-forward relay on Supabase-hosted PostgreSQL, with Row Level Security from the first migration</li>
-        <li>Six tables. Presence is in memory in the websocket gateway, not a table</li>
+        <li>Six tables carry the product, plus one more for pending sign-ins. Presence is in memory in the websocket gateway, not a table</li>
         <li>Sequence numbers, fan-out, cursor-based catch-up, and about 7 days of retention</li>
         <li>It does not merge, classify, or inspect anything</li>
       </ul>

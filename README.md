@@ -21,10 +21,21 @@
 </p>
 
 > [!IMPORTANT]
-> **Pre-1.0, and honest about it.** `crosscode-cli` is on npm and the quickstart below
-> installs, but GitHub OAuth and the agent pre-edit hooks are still landing, so
-> `crosscode start` does not yet complete end to end. There is no end-to-end
-> encryption: the coordination service can read the files you sync, which
+> **Pre-1.0, and specific about it.** `crosscode-cli` installs from npm, and the sync
+> engine underneath it — the shadow ref, the three-way merge, hot-file deferral, offline
+> catch-up — is built and tested. Two things in front of it are not finished, and both are
+> visible from the quickstart below:
+>
+> - **Sign-in.** `crosscode start` opens with a GitHub device-code handshake, and the
+>   service routes it calls are still landing. Until they do, `start`, `invite`, and `join`
+>   all stop at the sign-in step, because all three need a session first.
+> - **The pre-edit hook.** The hook is written and tested, but `start` currently registers
+>   the wrong command for it, so it does not fire. Conflicts still reach your agent — they
+>   ride on every MCP tool response — just on its next call rather than before it writes.
+>
+> Nothing here has been run end to end on a clean machine, so treat the quickstart as the
+> intended path rather than a measured one. There is also no end-to-end encryption: the
+> coordination service can read the files you sync, which
 > [docs/privacy.md](./docs/privacy.md) spells out in full. [PLAN.md](./PLAN.md) is the
 > single source of truth for what is done.
 
@@ -148,6 +159,11 @@ attaches this checkout to a project, starts the background daemon, and installs 
 server, the `crosscode` skill, and the pre-edit hooks for your coding agent. Restart your
 agent afterwards so it picks up the new MCP server.
 
+Sign-in prints a URL and a short confirmation code and waits. You open the URL, sign in
+with GitHub, and enter the code; there is no callback server listening on your machine and
+nothing to paste back into the terminal. On a remote shell, `--no-browser` prints the URL
+instead of opening one.
+
 To bring a teammate in:
 
 ```bash
@@ -201,8 +217,9 @@ Every response from every tool carries any pending conflicts, whether the tool w
 them or not. That is deliberate. An agent only looks at anything when it is invoked, so a
 conflict that arrives while it is idle would otherwise sit unseen. This way it trips over
 one the next time it does anything at all. Claude Code and Codex additionally get a hook
-that runs before a file edit, so a conflict on a file is known before the agent writes over
-it.
+that runs before a file edit, which moves that moment earlier still — a conflict on a file
+is known before the agent writes over it rather than after. The hook is a bonus on top of
+MCP, not a requirement: see the note at the top for where its wiring currently stands.
 
 The bar this is built to: **neither side's agent mentions Crosscode until a real conflict**,
 which the receiving agent then resolves without being asked. See

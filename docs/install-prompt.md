@@ -22,9 +22,10 @@ and vice versa. It never touches commits, branches, or remotes. Do the following
    `start` does the whole setup: it signs me in with GitHub, attaches this checkout to a
    project, starts the background daemon, and installs the Crosscode MCP server, skill,
    and pre-edit hook for you. It is safe to re-run.
-3. It will print a GitHub sign-in URL. Show it to me and wait. I have to open it and sign
-   in before the command finishes. Do not try to sign in for me and do not ask me for
-   credentials.
+3. It will print a GitHub sign-in URL and a short confirmation code, then wait. Show me
+   both and stop there. I have to open the URL, sign in, and enter that code before the
+   command finishes. Do not try to sign in for me, do not ask me for credentials, and do
+   not open the URL yourself — it is my browser session that has to sign in, not yours.
 4. Once `start` reports success, tell me I need to restart you (or reconnect MCP servers)
    for the "crosscode" server to be picked up.
 5. Once reconnected, call the `status` tool once to confirm it works. If it fails, show me
@@ -48,6 +49,11 @@ Crosscode to me unless there is a conflict you cannot merge on your own.
   writes it for versions whose format it recognizes; otherwise add the three-line entry
   from [`mcp-clients.md`](./mcp-clients.md) by hand.
 - Signing in needs a browser once, for GitHub OAuth. There is no headless path, because the
-  invite flow verifies repo access through GitHub.
+  invite flow verifies repo access through GitHub. It is a device-code handshake — a URL
+  and a code the user types into the page — so the browser does not have to be on the same
+  machine as the terminal, and nothing has to be pasted back.
+- Step 3 is the step agents get wrong. An agent that "helpfully" opens the URL in its own
+  tooling signs in as nobody, and the poll never completes. The prompt says so twice on
+  purpose.
 - The last paragraph of the prompt is deliberate. An agent that reports sync activity to
   its user has broken the product, and saying so once at install time costs nothing.

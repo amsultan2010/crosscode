@@ -7,20 +7,37 @@ daemon. This page is what defends each, and what does not.
 ## Authentication
 
 Sign-in is **GitHub OAuth**, and there is no other path. Members authenticate through the
-website; the CLI receives the resulting session on a loopback callback and stores it
+website; the CLI obtains the resulting session by a **device-code handshake** and stores it
 mode-`0600` in `<git-dir>/crosscode/config.json`, preferring the OS keychain for the refresh
 token where one exists (macOS `security`, Linux `secret-tool`).
 
-- The callback server binds `127.0.0.1` on an ephemeral port, never `0.0.0.0` and never a
-  fixed port, so nothing off the machine can reach it and nothing can squat the port in
-  advance.
-- The CLI generates a random `state`, puts it in the URL it opens, and rejects a callback
-  that does not echo it. That is what stops another local process, or a page the user was
-  tricked into opening, from POSTing a session into a CLI that happens to be waiting.
-- It accepts exactly one callback and shuts down; no callback inside the timeout is an
-  error, not an open listener.
+The CLI asks the service for a pair of codes, prints a URL and the short `userCode`, and
+polls. The user signs in on the website and types the code, which binds it to their
+session; the next poll returns the session. What that shape buys, and costs:
+
+- **No listener on the machine.** There is no callback server, no ephemeral port, and no
+  local endpoint another process on a shared machine could race, squat, or POST into. That
+  whole class of attack does not apply, which is the main reason the flow is shaped this
+  way.
+- **Two codes, deliberately unequal.** `deviceCode` is the CLI's bearer secret and is never
+  displayed; the service stores only a hash of it. `userCode` is the part a human reads
+  aloud and types, and on its own it authorises nothing — it names a pending request that
+  still has to be bound by someone who has signed in to GitHub.
+- **Short-lived and single-use.** The pair expires in about fifteen minutes and is consumed
+  on the first successful poll, so a code read over a shoulder or left in scrollback is not
+  a durable credential.
+- **The poll route is the exposed one.** It is the only route reachable without a session,
+  so it is rate-limited; an unbounded poll is an offline guessing oracle for `deviceCode`.
+- **The residual risk is social.** A device flow's real weakness is that a user can be
+  talked into signing in and entering a code an attacker generated. Nothing in the protocol
+  prevents that. The `/device` page's job is to state plainly what the code will authorise,
+  and a code the user did not personally start is one to refuse.
 - Tokens are never printed, in `--json` mode or out of it, so they stay out of terminal
   scrollback, CI logs, and agent transcripts. There is no `CROSSCODE_TOKEN` to set or leak.
+
+The service verifies Supabase access tokens against JWKS and takes the GitHub identity from
+the verified claims, never from anything the client asserts. Device sign-in only produces
+such a token; it does not widen what one means.
 
 Every service request re-derives project membership server-side for the authenticated user
 rather than trusting a scope in the token, so a removed member loses access on their next

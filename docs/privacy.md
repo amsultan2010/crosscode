@@ -23,6 +23,9 @@ checkout and stopping it leaves an ordinary Git repository behind.
 - **Presence**: which branch you are on and which paths you touched recently, so a teammate's
   agent can answer "who is working on what". This is in memory in the websocket gateway, not
   in the database.
+- **A pending sign-in, while it is pending.** Signing the CLI in creates a row holding a
+  hash of the device code and the short code you type into the page. It expires in about
+  fifteen minutes and is consumed the moment sign-in completes.
 
 ## What never leaves your machine
 
