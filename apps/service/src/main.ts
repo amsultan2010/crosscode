@@ -25,7 +25,7 @@ export async function main(environment: NodeJS.ProcessEnv = process.env): Promis
   const trustProxyTls = environment.CROSSCODE_TRUST_PROXY_TLS === "true";
   assertSafeServiceBinding(host, Boolean(tls) || trustProxyTls);
   const allowedOrigins = parseAllowedOrigins(environment.CROSSCODE_ALLOWED_ORIGINS);
-  const store = new PgStore(databaseUrl);
+  const store = new PgStore(databaseUrl, environment.DATABASE_CA_CERT);
   // Inert unless SENTRY_DSN is set. Created before the store check so a startup that
   // fails on privileges is reported rather than only printed to a log nobody watches.
   const reporter = createObservability(environment);

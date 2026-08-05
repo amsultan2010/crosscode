@@ -61,6 +61,17 @@ describe("service security primitives", () => {
     expect(() => assertSafeServiceBinding("0.0.0.0", true)).not.toThrow();
     expect(() => safePoolConfig("postgresql://user:pass@db.example.com/app")).toThrow(/verify-full/);
     expect(() => safePoolConfig("postgresql://user:pass@127.0.0.1/app?host=db.example.com&sslmode=verify-full&sslmode=disable")).toThrow();
-    expect(safePoolConfig("postgresql://user:pass@db.example.com/app?sslmode=verify-full")).toMatchObject({ ssl: { rejectUnauthorized: true } });
+    expect(safePoolConfig("postgresql://user:pass@db.example.com/app?sslmode=verify-full")).toMatchObject({
+      ssl: { rejectUnauthorized: true, servername: "db.example.com" }
+    });
+    // sslmode is required, then stripped: `pg` would otherwise build its own TLS options
+    // from it and drop the CA below, so a private root could never be verified against.
+    const withCa = safePoolConfig("postgresql://user:pass@db.example.com/app?sslmode=verify-full", "PEM");
+    expect(withCa.connectionString).not.toContain("sslmode");
+    expect(withCa.ssl).toMatchObject({ rejectUnauthorized: true, ca: "PEM" });
+    // Loopback stays plain: no TLS options, and the URL untouched.
+    expect(safePoolConfig("postgresql://user:pass@127.0.0.1/app")).toEqual({
+      connectionString: "postgresql://user:pass@127.0.0.1/app"
+    });
   });
 });

@@ -42,8 +42,8 @@ export const HISTORY_RETENTION_DAYS = 7;
 export class PgStore {
   readonly pool: Pool;
 
-  constructor(config: PoolConfig | string) {
-    this.pool = new Pool(typeof config === "string" ? safePoolConfig(config) : config);
+  constructor(config: PoolConfig | string, caCertificate?: string) {
+    this.pool = new Pool(typeof config === "string" ? safePoolConfig(config, caCertificate) : config);
   }
 
   /**
@@ -347,7 +347,15 @@ export class PgStore {
   }
 }
 
-export function safePoolConfig(connectionString: string): PoolConfig {
+/**
+ * @param caCertificate PEM for a private root the server chains to. Managed Postgres
+ *   commonly issues its certificates from its own CA rather than a publicly trusted one --
+ *   Supabase's pooler chains to "Supabase Root 2021 CA" -- so verifying against the system
+ *   trust store fails with `self-signed certificate in certificate chain`. Supplying the
+ *   root keeps verification genuinely on (chain *and* hostname) instead of the usual
+ *   workaround of turning it off. Read from DATABASE_CA_CERT.
+ */
+export function safePoolConfig(connectionString: string, caCertificate?: string): PoolConfig {
   const url = new URL(connectionString);
   for (const forbidden of ["host", "ssl", "uselibpqcompat"]) {
     if (url.searchParams.has(forbidden)) throw new Error(`PostgreSQL URL parameter is not allowed: ${forbidden}`);
@@ -356,7 +364,21 @@ export function safePoolConfig(connectionString: string): PoolConfig {
   if (sslModes.length > 1) throw new Error("PostgreSQL URL contains duplicate sslmode parameters");
   const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
   if (!loopback && sslModes[0] !== "verify-full") throw new Error("Non-loopback PostgreSQL requires sslmode=verify-full");
-  return { connectionString, ...(loopback ? {} : { ssl: { rejectUnauthorized: true } }) };
+  if (loopback) return { connectionString };
+  // sslmode is validated above and then removed, because `pg` parses it out of the
+  // connection string and builds its own TLS options from it -- which silently discards the
+  // `ca` below, so a private root would never be consulted and verification would fail with
+  // `self-signed certificate in certificate chain`. The explicit options are strictly
+  // stronger than what the string can express: verification stays on either way.
+  url.searchParams.delete("sslmode");
+  return {
+    connectionString: url.toString(),
+    ssl: {
+      rejectUnauthorized: true,
+      servername: url.hostname,
+      ...(caCertificate ? { ca: caCertificate } : {})
+    }
+  };
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

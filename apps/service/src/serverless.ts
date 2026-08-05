@@ -65,7 +65,8 @@ export function createServerlessHandler(environment: NodeJS.ProcessEnv = process
 function buildHandler(environment: NodeJS.ProcessEnv): { handler: ServerlessHandler; store: PgStore } {
   const databaseUrl = required(environment.DATABASE_URL, "DATABASE_URL");
   const supabaseUrl = required(environment.SUPABASE_URL, "SUPABASE_URL");
-  const store = new PgStore(databaseUrl);
+  // Set when the database's certificate chains to a private root (Supabase's pooler does).
+  const store = new PgStore(databaseUrl, environment.DATABASE_CA_CERT);
   const handler = createRequestHandler({
     store,
     jwks: createSupabaseJwks(supabaseUrl),
