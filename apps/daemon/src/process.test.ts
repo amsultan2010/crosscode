@@ -70,7 +70,7 @@ afterEach(async () => {
 });
 
 describe("daemon process lifecycle", () => {
-  it("survives restart with offline work and proposals, and observes Git transitions", async () => {
+  it("survives restart with offline work and received changes, and observes Git transitions", async () => {
     const { sender, receiver } = await fixture();
     const service = new CoordinationService();
     const sending = await LocalDaemon.open(sender, { workspaceId: "w", replicaId: "sender", actorId: "sender" });
@@ -88,17 +88,14 @@ describe("daemon process lifecycle", () => {
     const duplicateExit = await new Promise<number | null>((resolveExit) => duplicate.once("exit", (code) => resolveExit(code)));
     expect(duplicateExit).toBe(1);
     await expect(runCli(["status", "--json"], receiver)).resolves.toMatchObject({ value: { workspaceId: "w", replicaId: "receiver" } });
-    await expect(runCli(["task", "create", "No accidental flags", "--json"], receiver)).resolves.toMatchObject({ value: { paths: [] } });
     await writeFile(join(receiver, "offline.txt"), "offline\n");
-    const operations = await waitFor(() => client.operations(), (items) => items.some((item) => item.status === "local" && item.transaction.changes.some((change) => change.path === "offline.txt")));
-    expect(operations).toEqual(expect.arrayContaining([expect.objectContaining({ id: remote.id, status: "proposed" })]));
+    const operations = await waitFor(() => client.operations(), (items) => items.some((item) => item.transaction.changes.some((change) => change.path === "offline.txt")));
+    expect(operations).toEqual(expect.arrayContaining([expect.objectContaining({ id: remote.id })]));
     const beforeTransition = await client.status();
 
     await exec("git", ["-C", receiver, "switch", "-c", "other"]);
-    const afterTransition = await waitFor(() => client.status(), (status) => status.branch === "other" && status.eventSequence > beforeTransition.eventSequence && !status.materializationPaused);
-    expect(afterTransition.materializationPaused).toBe(false);
+    const afterTransition = await waitFor(() => client.status(), (status) => status.branch === "other" && status.eventSequence > beforeTransition.eventSequence);
     expect(await readFile(join(receiver, "a.txt"), "utf8")).toBe("one\n");
-    expect((await client.checkpoints()).length).toBeGreaterThan(0);
 
     await stop(first, "SIGKILL");
     await expect(runCli(["status", "--json"], receiver)).rejects.toThrow(/daemon/i);
@@ -107,18 +104,13 @@ describe("daemon process lifecycle", () => {
     const restarted = await waitFor(() => DaemonClient.connect(receiver), async (candidate) => (await candidate.status()).eventSequence >= afterTransition.eventSequence);
     const restored = await restarted.operations();
     expect(restored).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: remote.id, status: "proposed" }),
+      expect.objectContaining({ id: remote.id }),
       expect.objectContaining({
-        status: "local",
         transaction: expect.objectContaining({
           changes: expect.arrayContaining([expect.objectContaining({ path: "offline.txt" })])
         })
       })
     ]));
-    const restoredCheckpoints = await restarted.checkpoints();
-    expect(restoredCheckpoints.length).toBeGreaterThan(0);
-    const checkpointFiles = await Promise.all(restoredCheckpoints.map((checkpoint) => restarted.inspectCheckpoint(checkpoint.ref).then((value) => value.files)));
-    expect(checkpointFiles.some((files) => files.includes("offline.txt"))).toBe(true);
     expect(await readFile(join(receiver, "a.txt"), "utf8")).toBe("one\n");
 
     await stop(second, "SIGTERM");

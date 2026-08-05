@@ -1,63 +1,23 @@
 import { createServer, type Server } from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import chokidar, { type FSWatcher } from "chokidar";
+import { contentHash, redactPath, transactionRisk } from "@crosscode/core";
+import { discoverRepository, readRevisionFile, safeRepositoryPath, unifiedDiff } from "@crosscode/git";
 import {
-  AGENT_DELEGATED_PROVIDER_ID, AgentDelegatedReviewer, analyzeOperation, applyRiskSafetyGate, authorizeSemanticReview, buildSemanticReviewBundle, changedExportedSymbols, contentHash, exportedSymbolNames, hunksOverlap,
-  isReviewEligible, looksLikeInterfaceChange, pathOverlaps, redactPath, riskRank, transactionRisk, validateSemanticReview,
-  type OperationAnalysis, type SemanticReviewer
-} from "@crosscode/core";
-import { createCheckpoint, discoverRepository, findAstDependentFiles, findSymbolReferences, inspectCheckpoint, pruneCheckpointRefs, publishCommit, readRevisionFile, restoreCheckpointFile, safeRepositoryPath, snapshotWorktreeTree, threeWayMerge, unifiedDiff } from "@crosscode/git";
-import {
-  acceptOperationRequestSchema,
   captureRequestSchema,
   changeTransactionSchema,
-  checkpointInspectRequestSchema,
-  checkpointRequestSchema,
-  checkpointRestoreRequestSchema,
-  claimRequestSchema,
-  claimSchema,
-  handoffRequestSchema,
-  handoffRespondRequestSchema,
-  handoffSchema,
-  intentRequestSchema,
-  intentSchema,
-  publishRequestSchema,
-  semanticReviewRequestBodySchema,
-  setWorkspaceAutonomyRequestSchema,
-  taskRequestSchema,
-  taskSchema,
-  validationRequestSchema,
-  EPOCH_CURSOR,
   type CaptureKind,
   type ChangeTransaction,
-  type EventEnvelope,
-  type Claim,
-  type ClaimCreatedEvent,
-  type ClaimReleasedEvent,
-  type Handoff,
-  type HandoffRequestedEvent,
-  type HandoffRespondedEvent,
-  type Intent,
-  type IntentPublishedEvent,
-  type RemoteClaim,
-  type RemoteHandoff,
-  type RemoteIntent,
-  type RemoteTask,
-  type RemoteValidation,
-  type Task,
-  type TaskCreatedEvent,
-  type TaskUpdatedEvent,
-  type Validation,
-  type ValidationCompletedEvent
+  type EventEnvelope
 } from "@crosscode/protocol";
-import { configuredAiReviewPolicy, configuredAutoApplyRisk, configuredExcludedPaths, matchesConfiguredExclusion, validationCommands } from "./config.js";
-import { DaemonStateStore, type CheckpointRecord, type ClaimOutboundRecord, type ConflictArtifactRecord, type GitState, type HandoffOutboundRecord, type IntentOutboundRecord, type OutboundRecord, type TaskOutboundRecord, type ValidationOutboundRecord } from "./state.js";
+import { configuredExcludedPaths, matchesConfiguredExclusion } from "./config.js";
+import { DaemonStateStore, type GitState, type OutboundRecord } from "./state.js";
 import type { LocalEvent } from "./local-event.js";
-import type { LocalOperation, SemanticReviewRecord, StoredOperation } from "./types.js";
+import type { LocalOperation } from "./types.js";
 
 const exec = promisify(execFile);
 const now = () => new Date().toISOString();
@@ -70,22 +30,12 @@ function decodeText(content: Buffer, path: string): string {
   if (isBinaryContent(content)) throw new Error(`Binary files are not supported: ${path}`);
   return content.toString("utf8");
 }
-function safeDecodeText(content: Buffer): string | undefined {
-  return isBinaryContent(content) ? undefined : content.toString("utf8");
-}
-function assertText(content: string, path: string): void {
-  if (content.includes("\0") || Buffer.from(content, "utf8").toString("utf8") !== content) throw new Error(`Binary or invalid text content is not supported: ${path}`);
-}
 function assertChangeIntegrity(change: ChangeTransaction["changes"][number]): void {
   if (change.kind !== "delete") {
     if (change.afterContent === undefined) throw new Error(`Transaction content hash is invalid: ${change.path}`);
     const actual = change.afterEncoding === "base64" ? contentHash(Buffer.from(change.afterContent, "base64")) : contentHash(change.afterContent);
     if (change.afterHash !== actual) throw new Error(`Transaction content hash is invalid: ${change.path}`);
   }
-}
-function changesOverlap(left: ChangeTransaction["changes"][number], right: ChangeTransaction["changes"][number]): boolean {
-  if (left.kind === "delete" || right.kind === "delete") return true;
-  return hunksOverlap(left.unifiedPatch, right.unifiedPatch);
 }
 /** Git's canonical empty tree, which every repository can name without it being written. */
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -100,16 +50,8 @@ const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 async function diffBase(root: string): Promise<string> {
   return git(root, ["rev-parse", "-q", "--verify", "HEAD"]).then(() => "HEAD", () => EMPTY_TREE);
 }
-/**
- * How many of this replica's checkpoints to keep. Deep enough that `checkpoint restore`
- * still reaches back across a normal working session, bounded so a long-lived checkout
- * does not accumulate refs forever. Checkpoints named by an in-flight operation are kept
- * on top of this, however old.
- */
-const CHECKPOINT_RETENTION = 200;
 
-export type AutonomyTier = 0 | 1 | 2;
-export type DaemonOptions = { workspaceId: string; replicaId: string; actorId: string; reviewer?: SemanticReviewer; transport?: RemoteSyncTransport };
+export type DaemonOptions = { workspaceId: string; replicaId: string; actorId: string; transport?: RemoteSyncTransport };
 
 /**
  * The in-process coordination sink `capture()` optionally publishes to. Structural rather
@@ -119,7 +61,6 @@ export type DaemonOptions = { workspaceId: string; replicaId: string; actorId: s
 export type LocalCoordinationSink = {
   receive(event: EventEnvelope, transaction: ChangeTransaction): LocalOperation;
   list(workspaceId: string, afterSequence?: number): LocalOperation[];
-  getAutonomyTier(workspaceId: string): AutonomyTier;
 };
 
 /**
@@ -131,45 +72,13 @@ export type RemoteCursorTooOld = { status: "cursor-too-old"; resyncFrom: number;
 
 export type RemoteSyncTransport = {
   upload(record: OutboundRecord): Promise<LocalOperation>;
-  /**
-   * `unreadable` names server sequences the transport deliberately dropped because this
-   * device holds no workspace key for the epoch that sealed them. It is the only
-   * accepted reason for a gap in an otherwise dense cursor; see syncRemote(). It is
-   * distinct from a `cursor-too-old` refusal, which is the service saying it no longer
-   * holds that history at all.
-   */
-  list(after: number): Promise<{ operations: LocalOperation[]; nextCursor: number; unreadable?: number[] } | RemoteCursorTooOld>;
-  uploadTask(record: TaskOutboundRecord): Promise<RemoteTask>;
-  listTasks(after: string): Promise<{ tasks: RemoteTask[]; nextCursor: string }>;
-  uploadClaim(record: ClaimOutboundRecord): Promise<RemoteClaim>;
-  listClaims(after: string): Promise<{ claims: RemoteClaim[]; nextCursor: string }>;
-  uploadHandoff(record: HandoffOutboundRecord): Promise<RemoteHandoff>;
-  listHandoffs(after: string): Promise<{ handoffs: RemoteHandoff[]; nextCursor: string }>;
-  uploadIntent(record: IntentOutboundRecord): Promise<RemoteIntent>;
-  listIntents(after: string): Promise<{ intents: RemoteIntent[]; nextCursor: string }>;
-  uploadValidation(record: ValidationOutboundRecord): Promise<RemoteValidation>;
-  listValidations(after: string): Promise<{ validations: RemoteValidation[]; nextCursor: string }>;
-  /**
-   * Optional so existing test fakes and transports that predate Phase 9 keep
-   * type-checking unchanged; the daemon simply keeps its last-cached tier
-   * (default 0) when a transport does not implement these.
-   */
-  getAutonomyTier?(): Promise<AutonomyTier>;
-  setAutonomyTier?(tier: AutonomyTier): Promise<AutonomyTier>;
+  list(after: number): Promise<{ operations: LocalOperation[]; nextCursor: number } | RemoteCursorTooOld>;
 };
 
 export class LocalDaemon {
-  readonly tasks = new Map<string, Task>(); readonly claims = new Map<string, Claim>(); readonly operations = new Map<string, StoredOperation>(); readonly validations: Validation[] = []; readonly checkpoints: CheckpointRecord[] = []; readonly handoffs = new Map<string, Handoff>(); readonly intents = new Map<string, Intent>(); readonly semanticReviews = new Map<string, SemanticReviewRecord>();
+  readonly operations = new Map<string, LocalOperation>();
   readonly outbound = new Map<string, OutboundRecord>();
-  readonly taskOutbound = new Map<string, TaskOutboundRecord>(); readonly claimOutbound = new Map<string, ClaimOutboundRecord>();
-  readonly handoffOutbound = new Map<string, HandoffOutboundRecord>(); readonly intentOutbound = new Map<string, IntentOutboundRecord>();
-  readonly validationOutbound = new Map<string, ValidationOutboundRecord>(); readonly remoteValidations = new Map<string, RemoteValidation>();
   private remoteCursor = 0;
-  private remoteTaskCursor = EPOCH_CURSOR;
-  private remoteClaimCursor = EPOCH_CURSOR;
-  private remoteHandoffCursor = EPOCH_CURSOR;
-  private remoteIntentCursor = EPOCH_CURSOR;
-  private remoteValidationCursor = EPOCH_CURSOR;
   private eventSequence = 0;
   private readonly capturedHashes = new Map<string, string | null>();
   private gitState: GitState;
@@ -178,20 +87,14 @@ export class LocalDaemon {
   // Kept apart from serviceStatus, which every successful sync replaces wholesale: a
   // retention resync is a gap in this replica's history and must stay visible afterwards.
   private lastResync: { at: string; message: string } | undefined;
-  private autonomyTier: AutonomyTier = 0;
   private mutationTail: Promise<void> = Promise.resolve();
-  private readonly transactionListeners = new Set<(operation: StoredOperation) => void>();
+  private readonly transactionListeners = new Set<(operation: LocalOperation) => void>();
   private constructor(readonly root: string, readonly options: DaemonOptions, private readonly state: DaemonStateStore, gitState: GitState) { this.gitState = gitState; }
 
   static async open(directory: string, options: DaemonOptions): Promise<LocalDaemon> {
     const repository = await discoverRepository(directory); const statePath = await git(repository.root, ["rev-parse", "--git-path", "crosscode/state.sqlite"]); const state = await DaemonStateStore.open(resolve(repository.root, statePath)); const saved = state.load(); const daemon = new LocalDaemon(repository.root, options, state, saved.gitState ?? { head: repository.head, headReflog: repository.headReflog, branch: repository.branch, worktree: repository.worktree, indexTree: repository.indexTree, operation: repository.operation });
-    for (const task of saved.tasks) daemon.tasks.set(task.id, task); for (const claim of saved.claims) daemon.claims.set(claim.id, claim);
-    for (const operation of saved.operations) {
-      const transaction = changeTransactionSchema.parse(operation.transaction);
-      const risk = transactionRisk(transaction);
-      daemon.operations.set(operation.id, { ...operation, transaction: { ...transaction, safety: { risk, requiresApproval: risk === "critical" } } });
-    }
-    daemon.validations.push(...saved.validations); daemon.checkpoints.push(...saved.checkpoints); for (const handoff of saved.handoffs) daemon.handoffs.set(handoff.id, handoff); for (const intent of saved.intents) daemon.intents.set(intent.id, intent); for (const record of state.listSemanticReviews()) daemon.semanticReviews.set(record.id, record); for (const record of saved.outbound) daemon.outbound.set(record.event.id, record); for (const record of saved.taskOutbound) daemon.taskOutbound.set(record.event.id, record); for (const record of saved.claimOutbound) daemon.claimOutbound.set(record.event.id, record); for (const record of saved.handoffOutbound) daemon.handoffOutbound.set(record.event.id, record); for (const record of saved.intentOutbound) daemon.intentOutbound.set(record.event.id, record); for (const record of saved.validationOutbound) daemon.validationOutbound.set(record.event.id, record); daemon.remoteCursor = saved.remoteCursor; daemon.remoteTaskCursor = saved.remoteTaskCursor; daemon.remoteClaimCursor = saved.remoteClaimCursor; daemon.remoteHandoffCursor = saved.remoteHandoffCursor; daemon.remoteIntentCursor = saved.remoteIntentCursor; daemon.remoteValidationCursor = saved.remoteValidationCursor; daemon.eventSequence = saved.eventSequence; daemon.materializationPaused = saved.materializationPaused; for (const [path, hash] of Object.entries(saved.capturedHashes)) daemon.capturedHashes.set(path, hash); await daemon.reconcileInterruptedMaterializations(); return daemon;
+    for (const operation of saved.operations) daemon.operations.set(operation.id, { ...operation, transaction: changeTransactionSchema.parse(operation.transaction) });
+    for (const record of saved.outbound) daemon.outbound.set(record.event.id, record); daemon.remoteCursor = saved.remoteCursor; daemon.eventSequence = saved.eventSequence; daemon.materializationPaused = saved.materializationPaused; for (const [path, hash] of Object.entries(saved.capturedHashes)) daemon.capturedHashes.set(path, hash); return daemon;
   }
   /**
    * The public workspace status, served by `GET /v1/status` and surfaced verbatim by the
@@ -203,174 +106,16 @@ export class LocalDaemon {
    * fields makes this an intentional contract, so the next field added to RepositoryState
    * is private until someone decides otherwise rather than published by accident.
    */
-  async status() { const repository = await discoverRepository(this.root); return { root: repository.root, head: repository.head, branch: repository.branch, worktree: repository.worktree, remotes: repository.remotes, dirty: repository.dirty, indexTree: repository.indexTree, operation: repository.operation, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, tasks: this.tasks.size, claims: this.claims.size, proposals: [...this.operations.values()].filter((operation) => operation.status === "proposed").length, materializationPaused: this.materializationPaused, eventSequence: this.eventSequence, remoteCursor: this.remoteCursor, pendingOutbound: [...this.outbound.values()].filter((record) => record.acknowledgedServerSequence === undefined).length, remoteValidations: [...this.remoteValidations.values()], service: { ...this.serviceStatus, ...(this.lastResync ? { lastResyncAt: this.lastResync.at, lastResyncMessage: this.lastResync.message } : {}) } }; }
+  async status() { const repository = await discoverRepository(this.root); return { root: repository.root, head: repository.head, branch: repository.branch, worktree: repository.worktree, remotes: repository.remotes, dirty: repository.dirty, indexTree: repository.indexTree, operation: repository.operation, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, materializationPaused: this.materializationPaused, eventSequence: this.eventSequence, remoteCursor: this.remoteCursor, pendingOutbound: [...this.outbound.values()].filter((record) => record.acknowledgedServerSequence === undefined).length, service: { ...this.serviceStatus, ...(this.lastResync ? { lastResyncAt: this.lastResync.at, lastResyncMessage: this.lastResync.message } : {}) } }; }
   configureRemoteSync(): void { this.serviceStatus = { ...this.serviceStatus, configured: true }; }
-  currentAutonomyTier(): AutonomyTier { return this.autonomyTier; }
-  /**
-   * Tier changes are set through the coordination service (single source of truth,
-   * consistent with how other workspace-level policy already flows), then cached
-   * here and refreshed every sync cycle -- never persisted as an override that
-   * could drift from the service. Tier >= 1 reuses the same externalAiReview gate
-   * that already governs semantic review (configuredAiReviewPolicy), rather than
-   * inventing a second policy flag.
-   */
-  async setAutonomyTier(tier: AutonomyTier): Promise<AutonomyTier> {
-    if (tier >= 1) {
-      const policy = await configuredAiReviewPolicy(this.root);
-      if (policy.externalAiReview !== "approved") throw new Error("Autonomy tier 1 or higher requires policy.aiReview.externalAiReview: approved in .crosscode/config.yaml");
-    }
-    if (!this.options.transport?.setAutonomyTier) throw new Error("No coordination service is configured for this daemon");
-    this.autonomyTier = await this.options.transport.setAutonomyTier(tier);
-    return this.autonomyTier;
-  }
   recordRemoteSyncFailure(): void { this.serviceStatus = { ...this.serviceStatus, configured: true, online: false, lastSyncError: "Coordination service is unavailable" }; }
-  async createTask(input: Pick<Task, "title"> & Partial<Pick<Task, "intent" | "paths" | "status">>): Promise<Task> {
-    const task = taskSchema.parse({ id: randomUUID(), title: input.title, ownerId: this.options.actorId, status: input.status ?? "active", intent: input.intent, paths: input.paths ?? [], createdAt: now(), updatedAt: now() });
-    const event: TaskCreatedEvent = { id: task.id, schemaVersion: 1, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "task.created", clientSequence: this.eventSequence + 1, createdAt: now(), payload: task };
-    const previous = this.tasks.get(task.id);
-    this.tasks.set(task.id, task);
-    this.taskOutbound.set(event.id, { event });
-    try { await this.persist("task.created", task); }
-    catch (error) { if (previous) this.tasks.set(task.id, previous); else this.tasks.delete(task.id); this.taskOutbound.delete(event.id); throw error; }
-    return task;
-  }
-  async updateTask(id: string, input: Pick<Task, "title"> & Partial<Pick<Task, "intent" | "paths" | "status">>): Promise<Task> {
-    const previous = this.tasks.get(id);
-    if (!previous) throw new Error("Task was not found");
-    const task = taskSchema.parse({ ...previous, title: input.title, status: input.status ?? previous.status, intent: input.intent, paths: input.paths ?? previous.paths, updatedAt: now() });
-    const event: TaskUpdatedEvent = { id: task.id, schemaVersion: 1, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "task.updated", clientSequence: this.eventSequence + 1, createdAt: now(), payload: task };
-    this.tasks.set(task.id, task);
-    this.taskOutbound.set(event.id, { event });
-    try { await this.persist("task.updated", task); }
-    catch (error) { this.tasks.set(id, previous); this.taskOutbound.delete(event.id); throw error; }
-    return task;
-  }
-  async createClaim(input: Omit<Claim, "id" | "ownerId" | "createdAt">): Promise<Claim> {
-    const claim = claimSchema.parse({ ...input, id: randomUUID(), ownerId: this.options.actorId, createdAt: now() });
-    const event: ClaimCreatedEvent = { id: claim.id, schemaVersion: 1, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "claim.created", clientSequence: this.eventSequence + 1, createdAt: now(), payload: claim };
-    this.claims.set(claim.id, claim);
-    this.claimOutbound.set(event.id, { event });
-    try { await this.persist("claim.created", claim); }
-    catch (error) { this.claims.delete(claim.id); this.claimOutbound.delete(event.id); throw error; }
-    return claim;
-  }
-  async releaseClaim(id: string): Promise<Claim> {
-    const claim = this.claims.get(id);
-    if (!claim) throw new Error("Claim was not found");
-    const event: ClaimReleasedEvent = { id: claim.id, schemaVersion: 1, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "claim.released", clientSequence: this.eventSequence + 1, createdAt: now(), payload: claim };
-    this.claims.delete(id);
-    this.claimOutbound.set(event.id, { event });
-    try { await this.persist("claim.released", claim); }
-    catch (error) { this.claims.set(id, claim); this.claimOutbound.delete(event.id); throw error; }
-    return claim;
-  }
-  async checkpoint(message = "Crosscode safety checkpoint") {
-    const checkpoint = await createCheckpoint(this.root, this.options.replicaId, message);
-    const record = { ...checkpoint, message, createdAt: now() };
-    this.checkpoints.push(record);
-    const pruned = await this.pruneCheckpoints();
-    try { await this.persist("checkpoint.created", record); }
-    catch (error) { this.checkpoints.pop(); this.checkpoints.push(...pruned); throw error; }
-    return checkpoint;
-  }
-
-  /**
-   * Drops this replica's oldest checkpoints once there are more than CHECKPOINT_RETENTION
-   * of them, and mirrors the deletion into the in-memory list so the projection stops
-   * carrying rows for refs that no longer exist.
-   *
-   * Anything an operation still names as its `materializationCheckpoint` is retained
-   * regardless of age -- that is the ref reconcileInterruptedMaterializations() and the
-   * accept() failure path roll back to, so collecting it would turn a recoverable
-   * interruption into a permanently conflicted operation.
-   */
-  private async pruneCheckpoints(): Promise<CheckpointRecord[]> {
-    const retain = new Set<string>();
-    for (const operation of this.operations.values()) {
-      if (operation.materializationCheckpoint && operation.status !== "rejected") retain.add(operation.materializationCheckpoint);
-    }
-    const deleted = await pruneCheckpointRefs(this.root, this.options.replicaId, CHECKPOINT_RETENTION, [...retain])
-      .catch(() => [] as string[]);
-    if (!deleted.length) return [];
-    const gone = new Set(deleted);
-    const removed = this.checkpoints.filter((entry) => gone.has(entry.ref));
-    for (let index = this.checkpoints.length - 1; index >= 0; index -= 1) {
-      if (gone.has(this.checkpoints[index]!.ref)) this.checkpoints.splice(index, 1);
-    }
-    return removed;
-  }
-  async inspectCheckpoint(ref: string) { return inspectCheckpoint(this.root, ref); }
-  async requestHandoff(input: { operationId: string; note?: string }): Promise<Handoff> {
-    const handoff = handoffSchema.parse({ id: randomUUID(), operationId: input.operationId, requestedBy: this.options.actorId, note: input.note, status: "pending", createdAt: now() });
-    const event: HandoffRequestedEvent = { id: handoff.id, schemaVersion: 1, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "handoff.requested", clientSequence: this.eventSequence + 1, createdAt: now(), payload: handoff };
-    this.handoffs.set(handoff.id, handoff);
-    this.handoffOutbound.set(event.id, { event });
-    try { await this.persist("handoff.requested", handoff); }
-    catch (error) { this.handoffs.delete(handoff.id); this.handoffOutbound.delete(event.id); throw error; }
-    return handoff;
-  }
-  async respondHandoff(id: string, decision: "accepted" | "declined"): Promise<Handoff> {
-    const handoff = this.handoffs.get(id); if (!handoff || handoff.status !== "pending") throw new Error("Handoff was not found");
-    const responded = { ...handoff, status: decision, respondedAt: now() };
-    const event: HandoffRespondedEvent = { id: responded.id, schemaVersion: 1, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "handoff.responded", clientSequence: this.eventSequence + 1, createdAt: now(), payload: responded };
-    this.handoffs.set(id, responded);
-    this.handoffOutbound.set(event.id, { event });
-    try { await this.persist("handoff.responded", responded); }
-    catch (error) { this.handoffs.set(id, handoff); this.handoffOutbound.delete(event.id); throw error; }
-    return responded;
-  }
-  async publishIntent(input: { text: string; taskId?: string }): Promise<Intent> {
-    const intent = intentSchema.parse({ id: randomUUID(), taskId: input.taskId, actorId: this.options.actorId, text: input.text, createdAt: now() });
-    const event: IntentPublishedEvent = { id: intent.id, schemaVersion: 1, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "intent.published", clientSequence: this.eventSequence + 1, createdAt: now(), payload: intent };
-    this.intents.set(intent.id, intent);
-    this.intentOutbound.set(event.id, { event });
-    try { await this.persist("intent.published", intent); }
-    catch (error) { this.intents.delete(intent.id); this.intentOutbound.delete(event.id); throw error; }
-    return intent;
-  }
-  async restoreCheckpointFile(ref: string, path: string): Promise<void> {
-    await this.eligiblePath(path);
-    await this.checkpoint(`Before restoring ${path}`); await this.restoreEligibleCheckpointFile(ref, path);
-    const content = await this.readWorkingBuffer(path); this.capturedHashes.set(path, content === undefined ? null : contentHash(content)); await this.persist("checkpoint.restored", { ref, path });
-  }
   async observeGitTransition(): Promise<{ kind: "unchanged" | "branch-switch" | "head-changed" | "index-changed" | "git-operation" | "reset"; paused: boolean }> {
     const repository = await discoverRepository(this.root); const current = { head: repository.head, headReflog: repository.headReflog, branch: repository.branch, worktree: repository.worktree, indexTree: repository.indexTree, operation: repository.operation };
     if (current.head === this.gitState.head && current.headReflog === this.gitState.headReflog && current.branch === this.gitState.branch && current.worktree === this.gitState.worktree && current.indexTree === this.gitState.indexTree && current.operation === this.gitState.operation) return { kind: "unchanged", paused: this.materializationPaused };
     const kind = current.branch !== this.gitState.branch ? "branch-switch" : current.operation !== this.gitState.operation ? "git-operation" : current.head !== this.gitState.head ? "head-changed" : current.headReflog !== this.gitState.headReflog ? "reset" : "index-changed";
     this.materializationPaused = true; await this.persist("git.materialization_paused", { kind, previous: this.gitState, current });
-    await this.checkpoint(`Before Git ${kind}`);
     this.gitState = current; this.capturedHashes.clear(); await this.persist("git.head_changed", { kind, current });
     return { kind, paused: true };
-  }
-  async reanalyzePendingOperations(): Promise<StoredOperation[]> {
-    const updated = await Promise.all([...this.operations.values()].map(async (operation) => {
-      if (operation.status !== "proposed") return operation;
-      for (const change of operation.transaction.changes) {
-        const current = await this.readWorkingBuffer(change.path);
-        const matches = change.kind === "add" ? current === undefined : (current === undefined ? undefined : contentHash(current)) === change.beforeHash;
-        if (!matches) return { ...operation, status: "conflicted" as const };
-      }
-      return operation;
-    }));
-    updated.forEach((operation) => this.operations.set(operation.id, operation)); this.materializationPaused = Boolean(this.gitState.operation); await this.persist("transaction.reanalyzed", { operations: updated.map(({ id, status }) => ({ id, status })), materializationPaused: this.materializationPaused }); return updated;
-  }
-  async analyzeProposal(id: string): Promise<"independent" | "likely-compatible" | "stale-base" | "conflicted"> {
-    const operation = this.operations.get(id); if (!operation || operation.status !== "proposed") throw new Error("Proposal was not found");
-    let compatible = false;
-    for (const change of operation.transaction.changes) {
-      const currentBuffer = await this.readWorkingBuffer(change.path);
-      const baseMatches = change.kind === "add" ? currentBuffer === undefined : (currentBuffer === undefined ? undefined : contentHash(currentBuffer)) === change.beforeHash;
-      if (baseMatches) continue;
-      const current = currentBuffer === undefined ? undefined : safeDecodeText(currentBuffer);
-      if (change.kind !== "modify" || current === undefined || change.afterContent === undefined) return "stale-base";
-      const baseBytes = await readRevisionFile(this.root, "HEAD", change.path).catch(() => undefined);
-      if (baseBytes === undefined) return "stale-base";
-      const base = decodeText(baseBytes, change.path);
-      const merge = await threeWayMerge(base, current, change.afterContent);
-      if (!merge.clean) return "conflicted";
-      compatible = true;
-    }
-    return compatible ? "likely-compatible" : "independent";
   }
   async flush(): Promise<void> {}
   async runExclusive<T>(operation: () => Promise<T>): Promise<T> {
@@ -380,7 +125,7 @@ export class LocalDaemon {
   }
   async drain(): Promise<void> { await this.mutationTail; }
   close(): void { this.state.close(); }
-  onTransaction(listener: (operation: StoredOperation) => void): () => void { this.transactionListeners.add(listener); return () => this.transactionListeners.delete(listener); }
+  onTransaction(listener: (operation: LocalOperation) => void): () => void { this.transactionListeners.add(listener); return () => this.transactionListeners.delete(listener); }
   async watch(options: { debounceMs?: number; onError?: (error: unknown) => void } = {}): Promise<FSWatcher> {
     const debounceMs = options.debounceMs ?? 500;
     let timer: NodeJS.Timeout | undefined;
@@ -408,8 +153,8 @@ export class LocalDaemon {
     return watcher;
   }
 
-  async capture(intent: string, service?: LocalCoordinationSink, kind: CaptureKind = "intent"): Promise<StoredOperation> {
-    let snapshot: { repository: Awaited<ReturnType<typeof discoverRepository>>; checkpoint: Awaited<ReturnType<LocalDaemon["checkpoint"]>>; changes: Array<{ path: string; kind: "add" | "modify" | "delete" | "rename"; previousPath?: string; beforeHash?: string; afterHash?: string; afterContent?: string; afterEncoding?: "base64"; unifiedPatch?: string }> } | undefined;
+  async capture(intent: string, service?: LocalCoordinationSink, kind: CaptureKind = "intent"): Promise<LocalOperation> {
+    let snapshot: { repository: Awaited<ReturnType<typeof discoverRepository>>; changes: Array<{ path: string; kind: "add" | "modify" | "delete" | "rename"; previousPath?: string; beforeHash?: string; afterHash?: string; afterContent?: string; afterEncoding?: "base64"; unifiedPatch?: string }> } | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const repository = await discoverRepository(this.root); const names = await this.changedPaths();
       if (!names.length) throw new Error("No eligible working-tree changes to capture");
@@ -434,13 +179,13 @@ export class LocalDaemon {
         };
       }));
       if (!(await this.snapshotIsStable(repository, changes))) continue;
-      const checkpoint = await this.checkpoint(`Crosscode: ${intent}`);
-      if (checkpoint.tree === await snapshotWorktreeTree(this.root) && await this.snapshotIsStable(repository, changes)) { snapshot = { repository, checkpoint, changes }; break; }
+      snapshot = { repository, changes };
+      break;
     }
     if (!snapshot) throw new Error("Working tree changed while assembling a transaction; retry the capture");
     const { repository, changes } = snapshot;
     const transaction = changeTransactionSchema.parse({ id: randomUUID(), intent, kind, base: { headCommit: repository.head, files: changes.filter((change) => change.beforeHash).map((change) => ({ path: change.path, contentHash: change.beforeHash! })) }, changes, provenance: { source: "filesystem", confidence: "known" }, safety: { risk: transactionRisk({ changes }), requiresApproval: transactionRisk({ changes }) === "critical" } });
-    const local = { id: transaction.id, workspaceId: this.options.workspaceId, senderReplicaId: this.options.replicaId, transaction, sequence: 0, createdAt: now(), status: "local" as const };
+    const local = { id: transaction.id, workspaceId: this.options.workspaceId, senderReplicaId: this.options.replicaId, transaction, sequence: 0, createdAt: now() };
     const event = { id: transaction.id, schemaVersion: 1 as const, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "transaction.created", clientSequence: this.eventSequence + 1, createdAt: now(), payload: transaction };
     const outbound = { event, transaction };
     const previousHashes = changes.map((change) => [change.path, this.capturedHashes.get(change.path)] as const);
@@ -455,22 +200,15 @@ export class LocalDaemon {
       throw error;
     }
     if (!service) return local;
-    const remote = service.receive(event, transaction);
-    const published = { ...remote, status: "local" as const };
+    const published = service.receive(event, transaction);
     this.operations.set(published.id, published);
-    this.outbound.set(event.id, { ...outbound, acknowledgedServerSequence: remote.sequence });
+    this.outbound.set(event.id, { ...outbound, acknowledgedServerSequence: published.sequence });
     try { await this.persist("transaction.published", published); }
     catch (error) { this.operations.set(local.id, local); this.outbound.set(event.id, outbound); throw error; }
     return published;
   }
 
   async syncRemote(transport: RemoteSyncTransport): Promise<{ uploaded: number; downloaded: number; cursor: number }> {
-    if (transport.getAutonomyTier) this.autonomyTier = await transport.getAutonomyTier().catch(() => this.autonomyTier);
-    await this.syncTasks(transport);
-    await this.syncClaims(transport);
-    await this.syncHandoffs(transport);
-    await this.syncIntents(transport);
-    await this.syncValidations(transport);
     let uploaded = 0;
     for (const record of [...this.outbound.values()].filter((item) => item.acknowledgedServerSequence === undefined).sort((left, right) => left.event.clientSequence - right.event.clientSequence)) {
       const remote = await transport.upload(record);
@@ -499,16 +237,11 @@ export class LocalDaemon {
     const listed = page;
     // The service assigns dense per-workspace sequences, so a gap means an operation went
     // missing between there and here -- which is why this check exists and why it stays
-    // exact. The only tolerated gaps are the ones the transport declares in `unreadable`:
-    // operations sealed under a workspace key epoch this device was never granted, which
-    // it can name precisely because it is the party that failed to open them. A gap that
-    // is not declared is still an omission and still fails.
-    const unreadable = new Set(listed.unreadable ?? []);
-    const covered = [...listed.operations.map((operation) => operation.sequence), ...unreadable].sort((left, right) => left - right);
+    // exact.
+    const covered = listed.operations.map((operation) => operation.sequence).sort((left, right) => left - right);
     const ordered = covered.every((sequence, index) => sequence === (index === 0 ? this.remoteCursor + 1 : covered[index - 1]! + 1));
     const expectedCursor = covered.at(-1) ?? this.remoteCursor;
     if (!ordered || listed.nextCursor !== expectedCursor || listed.operations.some((operation) => operation.workspaceId !== this.options.workspaceId || operation.sequence <= this.remoteCursor)) throw new Error("Service cursor response was invalid");
-    if (unreadable.size) await this.persist("remote.unreadable", { sequences: [...unreadable].sort((left, right) => left - right) });
     const previousCursor = this.remoteCursor;
     const insertedIds: string[] = [];
     let downloaded = 0;
@@ -516,8 +249,7 @@ export class LocalDaemon {
       const transaction = changeTransactionSchema.parse(remote.transaction);
       transaction.changes.forEach(assertChangeIntegrity);
       if (remote.senderReplicaId === this.options.replicaId || this.operations.has(remote.id)) continue;
-      const risk = transactionRisk(transaction);
-      this.operations.set(remote.id, { ...remote, transaction: { ...transaction, safety: { risk, requiresApproval: risk === "critical" } }, status: "proposed" });
+      this.operations.set(remote.id, { ...remote, transaction });
       insertedIds.push(remote.id);
       downloaded += 1;
     }
@@ -530,8 +262,6 @@ export class LocalDaemon {
         throw error;
       }
     }
-    await this.autoApplyEligibleProposals(insertedIds);
-    await this.autoTriggerSemanticReviews(insertedIds);
     this.serviceStatus = { configured: true, online: true, lastSyncAt: now() };
     return { uploaded, downloaded, cursor: this.remoteCursor };
   }
@@ -542,21 +272,21 @@ export class LocalDaemon {
    * operations back, so the only alternative to jumping forward is polling an unservable
    * cursor forever.
    *
-   * What a resync costs is proposals this replica never downloaded and now never will:
-   * other replicas' unreviewed edits. It costs nothing that Git holds -- commits, the
-   * working tree, and our own outbound queue are untouched -- which is exactly why moving
-   * the cursor is the right answer rather than a data-loss bug. The event log and
-   * `status().service` both record it so the gap is visible after the fact.
+   * What a resync costs is other replicas' changes this one never downloaded and now never
+   * will. It costs nothing that Git holds -- commits, the working tree, and our own
+   * outbound queue are untouched -- which is exactly why moving the cursor is the right
+   * answer rather than a data-loss bug. The event log and `status().service` both record it
+   * so the gap is visible after the fact.
    */
   private async resyncFromRetentionWatermark(status: RemoteCursorTooOld): Promise<void> {
     const previousCursor = this.remoteCursor;
     // A watermark at or below our cursor contradicts the refusal itself: the service can
-    // serve this cursor. Rewinding on it would re-propose operations we already resolved.
+    // serve this cursor. Rewinding on it would re-download operations we already have.
     if (status.resyncFrom <= previousCursor) throw new Error("Service asked for a resync to a cursor it can already serve");
     this.remoteCursor = status.resyncFrom;
     this.lastResync = {
       at: now(),
-      message: `Coordination service no longer retains operations at or below sequence ${status.resyncFrom} (plan history retention is ${status.retentionDays} days); resynchronized from sequence ${previousCursor} to ${status.resyncFrom}. Proposals inside that window were not downloaded and are gone; Git history and the working tree are unaffected.`
+      message: `Coordination service no longer retains operations at or below sequence ${status.resyncFrom} (plan history retention is ${status.retentionDays} days); resynchronized from sequence ${previousCursor} to ${status.resyncFrom}. Changes inside that window were not downloaded and are gone; Git history and the working tree are unaffected.`
     };
     try { await this.persist("remote.resync_required", { cursor: this.remoteCursor, previousCursor, retentionDays: status.retentionDays }); }
     catch (error) {
@@ -567,230 +297,15 @@ export class LocalDaemon {
     process.stderr.write(`${this.lastResync.message}\n`);
   }
 
-  private async syncTasks(transport: RemoteSyncTransport): Promise<void> {
-    for (const record of [...this.taskOutbound.values()].filter((item) => item.acknowledgedAt === undefined).sort((left, right) => left.event.clientSequence - right.event.clientSequence)) {
-      const remote = await transport.uploadTask(record);
-      if (remote.task.id !== record.event.payload.id || remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId !== this.options.replicaId) throw new Error("Service acknowledgement did not match the outbound task");
-      this.taskOutbound.set(record.event.id, { ...record, acknowledgedAt: remote.updatedAt });
-      try { await this.persist("task.published", { eventId: record.event.id, taskId: remote.task.id, updatedAt: remote.updatedAt }); }
-      catch (error) { this.taskOutbound.set(record.event.id, record); throw error; }
-    }
-    const page = await transport.listTasks(this.remoteTaskCursor);
-    const previousCursor = this.remoteTaskCursor;
-    const previousTasks = new Map(this.tasks);
-    for (const remote of page.tasks) {
-      if (remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId === this.options.replicaId) continue;
-      this.tasks.set(remote.task.id, remote.task);
-    }
-    if (page.nextCursor !== this.remoteTaskCursor) {
-      this.remoteTaskCursor = page.nextCursor;
-      try { await this.persist("task.synchronized", { cursor: this.remoteTaskCursor, downloaded: page.tasks.length }); }
-      catch (error) { this.remoteTaskCursor = previousCursor; previousTasks.forEach((task, id) => this.tasks.set(id, task)); throw error; }
-    }
-  }
-
-  private async syncClaims(transport: RemoteSyncTransport): Promise<void> {
-    for (const record of [...this.claimOutbound.values()].filter((item) => item.acknowledgedAt === undefined).sort((left, right) => left.event.clientSequence - right.event.clientSequence)) {
-      const remote = await transport.uploadClaim(record);
-      if (remote.claim.id !== record.event.payload.id || remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId !== this.options.replicaId) throw new Error("Service acknowledgement did not match the outbound claim");
-      this.claimOutbound.set(record.event.id, { ...record, acknowledgedAt: remote.updatedAt });
-      try { await this.persist("claim.published", { eventId: record.event.id, claimId: remote.claim.id, updatedAt: remote.updatedAt }); }
-      catch (error) { this.claimOutbound.set(record.event.id, record); throw error; }
-    }
-    const page = await transport.listClaims(this.remoteClaimCursor);
-    const previousCursor = this.remoteClaimCursor;
-    const previousClaims = new Map(this.claims);
-    for (const remote of page.claims) {
-      if (remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId === this.options.replicaId) continue;
-      if (remote.released) this.claims.delete(remote.claim.id);
-      else this.claims.set(remote.claim.id, remote.claim);
-    }
-    if (page.nextCursor !== this.remoteClaimCursor) {
-      this.remoteClaimCursor = page.nextCursor;
-      try { await this.persist("claim.synchronized", { cursor: this.remoteClaimCursor, downloaded: page.claims.length }); }
-      catch (error) { this.remoteClaimCursor = previousCursor; previousClaims.forEach((claim, id) => this.claims.set(id, claim)); throw error; }
-    }
-  }
-
-  private async syncHandoffs(transport: RemoteSyncTransport): Promise<void> {
-    for (const record of [...this.handoffOutbound.values()].filter((item) => item.acknowledgedAt === undefined).sort((left, right) => left.event.clientSequence - right.event.clientSequence)) {
-      const remote = await transport.uploadHandoff(record);
-      if (remote.handoff.id !== record.event.payload.id || remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId !== this.options.replicaId) throw new Error("Service acknowledgement did not match the outbound handoff");
-      this.handoffOutbound.set(record.event.id, { ...record, acknowledgedAt: remote.updatedAt });
-      try { await this.persist("handoff.published", { eventId: record.event.id, handoffId: remote.handoff.id, updatedAt: remote.updatedAt }); }
-      catch (error) { this.handoffOutbound.set(record.event.id, record); throw error; }
-    }
-    const page = await transport.listHandoffs(this.remoteHandoffCursor);
-    const previousCursor = this.remoteHandoffCursor;
-    const previousHandoffs = new Map(this.handoffs);
-    for (const remote of page.handoffs) {
-      if (remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId === this.options.replicaId) continue;
-      this.handoffs.set(remote.handoff.id, remote.handoff);
-    }
-    if (page.nextCursor !== this.remoteHandoffCursor) {
-      this.remoteHandoffCursor = page.nextCursor;
-      try { await this.persist("handoff.synchronized", { cursor: this.remoteHandoffCursor, downloaded: page.handoffs.length }); }
-      catch (error) { this.remoteHandoffCursor = previousCursor; previousHandoffs.forEach((handoff, id) => this.handoffs.set(id, handoff)); throw error; }
-    }
-  }
-
-  private async syncIntents(transport: RemoteSyncTransport): Promise<void> {
-    for (const record of [...this.intentOutbound.values()].filter((item) => item.acknowledgedAt === undefined).sort((left, right) => left.event.clientSequence - right.event.clientSequence)) {
-      const remote = await transport.uploadIntent(record);
-      if (remote.intent.id !== record.event.payload.id || remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId !== this.options.replicaId) throw new Error("Service acknowledgement did not match the outbound intent");
-      this.intentOutbound.set(record.event.id, { ...record, acknowledgedAt: remote.updatedAt });
-      try { await this.persist("intent.published_remote", { eventId: record.event.id, intentId: remote.intent.id, updatedAt: remote.updatedAt }); }
-      catch (error) { this.intentOutbound.set(record.event.id, record); throw error; }
-    }
-    const page = await transport.listIntents(this.remoteIntentCursor);
-    const previousCursor = this.remoteIntentCursor;
-    const previousIntents = new Map(this.intents);
-    for (const remote of page.intents) {
-      if (remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId === this.options.replicaId) continue;
-      this.intents.set(remote.intent.id, remote.intent);
-    }
-    if (page.nextCursor !== this.remoteIntentCursor) {
-      this.remoteIntentCursor = page.nextCursor;
-      try { await this.persist("intent.synchronized", { cursor: this.remoteIntentCursor, downloaded: page.intents.length }); }
-      catch (error) { this.remoteIntentCursor = previousCursor; previousIntents.forEach((intent, id) => this.intents.set(id, intent)); throw error; }
-    }
-  }
-
-  private async syncValidations(transport: RemoteSyncTransport): Promise<void> {
-    for (const record of [...this.validationOutbound.values()].filter((item) => item.acknowledgedAt === undefined).sort((left, right) => left.event.clientSequence - right.event.clientSequence)) {
-      const remote = await transport.uploadValidation(record);
-      if (remote.validation.id !== record.event.payload.id || remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId !== this.options.replicaId) throw new Error("Service acknowledgement did not match the outbound validation");
-      this.validationOutbound.set(record.event.id, { ...record, acknowledgedAt: remote.createdAt });
-      try { await this.persist("validation.published", { eventId: record.event.id, validationId: remote.validation.id, createdAt: remote.createdAt }); }
-      catch (error) { this.validationOutbound.set(record.event.id, record); throw error; }
-    }
-    const page = await transport.listValidations(this.remoteValidationCursor);
-    const previousCursor = this.remoteValidationCursor;
-    const previousValidations = new Map(this.remoteValidations);
-    for (const remote of page.validations) {
-      if (remote.workspaceId !== this.options.workspaceId || remote.senderReplicaId === this.options.replicaId) continue;
-      this.remoteValidations.set(remote.validation.id, remote);
-    }
-    if (page.nextCursor !== this.remoteValidationCursor) {
-      this.remoteValidationCursor = page.nextCursor;
-      try { await this.persist("validation.synchronized", { cursor: this.remoteValidationCursor, downloaded: page.validations.length }); }
-      catch (error) { this.remoteValidationCursor = previousCursor; previousValidations.forEach((validation, id) => this.remoteValidations.set(id, validation)); throw error; }
-    }
-  }
-
-  async sync(service: LocalCoordinationSink): Promise<StoredOperation[]> {
-    this.autonomyTier = service.getAutonomyTier(this.options.workspaceId);
+  async sync(service: LocalCoordinationSink): Promise<LocalOperation[]> {
     const incoming = service.list(this.options.workspaceId, this.remoteCursor); this.remoteCursor = Math.max(this.remoteCursor, ...incoming.map((operation) => operation.sequence), 0);
-    const proposals = incoming.filter((operation) => operation.senderReplicaId !== this.options.replicaId).map((operation) => {
-      const transaction = changeTransactionSchema.parse(operation.transaction);
-      const risk = transactionRisk(transaction);
-      const stored = { ...operation, transaction: { ...transaction, safety: { risk, requiresApproval: risk === "critical" } }, status: "proposed" as const };
+    const received = incoming.filter((operation) => operation.senderReplicaId !== this.options.replicaId).map((operation) => {
+      const stored = { ...operation, transaction: changeTransactionSchema.parse(operation.transaction) };
       this.operations.set(stored.id, stored);
       return stored;
     });
-    await this.persist("transaction.proposed", { proposals, remoteCursor: this.remoteCursor });
-    await this.autoApplyEligibleProposals(proposals.map((proposal) => proposal.id));
-    await this.autoTriggerSemanticReviews(proposals.map((proposal) => proposal.id));
-    return proposals;
-  }
-  async accept(id: string, options: { reviewApprovals?: Record<string, string> } = {}): Promise<StoredOperation> {
-    const reviewApprovals = options.reviewApprovals ?? {};
-    if (this.materializationPaused) throw new Error("Proposal application is paused while Git state is being re-analyzed");
-    await this.refuseChangedGitState();
-    const operation = this.operations.get(id); if (!operation || operation.status !== "proposed") throw new Error("Proposal was not found");
-    await this.assertApplicable(operation, reviewApprovals);
-    const checkpoint = await this.checkpoint(`Before applying proposal ${id}`);
-    await this.refuseChangedGitState();
-    await this.assertApplicable(operation, reviewApprovals);
-    const prepared: Array<{ change: ChangeTransaction["changes"][number]; absolute: string; temporary?: string }> = [];
-    try {
-      for (const change of operation.transaction.changes) {
-        const absolute = await this.eligiblePath(change.path);
-        if (change.kind === "delete") { prepared.push({ change, absolute }); continue; }
-        if (change.afterContent === undefined) throw new Error(`Proposal does not contain materializable content: ${change.path}`);
-        if (change.afterEncoding !== "base64") assertText(change.afterContent, change.path);
-        await mkdir(dirname(absolute), { recursive: true });
-        const temporary = join(dirname(absolute), `.${basename(absolute)}.${randomUUID()}.crosscode`);
-        await writeFile(temporary, change.afterEncoding === "base64" ? Buffer.from(change.afterContent, "base64") : change.afterContent);
-        prepared.push({ change, absolute, temporary });
-      }
-    } catch (error) {
-      await Promise.all(prepared.filter((item) => item.temporary).map((item) => rm(item.temporary!, { force: true })));
-      throw error;
-    }
-    await this.refuseChangedGitState();
-    await this.assertApplicable(operation, reviewApprovals);
-    const applying = { ...operation, status: "applying" as const, materializationCheckpoint: checkpoint.ref };
-    this.operations.set(id, applying);
-    await this.persist("transaction.applying", applying);
-    const applied: typeof prepared = [];
-    try {
-      for (const item of prepared) {
-        await this.refuseChangedGitState();
-        await this.assertChangeApplicable(operation, item.change, reviewApprovals);
-        if (item.change.kind === "delete") await rm(item.absolute, { force: true });
-        else {
-          await rename(item.temporary!, item.absolute);
-          if (item.change.kind === "rename") {
-            const oldAbsolute = await this.eligiblePath(item.change.previousPath!);
-            await rm(oldAbsolute, { force: true });
-          }
-        }
-        applied.push(item);
-      }
-    } catch (error) {
-      await Promise.all(prepared.filter((item) => !applied.includes(item) && item.temporary).map((item) => rm(item.temporary!, { force: true })));
-      const rolledBack = await this.rollbackMaterialization(operation, checkpoint.ref).catch(() => false);
-      const recovered = { ...operation, status: rolledBack ? "proposed" as const : "conflicted" as const };
-      this.operations.set(id, recovered);
-      await this.persist(rolledBack ? "transaction.apply_rolled_back" : "transaction.conflicted", { id, checkpoint: checkpoint.ref, recovery: rolledBack ? "live rollback" : "newer work preserved" });
-      throw error;
-    }
-    operation.transaction.changes.forEach((change) => { this.capturedHashes.set(change.path, change.afterHash ?? null); if (change.kind === "rename") this.capturedHashes.delete(change.previousPath!); });
-    const accepted = { ...operation, status: "accepted" as const, materializationCheckpoint: checkpoint.ref }; this.operations.set(id, accepted); await this.persist("transaction.accepted", accepted); return accepted;
-  }
-  async reject(id: string): Promise<StoredOperation> { const operation = this.operations.get(id); if (!operation || operation.status !== "proposed") throw new Error("Proposal was not found"); const rejected = { ...operation, status: "rejected" as const }; this.operations.set(id, rejected); await this.persist("transaction.rejected", rejected); return rejected; }
-  async validateProfile(profile: string): Promise<Validation[]> { return this.validate(profile, await validationCommands(this.root, profile)); }
-  async validate(profile: string, commands: string[]): Promise<Validation[]> {
-    const output: Validation[] = [];
-    const queuedEventIds: string[] = [];
-    for (const command of commands) {
-      const checkpoint = await this.checkpoint(`Before validation: ${profile}`);
-      const started = Date.now();
-      const result = await exec(command, { cwd: this.root, shell: true, timeout: 300_000, maxBuffer: 1024 * 1024 }).then(({ stdout, stderr }) => ({ exitCode: 0, output: `${stdout}${stderr}` })).catch((error: { code?: number | string; stdout?: string; stderr?: string; killed?: boolean }) => ({ exitCode: typeof error.code === "number" ? error.code : 1, output: `${error.stdout ?? ""}${error.stderr ?? ""}${error.killed ? "\nValidation timed out" : ""}` }));
-      const afterTree = await snapshotWorktreeTree(this.root);
-      const changedDuringValidation = afterTree !== checkpoint.tree;
-      const validation = { id: randomUUID(), profile, command, exitCode: changedDuringValidation && result.exitCode === 0 ? 1 : result.exitCode, output: this.redactValidationOutput(`${changedDuringValidation ? "Validation invalidated because the working tree changed during the command\n" : ""}${result.output}`), durationMs: Date.now() - started, tree: checkpoint.tree, runnerId: this.options.actorId, createdAt: now() };
-      this.validations.push(validation); output.push(validation);
-      const event: ValidationCompletedEvent = { id: validation.id, schemaVersion: 1, workspaceId: this.options.workspaceId, replicaId: this.options.replicaId, actorId: this.options.actorId, type: "validation.completed", clientSequence: this.eventSequence + 1 + queuedEventIds.length, createdAt: validation.createdAt, payload: validation };
-      this.validationOutbound.set(event.id, { event }); queuedEventIds.push(event.id);
-    }
-    try { await this.persist("validation.completed", output); }
-    catch (error) { queuedEventIds.forEach((id) => this.validationOutbound.delete(id)); throw error; }
-    return output;
-  }
-  async publish(input: { branch: string; profile: string; message?: string; dryRun?: boolean }): Promise<{ branch: string; tree: string; changedPaths: Array<{ path: string; kind: "add" | "modify" | "delete" }> } | { branch: string; commit: string; tree: string; previous?: string }> {
-    if (this.materializationPaused) throw new Error("Proposal application is paused while Git state is being re-analyzed");
-    await this.refuseChangedGitState();
-    const validation = [...this.validations].reverse().find((entry) => entry.profile === input.profile);
-    if (!validation || validation.exitCode !== 0) throw new Error(`No passing validation found for profile ${input.profile}`);
-    const tree = await snapshotWorktreeTree(this.root);
-    if (tree !== validation.tree) throw new Error("Working tree changed since the last validation; re-run validate before publishing");
-    if (input.dryRun) {
-      const tip = await git(this.root, ["rev-parse", "-q", "--verify", `refs/heads/${input.branch}`]).catch(() => undefined);
-      if (!tip) throw new Error(`Branch does not exist: ${input.branch}`);
-      const diff = await git(this.root, ["diff", tip, tree, "--name-status", "-z"]);
-      const parts = diff.split("\0").filter(Boolean);
-      const changedPaths = Array.from({ length: Math.floor(parts.length / 2) }, (_, index) => {
-        const status = parts[index * 2]!;
-        const path = parts[index * 2 + 1]!;
-        return { path, kind: status === "D" ? "delete" as const : status === "A" ? "add" as const : "modify" as const };
-      });
-      return { branch: input.branch, tree, changedPaths };
-    }
-    const result = await publishCommit(this.root, input.branch, input.message ?? "Crosscode publish");
-    await this.persist("publish.completed", { branch: result.branch, commit: result.commit, tree: result.tree });
-    return result;
+    await this.persist("remote.synchronized", { cursor: this.remoteCursor, downloaded: received.length });
+    return received;
   }
   private async changedPaths(): Promise<Array<{ path: string; kind: "add" | "modify" | "delete" | "rename"; previousPath?: string }>> {
     const [base, untracked, exclusions] = await Promise.all([diffBase(this.root), git(this.root, ["ls-files", "-z", "--others", "--exclude-standard"]), configuredExcludedPaths(this.root)]);
@@ -817,347 +332,6 @@ export class LocalDaemon {
       return this.capturedHashes.get(change.path) === currentHash ? undefined : change;
     }))).filter((change): change is { path: string; kind: "add" | "modify" | "delete" | "rename"; previousPath?: string } => Boolean(change));
   }
-  private async assertApplicable(operation: StoredOperation, reviewApprovals: Record<string, string> = {}): Promise<void> {
-    for (const change of operation.transaction.changes) await this.assertChangeApplicable(operation, change, reviewApprovals);
-  }
-
-  /**
-   * Speculatively accepts newly-arrived proposals through the ordinary accept() path when
-   * either (a) a committed .crosscode/config.yaml explicitly configures policy.autoApplyRisk,
-   * or (b) the workspace's service-synced autonomy tier (Phase 9) is 1 or 2. In every case,
-   * accept()'s own assertApplicable/assertChangeApplicable gates are the only thing deciding
-   * eligibility here -- this never bypasses them; a proposal that still requires approval
-   * throws inside accept() before any checkpoint/materialization mutation, so it is left
-   * exactly as an ordinary pending proposal. Tier 0 with no configured autoApplyRisk preserves
-   * today's always-explicit-accept behavior unchanged -- this is exactly how Fundamental Rule 4
-   * ("high/critical risk always requires approval, no exceptions") stays enforced regardless of
-   * autonomy tier.
-   */
-  private async autoApplyEligibleProposals(ids: string[]): Promise<void> {
-    if (!ids.length) return;
-    const threshold = await configuredAutoApplyRisk(this.root).catch(() => undefined);
-    const tier = this.autonomyTier;
-    if (threshold === undefined && tier === 0) return;
-    for (const id of ids) {
-      const operation = this.operations.get(id);
-      if (!operation || operation.status !== "proposed") continue;
-      const eligibleByThreshold = threshold !== undefined && riskRank(operation.transaction.safety.risk) <= riskRank(threshold);
-      const eligibleByTier = tier === 2 || (tier === 1 && await this.tier1AutoApplyEligible(operation));
-      if (!eligibleByThreshold && !eligibleByTier) continue;
-      try {
-        await this.accept(id);
-        await this.persist("transaction.auto_applied", { id, autoApplyRisk: threshold, autonomyTier: tier });
-      } catch { /* not eligible for auto-apply under the current classification; left as a normal proposal */ }
-    }
-  }
-
-  /**
-   * Tier 1 (auto_if_clean) pre-filter: only attempt auto-apply when every change in the
-   * proposal is independent or likely-compatible, a validation has already passed against
-   * the current working tree, and no other actor holds an active exclusive path claim
-   * overlapping the change. This is strictly a pre-filter -- accept()'s own gates still
-   * decide final eligibility, so a "likely-compatible" change (which always requiresApproval)
-   * is attempted here but rejected there, leaving it as a normal pending proposal.
-   */
-  private async tier1AutoApplyEligible(operation: StoredOperation): Promise<boolean> {
-    const tree = await snapshotWorktreeTree(this.root).catch(() => undefined);
-    if (tree === undefined || !this.validations.some((validation) => validation.exitCode === 0 && validation.tree === tree)) return false;
-    for (const change of operation.transaction.changes) {
-      if (this.hasConflictingClaim(change.path)) return false;
-      const { analysis } = await this.analyzeChange(operation.id, change).catch(() => ({ analysis: undefined }));
-      if (!analysis || (analysis.classification !== "independent" && analysis.classification !== "likely-compatible")) return false;
-    }
-    return true;
-  }
-
-  private hasConflictingClaim(path: string): boolean {
-    const nowIso = now();
-    for (const claim of this.claims.values()) {
-      if (claim.kind !== "path" || claim.mode !== "exclusive-preferred") continue;
-      if (claim.ownerId === this.options.actorId) continue;
-      if (claim.expiresAt && claim.expiresAt <= nowIso) continue;
-      if (pathOverlaps(path, claim.target)) return true;
-    }
-    return false;
-  }
-
-  /**
-   * Auto-triggers a semantic review the moment deterministic analysis first classifies a change
-   * as review-eligible ("likely-compatible" / "semantic-overlap") on a proposal freshly arrived
-   * from a remote peer, so a review is already in flight (or done) by the time a human looks at
-   * it instead of only being available on demand. Always uses AGENT_DELEGATED_PROVIDER_ID -- the
-   * fixed label for the default AgentDelegatedReviewer -- and only runs when workspace policy has
-   * opted into it via the existing externalAiReview/allowedProviders mechanism. The actual
-   * `reviewer.review()` call is never awaited here: it can legitimately take up to 10 minutes
-   * (BUILD_INSTRUCTIONS.md section 20), so triggering it must never block sync/ingestion. Failures
-   * are swallowed -- this is best-effort, and on-demand review remains available regardless.
-   */
-  private async autoTriggerSemanticReviews(ids: string[]): Promise<void> {
-    if (!ids.length || !this.options.reviewer) return;
-    const policy = await configuredAiReviewPolicy(this.root).catch(() => undefined);
-    if (!policy || policy.externalAiReview !== "approved" || !policy.allowedProviders.includes(AGENT_DELEGATED_PROVIDER_ID)) return;
-    for (const id of ids) {
-      const operation = this.operations.get(id);
-      if (!operation || operation.status !== "proposed") continue;
-      const existingReviews = this.listSemanticReviewsFor(id);
-      for (const change of operation.transaction.changes) {
-        if (existingReviews.some((review) => review.path === change.path && review.providerId === AGENT_DELEGATED_PROVIDER_ID)) continue;
-        let analysis: OperationAnalysis;
-        try { ({ analysis } = await this.analyzeChange(id, change)); }
-        catch { continue; }
-        if (!isReviewEligible(analysis.classification)) continue;
-        void this.requestSemanticReview(id, change.path, AGENT_DELEGATED_PROVIDER_ID).catch(() => { /* auto-trigger is best-effort; on-demand review remains available */ });
-      }
-    }
-  }
-
-  /**
-   * An accepted semantic review only lifts the approval gate for the exact base/local/proposed
-   * bytes it reviewed. Any drift since the review recomputes to a hash mismatch here, which
-   * falls back to the ordinary (still-blocked) approval path -- the review can never be reused
-   * against different content and can never materialize anything by itself.
-   */
-  private reviewSatisfiesApproval(operation: StoredOperation, change: ChangeTransaction["changes"][number], classification: string, beforeText: string | undefined, current: string | undefined, reviewApprovals: Record<string, string>): boolean {
-    const reviewId = reviewApprovals[change.path];
-    if (!reviewId) return false;
-    const record = this.semanticReviews.get(reviewId);
-    if (!record || record.operationId !== operation.id || record.path !== change.path || record.decision !== "accepted") return false;
-    if (record.deterministicClassification !== classification) return false;
-    const baseHash = beforeText === undefined ? undefined : contentHash(beforeText);
-    const localHash = current === undefined ? undefined : contentHash(current);
-    const proposedHash = change.afterContent === undefined ? undefined : contentHash(change.afterContent);
-    return record.baseHash === baseHash && record.localHash === localHash && record.proposedHash === proposedHash;
-  }
-  private async analyzeChange(operationId: string, change: ChangeTransaction["changes"][number]): Promise<{ analysis: OperationAnalysis; beforeText?: string; current?: string; mergedCandidate?: string }> {
-    const currentBuffer = await this.readWorkingBuffer(change.path);
-    const current = currentBuffer === undefined ? undefined : safeDecodeText(currentBuffer);
-    const baseMatches = (currentBuffer === undefined ? undefined : contentHash(currentBuffer)) === change.beforeHash;
-    const conflicting = this.findConflictingChange(operationId, change.path);
-    const previousPathConflicting = change.kind === "rename" ? this.findConflictingChange(operationId, change.previousPath!) : undefined;
-    const overlaps = (conflicting !== undefined && pathOverlaps(change.path, conflicting.path) && changesOverlap(change, conflicting))
-      || (previousPathConflicting !== undefined && pathOverlaps(change.previousPath!, previousPathConflicting.path) && changesOverlap(change, previousPathConflicting));
-    const activeConflicting = conflicting ?? previousPathConflicting;
-    const beforeBytes = await readRevisionFile(this.root, "HEAD", change.path).catch(() => undefined);
-    const beforeText = beforeBytes === undefined ? undefined : safeDecodeText(beforeBytes);
-    const semanticOverlap = looksLikeInterfaceChange(beforeText, change.afterContent, change.path);
-    let dependents: string[] | undefined;
-    if (semanticOverlap) {
-      const changedSymbols = changedExportedSymbols(beforeText, change.afterContent);
-      const astDependents = changedSymbols.length ? await findAstDependentFiles(this.root, changedSymbols, change.path) : undefined;
-      if (astDependents !== undefined) {
-        dependents = astDependents;
-      } else {
-        const direct = changedSymbols.length ? await findSymbolReferences(this.root, changedSymbols, change.path) : [];
-        const transitive = direct.length ? await this.findTransitiveDependents(direct, change.path) : [];
-        dependents = [...new Set([...direct, ...transitive])].sort();
-      }
-    }
-    /**
-     * A rename's baseMatches must require BOTH that the destination is still free (like "add")
-     * AND that the source path's current local content still matches the beforeHash the proposal
-     * was built from (like "modify"/"delete") -- otherwise a rename could silently delete source
-     * content that has since diverged locally, bypassing the stale-base protection every other
-     * change kind gets. Checking only the destination would let a rename overwrite/discard a
-     * locally-edited source file without ever flagging it.
-     */
-    let renameBaseMatches = currentBuffer === undefined;
-    if (renameBaseMatches && change.kind === "rename") {
-      const previousBuffer = await this.readWorkingBuffer(change.previousPath!);
-      renameBaseMatches = previousBuffer !== undefined && contentHash(previousBuffer) === change.beforeHash;
-    }
-    let analysis = analyzeOperation({ path: change.path, previousPath: change.previousPath, baseMatches: change.kind === "add" ? currentBuffer === undefined : change.kind === "rename" ? renameBaseMatches : baseMatches, overlaps, kind: change.kind, conflictingKind: activeConflicting?.kind, semanticOverlap, dependents });
-    let mergedCandidate: string | undefined;
-    if (analysis.classification === "stale-base" && change.kind === "modify" && current !== undefined && change.afterContent !== undefined && change.afterEncoding !== "base64" && beforeText !== undefined) {
-      const merge = await threeWayMerge(beforeText, current, change.afterContent);
-      if (merge.clean) { analysis = { ...analysis, classification: "stale-base-resolved" }; mergedCandidate = merge.content; }
-    }
-    return { analysis, beforeText, current, mergedCandidate };
-  }
-  private async assertChangeApplicable(operation: StoredOperation, change: ChangeTransaction["changes"][number], reviewApprovals: Record<string, string> = {}): Promise<void> {
-    await this.eligiblePath(change.path);
-    assertChangeIntegrity(change);
-    if (change.afterContent !== undefined && change.afterEncoding !== "base64") assertText(change.afterContent, change.path);
-    const { analysis, beforeText, current, mergedCandidate } = await this.analyzeChange(operation.id, change);
-    if (analysis.requiresApproval) {
-      const stamped = { ...this.operations.get(operation.id)!, transaction: { ...operation.transaction, safety: { risk: analysis.risk, requiresApproval: true } } };
-      this.operations.set(operation.id, stamped);
-      await this.persist("transaction.safety_updated", stamped);
-    }
-    if (analysis.classification === "delete-vs-modify" || analysis.classification === "semantic-overlap" || analysis.classification === "interface-impact" || analysis.classification === "stale-base" || analysis.classification === "stale-base-resolved") {
-      await this.persistConflictArtifact(operation.id, change.path, analysis.classification, beforeText, current, change.afterContent, analysis.dependents, mergedCandidate);
-    }
-    if (analysis.classification === "stale-base") { const conflicted = { ...this.operations.get(operation.id)!, status: "conflicted" as const }; this.operations.set(operation.id, conflicted); await this.persist("transaction.conflicted", conflicted); throw new Error("Proposal has a stale base; local work was not changed"); }
-    if (analysis.classification === "stale-base-resolved") throw new Error("Proposal has a stale base; a three-way merge candidate was prepared and requires human approval");
-    if (analysis.requiresApproval && this.reviewSatisfiesApproval(operation, change, analysis.classification, beforeText, current, reviewApprovals)) return;
-    if (analysis.requiresApproval) throw new Error("High-risk proposal requires local human approval policy");
-  }
-  private async findTransitiveDependents(direct: string[], excludePath: string): Promise<string[]> {
-    const visited = new Set([excludePath, ...direct]);
-    const transitive = new Set<string>();
-    for (const dependentPath of direct) {
-      const content = await this.readWorkingText(dependentPath).catch(() => undefined);
-      if (content === undefined) continue;
-      const symbols = exportedSymbolNames(content);
-      if (!symbols.length) continue;
-      const nextHop = await findSymbolReferences(this.root, symbols, dependentPath);
-      for (const found of nextHop) if (!visited.has(found)) { transitive.add(found); visited.add(found); }
-    }
-    return [...transitive];
-  }
-  private findConflictingChange(operationId: string, path: string): ChangeTransaction["changes"][number] | undefined {
-    for (const candidate of this.operations.values()) {
-      if (candidate.id === operationId) continue;
-      if (candidate.status !== "local" && candidate.status !== "proposed") continue;
-      const change = candidate.transaction.changes.find((item) => item.path === path);
-      if (change) return change;
-    }
-    return undefined;
-  }
-  private async persistConflictArtifact(operationId: string, path: string, classification: string, base: string | undefined, local: string | undefined, proposed: string | undefined, dependents?: string[], mergedCandidate?: string): Promise<void> {
-    this.state.recordConflictArtifact({ id: randomUUID(), operationId, path, classification, baseContent: base, localContent: local, proposedContent: proposed, dependents, mergedCandidate, createdAt: now() });
-  }
-  async diffProposal(id: string): Promise<Array<{ path: string; base?: string; local?: string; proposed?: string; classification: string; risk: string; requiresApproval: boolean; dependents?: string[]; mergedCandidate?: string }>> {
-    const operation = this.operations.get(id); if (!operation) throw new Error("Proposal was not found");
-    return Promise.all(operation.transaction.changes.map(async (change) => {
-      const { analysis, beforeText, current, mergedCandidate } = await this.analyzeChange(id, change);
-      return { path: change.path, base: beforeText, local: current, proposed: change.afterContent, classification: analysis.classification, risk: analysis.risk, requiresApproval: analysis.requiresApproval, dependents: analysis.dependents, mergedCandidate };
-    }));
-  }
-  /**
-   * Reads the persisted `conflict_artifact` rows for an operation directly, unlike
-   * `diffProposal`, which recomputes classification live. This is the historical
-   * record written at the time each classification required approval and does not
-   * change if the working tree or pending operations change afterward.
-   */
-  conflictArtifacts(operationId: string): ConflictArtifactRecord[] {
-    if (!this.operations.has(operationId)) throw new Error("Proposal was not found");
-    return this.state.listConflictArtifacts(operationId);
-  }
-  /**
-   * Non-authoritative AI semantic review (BUILD_INSTRUCTIONS.md section 25). Only callable
-   * for the two classifications deterministic analysis already marks ambiguous
-   * ("likely-compatible" / "semantic-overlap"); everything else -- independent changes,
-   * stale bases, delete-vs-modify, and critical-path work -- is resolved deterministically
-   * or refused outright and never reaches a provider. This only ever writes an audit
-   * record; it can never materialize a file, Git ref, or publish by itself.
-   */
-  async requestSemanticReview(operationId: string, path: string, providerId: string): Promise<SemanticReviewRecord> {
-    if (!this.options.reviewer) throw new Error("No semantic reviewer is configured for this daemon");
-    const operation = this.operations.get(operationId);
-    if (!operation || operation.status !== "proposed") throw new Error("Proposal was not found");
-    const change = operation.transaction.changes.find((candidate) => candidate.path === path);
-    if (!change) throw new Error(`Proposal does not contain a change for ${path}`);
-    const { analysis, beforeText, current } = await this.analyzeChange(operationId, change);
-    if (!isReviewEligible(analysis.classification)) throw new Error(`Classification "${analysis.classification}" is not eligible for AI review`);
-    const risk = analysis.risk as "medium" | "high" | "critical";
-    const policy = await configuredAiReviewPolicy(this.root);
-    const authorization = authorizeSemanticReview(policy, providerId, analysis.classification);
-    if (!authorization.allowed) throw new Error(authorization.reason);
-    const excludedPaths = await configuredExcludedPaths(this.root);
-    const { request, redactions } = buildSemanticReviewBundle({
-      workspaceId: this.options.workspaceId,
-      operationId,
-      risk,
-      intents: operation.transaction.intent ? [operation.transaction.intent] : [],
-      validations: this.validations.slice(-5).map((validation) => ({ command: validation.command, exitCode: validation.exitCode, tree: validation.tree })),
-      files: [{ path, base: beforeText, local: current, proposed: change.afterContent, binary: change.afterEncoding === "base64" }],
-      excludedPaths
-    });
-    const raw = await this.options.reviewer.review(request);
-    const response = applyRiskSafetyGate(validateSemanticReview(raw), risk);
-    const record: SemanticReviewRecord = {
-      id: randomUUID(), operationId, path, providerId, classification: response.classification, requestedRisk: risk,
-      deterministicClassification: analysis.classification, redactions,
-      baseHash: beforeText === undefined ? undefined : contentHash(beforeText),
-      localHash: current === undefined ? undefined : contentHash(current),
-      proposedHash: change.afterContent === undefined ? undefined : contentHash(change.afterContent),
-      response, decision: "pending", createdAt: now()
-    };
-    this.semanticReviews.set(record.id, record);
-    this.state.upsertSemanticReview(record);
-    await this.persist("semantic_review.requested", { id: record.id, operationId, path, providerId, classification: record.classification, requiresHumanApproval: response.requiresHumanApproval, redactions: record.redactions });
-    return record;
-  }
-
-  /** Recording a decision is audit-only: it never touches the filesystem or Git state. */
-  async resolveSemanticReview(reviewId: string, decision: "accepted" | "rejected"): Promise<SemanticReviewRecord> {
-    const record = this.semanticReviews.get(reviewId);
-    if (!record || record.decision !== "pending") throw new Error("Semantic review was not found");
-    const resolved: SemanticReviewRecord = { ...record, decision, decidedAt: now() };
-    this.semanticReviews.set(reviewId, resolved);
-    this.state.upsertSemanticReview(resolved);
-    await this.persist("semantic_review.resolved", { id: reviewId, decision });
-    return resolved;
-  }
-
-  listSemanticReviewsFor(operationId: string): SemanticReviewRecord[] {
-    return [...this.semanticReviews.values()].filter((record) => record.operationId === operationId);
-  }
-
-  private async refuseChangedGitState(): Promise<void> {
-    const transition = await this.observeGitTransition();
-    if (transition.kind === "unchanged") return;
-    await this.reanalyzePendingOperations();
-    throw new Error(`Git state changed (${transition.kind}) while accepting the proposal; local work was not changed`);
-  }
-  private async reconcileInterruptedMaterializations(): Promise<void> {
-    for (const operation of this.operations.values()) {
-      if (operation.status !== "applying") continue;
-      const fullyApplied = (await Promise.all(operation.transaction.changes.map(async (change) => {
-        const current = await this.readWorkingBuffer(change.path);
-        return change.kind === "delete" ? current === undefined : current !== undefined && contentHash(current) === change.afterHash;
-      }))).every(Boolean);
-      if (fullyApplied) {
-        const accepted = { ...operation, status: "accepted" as const };
-        this.operations.set(operation.id, accepted);
-        await this.persist("transaction.accepted", { ...accepted, recovery: "interrupted materialization" });
-        continue;
-      }
-      if (!operation.materializationCheckpoint) {
-        const conflicted = { ...operation, status: "conflicted" as const };
-        this.operations.set(operation.id, conflicted);
-        await this.persist("transaction.conflicted", { ...conflicted, recovery: "missing materialization checkpoint" });
-        continue;
-      }
-      try {
-        const rolledBack = await this.rollbackMaterialization(operation, operation.materializationCheckpoint);
-        const recovered = { ...operation, status: rolledBack ? "proposed" as const : "conflicted" as const };
-        this.operations.set(operation.id, recovered);
-        await this.persist(rolledBack ? "transaction.apply_rolled_back" : "transaction.conflicted", { id: operation.id, checkpoint: operation.materializationCheckpoint, recovery: rolledBack ? "interrupted materialization" : "newer work preserved" });
-      } catch {
-        const conflicted = { ...operation, status: "conflicted" as const };
-        this.operations.set(operation.id, conflicted);
-        await this.persist("transaction.conflicted", { ...conflicted, recovery: "rollback failed" });
-      }
-    }
-  }
-  private async rollbackMaterialization(operation: StoredOperation, checkpoint: string): Promise<boolean> {
-    const proposalHash = (change: ChangeTransaction["changes"][number]): string | undefined => {
-      if (change.kind === "delete" || change.afterContent === undefined) return undefined;
-      return contentHash(change.afterEncoding === "base64" ? Buffer.from(change.afterContent, "base64") : change.afterContent);
-    };
-    const actions: ChangeTransaction["changes"] = [];
-    for (const change of operation.transaction.changes) {
-      await this.eligiblePath(change.path);
-      const current = await this.readWorkingBuffer(change.path);
-      const checkpointBytes = await readRevisionFile(this.root, checkpoint, change.path).catch(() => undefined);
-      if (change.kind !== "add" && checkpointBytes === undefined) return false;
-      const proposalContent = change.kind === "delete" ? undefined : change.afterContent;
-      if (change.kind !== "delete" && proposalContent === undefined) return false;
-      const currentHash = current === undefined ? undefined : contentHash(current);
-      const proposalMatches = currentHash === proposalHash(change);
-      const checkpointMatches = currentHash === (checkpointBytes === undefined ? undefined : contentHash(checkpointBytes));
-      if (!proposalMatches && !checkpointMatches) return false;
-      if (proposalMatches && !checkpointMatches) actions.push(change);
-    }
-    for (const change of [...actions].reverse()) {
-      const current = await this.readWorkingBuffer(change.path);
-      if ((current === undefined ? undefined : contentHash(current)) !== proposalHash(change)) return false;
-      if (change.kind === "add") await rm(await this.eligiblePath(change.path), { force: true });
-      else await this.restoreEligibleCheckpointFile(checkpoint, change.path);
-    }
-    return true;
-  }
   private async snapshotIsStable(repository: Awaited<ReturnType<typeof discoverRepository>>, changes: Array<{ path: string; kind: "add" | "modify" | "delete" | "rename"; afterHash?: string }>): Promise<boolean> {
     const latest = await discoverRepository(this.root);
     if (latest.head !== repository.head || latest.headReflog !== repository.headReflog || latest.branch !== repository.branch || latest.worktree !== repository.worktree || latest.indexTree !== repository.indexTree || latest.operation !== repository.operation) return false;
@@ -1172,18 +346,6 @@ export class LocalDaemon {
     if (redactPath(path) || matchesConfiguredExclusion(path, await configuredExcludedPaths(this.root))) throw new Error(`Refusing excluded path: ${path}`);
     return safeRepositoryPath(this.root, path);
   }
-  private async restoreEligibleCheckpointFile(ref: string, path: string): Promise<void> {
-    await this.eligiblePath(path);
-    await restoreCheckpointFile(this.root, ref, path);
-  }
-  private async readWorkingText(path: string): Promise<string | undefined> {
-    const absolute = await safeRepositoryPath(this.root, path);
-    try { return decodeText(await readFile(absolute), path); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-      throw error;
-    }
-  }
   private async readWorkingBuffer(path: string): Promise<Buffer | undefined> {
     const absolute = await safeRepositoryPath(this.root, path);
     try { return await readFile(absolute); }
@@ -1193,8 +355,7 @@ export class LocalDaemon {
     }
   }
   private ignoredPath(path: string): boolean { const relative = path.startsWith(this.root) ? path.slice(this.root.length + 1) : path; return /(^|\/)(\.git|node_modules|dist|build|coverage)(\/|$)/.test(relative) || /(^|\/)\.[^/]+\.[0-9a-f-]+\.crosscode$/.test(relative) || redactPath(relative); }
-  private redactValidationOutput(output: string): string { return output.slice(0, 64 * 1024).replace(/((?:api[_-]?key|token|password|secret|authorization)\s*[:=]\s*)([^\s]+)/gi, "$1[REDACTED]"); }
-  private async persist<T extends LocalEvent["type"]>(type: T, payload: Extract<LocalEvent, { type: T }>["payload"]): Promise<void> { this.eventSequence = this.state.record({ tasks: [...this.tasks.values()], claims: [...this.claims.values()], operations: [...this.operations.values()], validations: [...this.validations], checkpoints: [...this.checkpoints], handoffs: [...this.handoffs.values()], intents: [...this.intents.values()], outbound: [...this.outbound.values()], taskOutbound: [...this.taskOutbound.values()], claimOutbound: [...this.claimOutbound.values()], handoffOutbound: [...this.handoffOutbound.values()], intentOutbound: [...this.intentOutbound.values()], validationOutbound: [...this.validationOutbound.values()], remoteCursor: this.remoteCursor, remoteTaskCursor: this.remoteTaskCursor, remoteClaimCursor: this.remoteClaimCursor, remoteHandoffCursor: this.remoteHandoffCursor, remoteIntentCursor: this.remoteIntentCursor, remoteValidationCursor: this.remoteValidationCursor, capturedHashes: Object.fromEntries(this.capturedHashes), gitState: this.gitState, materializationPaused: this.materializationPaused }, { type, payload } as LocalEvent); }
+  private async persist<T extends LocalEvent["type"]>(type: T, payload: Extract<LocalEvent, { type: T }>["payload"]): Promise<void> { this.eventSequence = this.state.record({ operations: [...this.operations.values()], outbound: [...this.outbound.values()], remoteCursor: this.remoteCursor, capturedHashes: Object.fromEntries(this.capturedHashes), gitState: this.gitState, materializationPaused: this.materializationPaused }, { type, payload } as LocalEvent); }
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -1230,48 +391,6 @@ async function readJsonBody(request: import("node:http").IncomingMessage): Promi
   });
 }
 
-function operationId(pathname: string, action: "accept" | "reject" | "analysis" | "diff" | "artifacts"): string | undefined {
-  const match = pathname.match(new RegExp(`^/v1/operations/([^/]+)/${action}$`));
-  if (!match) return undefined;
-  try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid operation ID"); }
-}
-
-function reviewsCollectionId(pathname: string): string | undefined {
-  const match = pathname.match(/^\/v1\/operations\/([^/]+)\/reviews$/);
-  if (!match) return undefined;
-  try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid operation ID"); }
-}
-
-function reviewDecisionId(pathname: string, action: "accept" | "reject"): string | undefined {
-  const match = pathname.match(new RegExp(`^/v1/reviews/([^/]+)/${action}$`));
-  if (!match) return undefined;
-  try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid review ID"); }
-}
-
-function semanticReviewSubmitId(pathname: string): string | undefined {
-  const match = pathname.match(/^\/v1\/semantic-reviews\/([^/]+)\/submit$/);
-  if (!match) return undefined;
-  try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid requestId"); }
-}
-
-function handoffRespondId(pathname: string): string | undefined {
-  const match = pathname.match(/^\/v1\/handoffs\/([^/]+)\/respond$/);
-  if (!match) return undefined;
-  try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid handoff ID"); }
-}
-
-function taskId(pathname: string): string | undefined {
-  const match = pathname.match(/^\/v1\/tasks\/([^/]+)$/);
-  if (!match) return undefined;
-  try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid task ID"); }
-}
-
-function claimReleaseId(pathname: string): string | undefined {
-  const match = pathname.match(/^\/v1\/claims\/([^/]+)\/release$/);
-  if (!match) return undefined;
-  try { return decodeURIComponent(match[1]!); } catch { throw new HttpError(400, "Invalid claim ID"); }
-}
-
 export type RunningDaemon = { daemon: LocalDaemon; server: Server; port: number; secret: string; close: () => Promise<void> };
 
 export async function startDaemon(directory: string, options: DaemonOptions, port = 0): Promise<RunningDaemon> {
@@ -1283,69 +402,13 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
       const method = request.method ?? "GET";
       const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
       const payload = method === "POST" || method === "PUT" ? await readJsonBody(request) : undefined;
-      const acceptId = operationId(pathname, "accept");
-      const rejectId = operationId(pathname, "reject");
-      const analysisId = operationId(pathname, "analysis");
-      const diffId = operationId(pathname, "diff");
-      const artifactsId = operationId(pathname, "artifacts");
-      const respondHandoffId = handoffRespondId(pathname);
-      const updateTaskId = taskId(pathname);
-      const releaseClaimId = claimReleaseId(pathname);
-      const reviewsOperationId = reviewsCollectionId(pathname);
-      const acceptReviewId = reviewDecisionId(pathname, "accept");
-      const rejectReviewId = reviewDecisionId(pathname, "reject");
-      const submitReviewRequestId = semanticReviewSubmitId(pathname);
-      /**
-       * These two routes must not run inside `daemon.runExclusive` -- a pending agent-delegated
-       * review can be held open (up to its timeout) waiting on a future `submit()` call, and that
-       * call itself arrives as another HTTP request. Serializing it behind the same mutex as the
-       * request that created the pending review would deadlock the daemon.
-       */
-      if (method === "GET" && pathname === "/v1/semantic-reviews/pending") {
-        const data = daemon.options.reviewer instanceof AgentDelegatedReviewer ? daemon.options.reviewer.listPending() : [];
-        sendJson(response, 200, { ok: true, data });
-        return;
-      }
-      if (method === "POST" && submitReviewRequestId) {
-        if (!(daemon.options.reviewer instanceof AgentDelegatedReviewer)) { sendJson(response, 404, { ok: false, error: "No pending semantic review for this requestId" }); return; }
-        const submission = daemon.options.reviewer.submit(submitReviewRequestId, payload);
-        if (!submission.ok) { sendJson(response, 404, { ok: false, error: submission.error }); return; }
-        sendJson(response, 200, { ok: true, data: submission });
-        return;
-      }
       const result = await daemon.runExclusive(async () => {
         let status = 200;
         let data: unknown;
         if (method === "GET" && pathname === "/v1/status") data = await daemon.status();
         else if (method === "GET" && pathname === "/v1/workspace") data = { root: daemon.root, workspaceId: daemon.options.workspaceId, replicaId: daemon.options.replicaId, actorId: daemon.options.actorId };
-        else if (method === "GET" && pathname === "/v1/workspace/autonomy") data = { tier: daemon.currentAutonomyTier() };
-        else if (method === "PUT" && pathname === "/v1/workspace/autonomy") data = { tier: await daemon.setAutonomyTier(setWorkspaceAutonomyRequestSchema.parse(payload).tier) };
-        else if (method === "GET" && pathname === "/v1/tasks") data = [...daemon.tasks.values()];
-        else if (method === "POST" && pathname === "/v1/tasks") { data = await daemon.createTask(taskRequestSchema.parse(payload)); status = 201; }
-        else if (method === "POST" && updateTaskId) data = await daemon.updateTask(updateTaskId, taskRequestSchema.parse(payload));
-        else if (method === "GET" && pathname === "/v1/claims") data = [...daemon.claims.values()];
-        else if (method === "POST" && pathname === "/v1/claims") { data = await daemon.createClaim(claimRequestSchema.parse(payload)); status = 201; }
-        else if (method === "POST" && releaseClaimId) data = await daemon.releaseClaim(releaseClaimId);
         else if (method === "GET" && pathname === "/v1/operations") data = [...daemon.operations.values()];
-        else if (method === "GET" && pathname === "/v1/checkpoints") data = [...daemon.checkpoints];
-        else if (method === "GET" && analysisId) data = { operation: daemon.operations.get(analysisId), analysis: await daemon.analyzeProposal(analysisId) };
-        else if (method === "GET" && diffId) data = await daemon.diffProposal(diffId);
-        else if (method === "GET" && artifactsId) data = daemon.conflictArtifacts(artifactsId);
-        else if (method === "POST" && acceptId) { const body = acceptOperationRequestSchema.parse(payload); data = await daemon.accept(acceptId, { reviewApprovals: body?.reviewApprovals }); }
-        else if (method === "POST" && rejectId) data = await daemon.reject(rejectId);
-        else if (method === "GET" && reviewsOperationId) data = daemon.listSemanticReviewsFor(reviewsOperationId);
-        else if (method === "POST" && reviewsOperationId) { const body = semanticReviewRequestBodySchema.parse(payload); data = await daemon.requestSemanticReview(reviewsOperationId, body.path, body.providerId); status = 201; }
-        else if (method === "POST" && acceptReviewId) data = await daemon.resolveSemanticReview(acceptReviewId, "accepted");
-        else if (method === "POST" && rejectReviewId) data = await daemon.resolveSemanticReview(rejectReviewId, "rejected");
-        else if (method === "POST" && pathname === "/v1/checkpoints") { data = await daemon.checkpoint(checkpointRequestSchema.parse(payload).message); status = 201; }
-        else if (method === "POST" && pathname === "/v1/checkpoints/inspect") { const { ref } = checkpointInspectRequestSchema.parse(payload); data = await daemon.inspectCheckpoint(ref); }
-        else if (method === "POST" && pathname === "/v1/checkpoints/restore") { const input = checkpointRestoreRequestSchema.parse(payload); await daemon.restoreCheckpointFile(input.ref, input.path); data = { restored: input.path }; }
         else if (method === "POST" && pathname === "/v1/transactions") { const parsed = captureRequestSchema.parse(payload); data = await daemon.capture(parsed.intent, undefined, parsed.kind ?? "intent"); status = 201; }
-        else if (method === "POST" && pathname === "/v1/intents") { data = await daemon.publishIntent(intentRequestSchema.parse(payload)); status = 201; }
-        else if (method === "POST" && pathname === "/v1/validate") { const { profile } = validationRequestSchema.parse(payload); data = await daemon.validateProfile(profile); }
-        else if (method === "POST" && pathname === "/v1/publish") { data = await daemon.publish(publishRequestSchema.parse(payload)); }
-        else if (method === "POST" && pathname === "/v1/handoffs") { data = await daemon.requestHandoff(handoffRequestSchema.parse(payload)); status = 201; }
-        else if (method === "POST" && respondHandoffId) { data = await daemon.respondHandoff(respondHandoffId, handoffRespondRequestSchema.parse(payload).decision); }
         else throw new HttpError(404, "Not found");
         return { status, data };
       });
@@ -1355,9 +418,9 @@ export async function startDaemon(directory: string, options: DaemonOptions, por
       if (error && typeof error === "object" && "name" in error && error.name === "ZodError") { sendJson(response, 400, { ok: false, error: "Invalid request" }); return; }
       // The caller already proved it holds the daemon's secret over loopback, so it is
       // as trusted as the process itself -- there is nothing to withhold from it, and a
-      // bare "Request failed" left every real failure (a missing validation profile, a
-      // stale base, an unreadable file) undiagnosable from the CLI or an agent. The
-      // repository root is still masked so absolute paths stay out of agent transcripts.
+      // bare "Request failed" left every real failure (a stale base, an unreadable file)
+      // undiagnosable from the CLI or an agent. The repository root is still masked so
+      // absolute paths stay out of agent transcripts.
       const detail = error instanceof Error ? error.message.replaceAll(daemon.root, "<repository>") : "Unknown error";
       console.error("Crosscode request failed", detail);
       sendJson(response, 500, { ok: false, error: detail });

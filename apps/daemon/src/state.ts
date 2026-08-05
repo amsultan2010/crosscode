@@ -1,45 +1,17 @@
 import { chmod, lstat, mkdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { dirname } from "node:path";
-import {
-  EPOCH_CURSOR,
-  type ChangeTransaction, type Claim, type ClaimCreatedEvent, type ClaimReleasedEvent, type EventEnvelope,
-  type Handoff, type HandoffRequestedEvent, type HandoffRespondedEvent, type Intent, type IntentPublishedEvent,
-  type Task, type TaskCreatedEvent, type TaskUpdatedEvent, type Validation, type ValidationCompletedEvent
-} from "@crosscode/protocol";
-import type { SemanticReviewRecord, StoredOperation } from "./types.js";
+import type { ChangeTransaction, EventEnvelope } from "@crosscode/protocol";
+import type { LocalOperation } from "./types.js";
 import { localEventSchema, type LocalEvent } from "./local-event.js";
 
 export type GitState = { head?: string; headReflog?: string; branch?: string; worktree: string; indexTree?: string; operation?: "merge" | "rebase" | "cherry-pick" | "revert" };
-export type CheckpointRecord = { ref: string; commit: string; tree: string; message: string; createdAt: string };
 export type OutboundRecord = { event: EventEnvelope; transaction: ChangeTransaction; acknowledgedServerSequence?: number };
-export type ConflictArtifactRecord = { id: string; operationId: string; path: string; classification: string; baseContent?: string; localContent?: string; proposedContent?: string; dependents?: string[]; mergedCandidate?: string; createdAt: string };
-export type TaskOutboundRecord = { event: TaskCreatedEvent | TaskUpdatedEvent; acknowledgedAt?: string };
-export type ClaimOutboundRecord = { event: ClaimCreatedEvent | ClaimReleasedEvent; acknowledgedAt?: string };
-export type HandoffOutboundRecord = { event: HandoffRequestedEvent | HandoffRespondedEvent; acknowledgedAt?: string };
-export type IntentOutboundRecord = { event: IntentPublishedEvent; acknowledgedAt?: string };
-export type ValidationOutboundRecord = { event: ValidationCompletedEvent; acknowledgedAt?: string };
 
 export type DaemonSnapshot = {
-  tasks: Task[];
-  claims: Claim[];
-  operations: StoredOperation[];
-  validations: Validation[];
-  checkpoints: CheckpointRecord[];
-  handoffs: Handoff[];
-  intents: Intent[];
+  operations: LocalOperation[];
   outbound: OutboundRecord[];
-  taskOutbound: TaskOutboundRecord[];
-  claimOutbound: ClaimOutboundRecord[];
-  handoffOutbound: HandoffOutboundRecord[];
-  intentOutbound: IntentOutboundRecord[];
-  validationOutbound: ValidationOutboundRecord[];
   remoteCursor: number;
-  remoteTaskCursor: string;
-  remoteClaimCursor: string;
-  remoteHandoffCursor: string;
-  remoteIntentCursor: string;
-  remoteValidationCursor: string;
   capturedHashes: Record<string, string | null>;
   gitState?: GitState;
   materializationPaused: boolean;
@@ -47,25 +19,9 @@ export type DaemonSnapshot = {
 };
 
 const initialSnapshot = (): DaemonSnapshot => ({
-  tasks: [],
-  claims: [],
   operations: [],
-  validations: [],
-  checkpoints: [],
-  handoffs: [],
-  intents: [],
   outbound: [],
-  taskOutbound: [],
-  claimOutbound: [],
-  handoffOutbound: [],
-  intentOutbound: [],
-  validationOutbound: [],
   remoteCursor: 0,
-  remoteTaskCursor: EPOCH_CURSOR,
-  remoteClaimCursor: EPOCH_CURSOR,
-  remoteHandoffCursor: EPOCH_CURSOR,
-  remoteIntentCursor: EPOCH_CURSOR,
-  remoteValidationCursor: EPOCH_CURSOR,
   capturedHashes: {},
   materializationPaused: false,
   eventSequence: 0
@@ -77,19 +33,8 @@ function parseRows<T>(rows: Array<{ payload: string }>): T[] {
 
 /** Every projection table and the column that keys it, in one place for the diff cache. */
 const PROJECTION_TABLES: ReadonlyArray<readonly [table: string, key: string]> = [
-  ["task_projection", "id"],
-  ["claim_projection", "id"],
   ["operation_projection", "id"],
-  ["validation_projection", "id"],
-  ["checkpoint_projection", "ref"],
-  ["handoff_projection", "id"],
-  ["intent_projection", "id"],
-  ["outbox_projection", "event_id"],
-  ["task_outbox_projection", "event_id"],
-  ["claim_outbox_projection", "event_id"],
-  ["handoff_outbox_projection", "event_id"],
-  ["intent_outbox_projection", "event_id"],
-  ["validation_outbox_projection", "event_id"]
+  ["outbox_projection", "event_id"]
 ];
 
 export class DaemonStateStore {
@@ -124,31 +69,7 @@ export class DaemonStateStore {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       ) STRICT;
-      CREATE TABLE IF NOT EXISTS task_projection (
-        id TEXT PRIMARY KEY,
-        payload TEXT NOT NULL
-      ) STRICT;
-      CREATE TABLE IF NOT EXISTS claim_projection (
-        id TEXT PRIMARY KEY,
-        payload TEXT NOT NULL
-      ) STRICT;
       CREATE TABLE IF NOT EXISTS operation_projection (
-        id TEXT PRIMARY KEY,
-        payload TEXT NOT NULL
-      ) STRICT;
-      CREATE TABLE IF NOT EXISTS validation_projection (
-        id TEXT PRIMARY KEY,
-        payload TEXT NOT NULL
-      ) STRICT;
-      CREATE TABLE IF NOT EXISTS checkpoint_projection (
-        ref TEXT PRIMARY KEY,
-        payload TEXT NOT NULL
-      ) STRICT;
-      CREATE TABLE IF NOT EXISTS handoff_projection (
-        id TEXT PRIMARY KEY,
-        payload TEXT NOT NULL
-      ) STRICT;
-      CREATE TABLE IF NOT EXISTS intent_projection (
         id TEXT PRIMARY KEY,
         payload TEXT NOT NULL
       ) STRICT;
@@ -156,45 +77,9 @@ export class DaemonStateStore {
         event_id TEXT PRIMARY KEY,
         payload TEXT NOT NULL
       ) STRICT;
-      CREATE TABLE IF NOT EXISTS task_outbox_projection (
-        event_id TEXT PRIMARY KEY,
-        payload TEXT NOT NULL
-      ) STRICT;
-      CREATE TABLE IF NOT EXISTS claim_outbox_projection (
-        event_id TEXT PRIMARY KEY,
-        payload TEXT NOT NULL
-      ) STRICT;
-      CREATE TABLE IF NOT EXISTS handoff_outbox_projection (
-        event_id TEXT PRIMARY KEY,
-        payload TEXT NOT NULL
-      ) STRICT;
-      CREATE TABLE IF NOT EXISTS intent_outbox_projection (
-        event_id TEXT PRIMARY KEY,
-        payload TEXT NOT NULL
-      ) STRICT;
-      CREATE TABLE IF NOT EXISTS validation_outbox_projection (
-        event_id TEXT PRIMARY KEY,
-        payload TEXT NOT NULL
-      ) STRICT;
       CREATE TABLE IF NOT EXISTS meta_projection (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
-      ) STRICT;
-      CREATE TABLE IF NOT EXISTS semantic_review (
-        id TEXT PRIMARY KEY,
-        payload TEXT NOT NULL
-      ) STRICT;
-      CREATE TABLE IF NOT EXISTS conflict_artifact (
-        id TEXT PRIMARY KEY,
-        operation_id TEXT NOT NULL,
-        path TEXT NOT NULL,
-        classification TEXT NOT NULL,
-        base_content TEXT,
-        local_content TEXT,
-        proposed_content TEXT,
-        dependents TEXT,
-        merged_candidate TEXT,
-        created_at TEXT NOT NULL
       ) STRICT;
     `);
     const store = new DaemonStateStore(database);
@@ -211,25 +96,9 @@ export class DaemonStateStore {
     );
     const sequence = this.database.prepare("SELECT COALESCE(MAX(sequence), 0) AS sequence FROM local_events").get() as { sequence: number };
     return {
-      tasks: parseRows<Task>(this.database.prepare("SELECT payload FROM task_projection ORDER BY id").all() as Array<{ payload: string }>),
-      claims: parseRows<Claim>(this.database.prepare("SELECT payload FROM claim_projection ORDER BY id").all() as Array<{ payload: string }>),
-      operations: parseRows<StoredOperation>(this.database.prepare("SELECT payload FROM operation_projection ORDER BY id").all() as Array<{ payload: string }>),
-      validations: parseRows<Validation>(this.database.prepare("SELECT payload FROM validation_projection ORDER BY id").all() as Array<{ payload: string }>),
-      checkpoints: parseRows<CheckpointRecord>(this.database.prepare("SELECT payload FROM checkpoint_projection ORDER BY ref").all() as Array<{ payload: string }>),
-      handoffs: parseRows<Handoff>(this.database.prepare("SELECT payload FROM handoff_projection ORDER BY id").all() as Array<{ payload: string }>),
-      intents: parseRows<Intent>(this.database.prepare("SELECT payload FROM intent_projection ORDER BY id").all() as Array<{ payload: string }>),
+      operations: parseRows<LocalOperation>(this.database.prepare("SELECT payload FROM operation_projection ORDER BY id").all() as Array<{ payload: string }>),
       outbound: parseRows<OutboundRecord>(this.database.prepare("SELECT payload FROM outbox_projection ORDER BY event_id").all() as Array<{ payload: string }>),
-      taskOutbound: parseRows<TaskOutboundRecord>(this.database.prepare("SELECT payload FROM task_outbox_projection ORDER BY event_id").all() as Array<{ payload: string }>),
-      claimOutbound: parseRows<ClaimOutboundRecord>(this.database.prepare("SELECT payload FROM claim_outbox_projection ORDER BY event_id").all() as Array<{ payload: string }>),
-      handoffOutbound: parseRows<HandoffOutboundRecord>(this.database.prepare("SELECT payload FROM handoff_outbox_projection ORDER BY event_id").all() as Array<{ payload: string }>),
-      intentOutbound: parseRows<IntentOutboundRecord>(this.database.prepare("SELECT payload FROM intent_outbox_projection ORDER BY event_id").all() as Array<{ payload: string }>),
-      validationOutbound: parseRows<ValidationOutboundRecord>(this.database.prepare("SELECT payload FROM validation_outbox_projection ORDER BY event_id").all() as Array<{ payload: string }>),
       remoteCursor: (meta.get("remoteCursor") as number | undefined) ?? 0,
-      remoteTaskCursor: (meta.get("remoteTaskCursor") as string | undefined) ?? EPOCH_CURSOR,
-      remoteClaimCursor: (meta.get("remoteClaimCursor") as string | undefined) ?? EPOCH_CURSOR,
-      remoteHandoffCursor: (meta.get("remoteHandoffCursor") as string | undefined) ?? EPOCH_CURSOR,
-      remoteIntentCursor: (meta.get("remoteIntentCursor") as string | undefined) ?? EPOCH_CURSOR,
-      remoteValidationCursor: (meta.get("remoteValidationCursor") as string | undefined) ?? EPOCH_CURSOR,
       capturedHashes: (meta.get("capturedHashes") as Record<string, string | null> | undefined) ?? {},
       gitState: meta.get("gitState") as GitState | undefined,
       materializationPaused: (meta.get("materializationPaused") as boolean | undefined) ?? false,
@@ -242,25 +111,9 @@ export class DaemonStateStore {
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const inserted = this.database.prepare("INSERT INTO local_events (type, created_at, payload) VALUES (?, ?, ?)").run(validated.type, new Date().toISOString(), JSON.stringify(validated.payload));
-      this.replaceProjection("task_projection", "id", snapshot.tasks.map((task) => [task.id, task]));
-      this.replaceProjection("claim_projection", "id", snapshot.claims.map((claim) => [claim.id, claim]));
       this.replaceProjection("operation_projection", "id", snapshot.operations.map((operation) => [operation.id, operation]));
-      this.replaceProjection("validation_projection", "id", snapshot.validations.map((validation) => [validation.id, validation]));
-      this.replaceProjection("checkpoint_projection", "ref", snapshot.checkpoints.map((checkpoint) => [checkpoint.ref, checkpoint]));
-      this.replaceProjection("handoff_projection", "id", snapshot.handoffs.map((handoff) => [handoff.id, handoff]));
-      this.replaceProjection("intent_projection", "id", snapshot.intents.map((intent) => [intent.id, intent]));
       this.replaceProjection("outbox_projection", "event_id", snapshot.outbound.map((record) => [record.event.id, record]));
-      this.replaceProjection("task_outbox_projection", "event_id", snapshot.taskOutbound.map((record) => [record.event.id, record]));
-      this.replaceProjection("claim_outbox_projection", "event_id", snapshot.claimOutbound.map((record) => [record.event.id, record]));
-      this.replaceProjection("handoff_outbox_projection", "event_id", snapshot.handoffOutbound.map((record) => [record.event.id, record]));
-      this.replaceProjection("intent_outbox_projection", "event_id", snapshot.intentOutbound.map((record) => [record.event.id, record]));
-      this.replaceProjection("validation_outbox_projection", "event_id", snapshot.validationOutbound.map((record) => [record.event.id, record]));
       this.replaceMeta("remoteCursor", snapshot.remoteCursor);
-      this.replaceMeta("remoteTaskCursor", snapshot.remoteTaskCursor);
-      this.replaceMeta("remoteClaimCursor", snapshot.remoteClaimCursor);
-      this.replaceMeta("remoteHandoffCursor", snapshot.remoteHandoffCursor);
-      this.replaceMeta("remoteIntentCursor", snapshot.remoteIntentCursor);
-      this.replaceMeta("remoteValidationCursor", snapshot.remoteValidationCursor);
       this.replaceMeta("capturedHashes", snapshot.capturedHashes);
       this.replaceMeta("gitState", snapshot.gitState);
       this.replaceMeta("materializationPaused", snapshot.materializationPaused);
@@ -275,37 +128,6 @@ export class DaemonStateStore {
       this.resyncWrittenProjections();
       throw error;
     }
-  }
-
-  recordConflictArtifact(record: ConflictArtifactRecord): void {
-    this.database.prepare("INSERT INTO conflict_artifact (id, operation_id, path, classification, base_content, local_content, proposed_content, dependents, merged_candidate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(record.id, record.operationId, record.path, record.classification, record.baseContent ?? null, record.localContent ?? null, record.proposedContent ?? null, record.dependents ? JSON.stringify(record.dependents) : null, record.mergedCandidate ?? null, record.createdAt);
-  }
-
-  listConflictArtifacts(operationId: string): ConflictArtifactRecord[] {
-    const rows = this.database.prepare("SELECT id, operation_id, path, classification, base_content, local_content, proposed_content, dependents, merged_candidate, created_at FROM conflict_artifact WHERE operation_id = ? ORDER BY created_at, id")
-      .all(operationId) as Array<{ id: string; operation_id: string; path: string; classification: string; base_content: string | null; local_content: string | null; proposed_content: string | null; dependents: string | null; merged_candidate: string | null; created_at: string }>;
-    return rows.map((row) => ({
-      id: row.id,
-      operationId: row.operation_id,
-      path: row.path,
-      classification: row.classification,
-      baseContent: row.base_content ?? undefined,
-      localContent: row.local_content ?? undefined,
-      proposedContent: row.proposed_content ?? undefined,
-      dependents: row.dependents ? JSON.parse(row.dependents) as string[] : undefined,
-      mergedCandidate: row.merged_candidate ?? undefined,
-      createdAt: row.created_at
-    }));
-  }
-
-  upsertSemanticReview(record: SemanticReviewRecord): void {
-    this.database.prepare("INSERT INTO semantic_review (id, payload) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload")
-      .run(record.id, JSON.stringify(record));
-  }
-
-  listSemanticReviews(): SemanticReviewRecord[] {
-    return parseRows<SemanticReviewRecord>(this.database.prepare("SELECT payload FROM semantic_review ORDER BY id").all() as Array<{ payload: string }>);
   }
 
   close(): void {
@@ -324,30 +146,13 @@ export class DaemonStateStore {
     const snapshot = {
       ...initialSnapshot(),
       ...saved,
-      remoteCursor: saved.remoteCursor ?? saved.cursor ?? 0,
-      checkpoints: saved.checkpoints ?? []
+      remoteCursor: saved.remoteCursor ?? saved.cursor ?? 0
     };
     this.database.exec("BEGIN IMMEDIATE");
     try {
-      this.replaceProjection("task_projection", "id", snapshot.tasks.map((task) => [task.id, task]));
-      this.replaceProjection("claim_projection", "id", snapshot.claims.map((claim) => [claim.id, claim]));
       this.replaceProjection("operation_projection", "id", snapshot.operations.map((operation) => [operation.id, operation]));
-      this.replaceProjection("validation_projection", "id", snapshot.validations.map((validation) => [validation.id, validation]));
-      this.replaceProjection("checkpoint_projection", "ref", snapshot.checkpoints.map((checkpoint) => [checkpoint.ref, checkpoint]));
-      this.replaceProjection("handoff_projection", "id", snapshot.handoffs.map((handoff) => [handoff.id, handoff]));
-      this.replaceProjection("intent_projection", "id", snapshot.intents.map((intent) => [intent.id, intent]));
       this.replaceProjection("outbox_projection", "event_id", snapshot.outbound.map((record) => [record.event.id, record]));
-      this.replaceProjection("task_outbox_projection", "event_id", snapshot.taskOutbound.map((record) => [record.event.id, record]));
-      this.replaceProjection("claim_outbox_projection", "event_id", snapshot.claimOutbound.map((record) => [record.event.id, record]));
-      this.replaceProjection("handoff_outbox_projection", "event_id", snapshot.handoffOutbound.map((record) => [record.event.id, record]));
-      this.replaceProjection("intent_outbox_projection", "event_id", snapshot.intentOutbound.map((record) => [record.event.id, record]));
-      this.replaceProjection("validation_outbox_projection", "event_id", snapshot.validationOutbound.map((record) => [record.event.id, record]));
       this.replaceMeta("remoteCursor", snapshot.remoteCursor);
-      this.replaceMeta("remoteTaskCursor", snapshot.remoteTaskCursor);
-      this.replaceMeta("remoteClaimCursor", snapshot.remoteClaimCursor);
-      this.replaceMeta("remoteHandoffCursor", snapshot.remoteHandoffCursor);
-      this.replaceMeta("remoteIntentCursor", snapshot.remoteIntentCursor);
-      this.replaceMeta("remoteValidationCursor", snapshot.remoteValidationCursor);
       this.replaceMeta("capturedHashes", snapshot.capturedHashes);
       this.replaceMeta("gitState", snapshot.gitState);
       this.replaceMeta("materializationPaused", snapshot.materializationPaused);
@@ -365,10 +170,10 @@ export class DaemonStateStore {
    * changed.
    *
    * This used to be `DELETE FROM <table>` followed by a re-INSERT of every row. Since
-   * operations, validations, and checkpoints accumulate for the life of the checkout and
-   * `record()` runs on every persisted event -- which for a watched worktree means every
-   * debounced filesystem settle -- that made the cost of one edit proportional to the
-   * whole history, and the cost of a session quadratic in it.
+   * operations accumulate for the life of the checkout and `record()` runs on every
+   * persisted event -- which for a watched worktree means every debounced filesystem
+   * settle -- that made the cost of one edit proportional to the whole history, and the
+   * cost of a session quadratic in it.
    *
    * `written` mirrors what is currently on disk (populated on open and kept in step
    * here), so the diff costs a string compare per row and the database sees only real

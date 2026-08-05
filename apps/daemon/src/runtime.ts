@@ -1,17 +1,9 @@
-import { execFile as execFileCallback } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { hostname } from "node:os";
 import { dirname, join } from "node:path";
-import { promisify } from "node:util";
 import type { FSWatcher } from "chokidar";
-import { AgentDelegatedReviewer } from "@crosscode/core";
 import { discoverRepository, remoteUrl, resolveGitPath } from "@crosscode/git";
-import {
-  claimPairingCodeRequestSchema, claimPairingCodeResponseSchema, daemonConfigSchema, daemonConnectionSchema,
-  PAIRING_CODE_TTL_MS,
-  type DaemonConfig, type DaemonConnection, type PresenceUpdate
-} from "@crosscode/protocol";
+import { daemonConfigSchema, daemonConnectionSchema, type DaemonConfig, type DaemonConnection, type PresenceUpdate } from "@crosscode/protocol";
 import { cliSignInUrl, openInBrowser, startLoginCallbackServer } from "./browser-login.js";
 import { resolveDefaultServiceUrl } from "./hosted.js";
 import { startDaemon, type RunningDaemon } from "./index.js";
@@ -19,12 +11,6 @@ import { CoordinationServiceClient, type CoordinationServiceIdentity } from "./s
 import { LiveSyncClient } from "./ws-client.js";
 import { keychainAvailable, readSecret, storeSecret, deleteSecret } from "./keychain.js";
 import { getSupabaseClient, toStoredSession } from "./supabase-client.js";
-import {
-  KeyringSource, createKeyring, deviceFingerprint, exportRecoveryCode, forgetKeyring, generateDeviceKeyPair,
-  importRecoveryCode, loadKeyring, rotateKeyring, saveKeyring, type Keyring
-} from "./workspace-key.js";
-
-const execFile = promisify(execFileCallback);
 
 const KEYCHAIN_REFRESH_TOKEN_SENTINEL = "stored-in-os-keychain";
 
@@ -71,13 +57,12 @@ export async function writeDaemonConfig(directory: string, config: DaemonConfig)
 export type LoggedIn = { config: DaemonConfig; user: { id: string; email: string } };
 
 /** Headless/agent login: credentials in, session persisted, nothing to open. */
-export async function login(directory: string, credentials: { email: string; password: string; serviceUrl?: string }): Promise<LoggedIn> {
+export async function login(directory: string, credentials: { email: string; password: string }): Promise<LoggedIn> {
   const config = await loginTarget(directory);
-  const serviceUrl = credentials.serviceUrl ?? config.service?.url ?? resolveDefaultServiceUrl();
   const supabase = getSupabaseClient();
   const { data, error } = await supabase.auth.signInWithPassword({ email: credentials.email, password: credentials.password });
   if (error || !data.session) throw new Error(`Supabase sign-in failed: ${error?.message ?? "no session returned"}`);
-  const updated: DaemonConfig = { ...config, service: { url: serviceUrl, session: toStoredSession(data.session) } };
+  const updated: DaemonConfig = { ...config, service: { url: resolveDefaultServiceUrl(), session: toStoredSession(data.session) } };
   await writeDaemonConfig(directory, updated);
   return { config: updated, user: { id: data.session.user.id, email: data.session.user.email ?? credentials.email } };
 }
@@ -89,10 +74,9 @@ export async function login(directory: string, credentials: { email: string; pas
  */
 export async function browserLogin(
   directory: string,
-  options: { webUrl: string; serviceUrl?: string; openBrowser?: boolean; timeoutMs?: number; onUrl?: (url: string) => void }
+  options: { webUrl: string; openBrowser?: boolean; timeoutMs?: number; onUrl?: (url: string) => void }
 ): Promise<LoggedIn> {
   const config = await loginTarget(directory);
-  const serviceUrl = options.serviceUrl ?? config.service?.url ?? resolveDefaultServiceUrl();
   const server = await startLoginCallbackServer({ timeoutMs: options.timeoutMs });
   try {
     const url = cliSignInUrl(options.webUrl, server.port, server.state);
@@ -102,7 +86,7 @@ export async function browserLogin(
     const updated: DaemonConfig = {
       ...config,
       service: {
-        url: serviceUrl,
+        url: resolveDefaultServiceUrl(),
         session: {
           accessToken: callback.access_token,
           refreshToken: callback.refresh_token,
@@ -127,10 +111,9 @@ async function loginTarget(directory: string): Promise<DaemonConfig> {
 // (no service-role key involved) instead of signing in to an existing one. Supabase Auth
 // can be configured to require email confirmation, in which case signUp() returns a user
 // but no session -- surfaced here as an error telling the caller to confirm and log in.
-export async function signup(directory: string, credentials: { email: string; password: string; invite?: string; workspaceName?: string; serviceUrl?: string }): Promise<DaemonConfig> {
+export async function signup(directory: string, credentials: { email: string; password: string; invite?: string; workspaceName?: string }): Promise<DaemonConfig> {
   const config = await readDaemonConfig(directory).catch(() => undefined);
   if (!config) throw new Error("Run `crosscode init` before `crosscode signup`");
-  const serviceUrl = credentials.serviceUrl ?? config.service?.url ?? resolveDefaultServiceUrl();
   const supabase = getSupabaseClient();
   const { data, error } = await supabase.auth.signUp({ email: credentials.email, password: credentials.password });
   if (error || !data.session) {
@@ -139,12 +122,11 @@ export async function signup(directory: string, credentials: { email: string; pa
   // actorId must match what the service records as the member's actor_id, which for
   // invite-redeemed and self-serve-created members is the account email (see
   // apps/service/src/http.ts's use of the verified token's email claim).
-  let updated: DaemonConfig = { ...config, actorId: credentials.email, service: { url: serviceUrl, session: toStoredSession(data.session) } };
+  let updated: DaemonConfig = { ...config, actorId: credentials.email, service: { url: resolveDefaultServiceUrl(), session: toStoredSession(data.session) } };
   await writeDaemonConfig(directory, updated);
   // A brand-new account has no workspace yet: redeem the given invite, or self-serve
   // create one so `crosscode signup` always lands the user somewhere usable rather
-  // than leaving an authenticated-but-workspace-less account (see BUILD_INSTRUCTIONS.md
-  // Phase 8's self-serve workspace creation exit criteria).
+  // than leaving an authenticated-but-workspace-less account.
   updated = credentials.invite
     ? await redeemInvite(directory, credentials.invite)
     : await createWorkspace(directory, credentials.workspaceName ?? `${credentials.email}'s workspace`);
@@ -165,9 +147,8 @@ export async function serviceRequest<T>(
 ): Promise<T> {
   const config = await readDaemonConfig(directory).catch(() => undefined);
   if (!config) throw new Error("Run `crosscode init` before talking to the coordination service");
-  if (!config.service?.url) throw new Error("No coordination service is configured; run `crosscode login --service <url>`");
-  if (!config.service.session) throw new Error("Run `crosscode login` first; this command acts as your user account and a pairing token cannot");
-  const response = await fetch(new URL(path, config.service.url), {
+  if (!config.service?.session) throw new Error("Run `crosscode login` first");
+  const response = await fetch(new URL(path, config.service.url ?? resolveDefaultServiceUrl()), {
     method: init.method ?? "GET",
     headers: {
       authorization: `Bearer ${config.service.session.accessToken}`,
@@ -215,252 +196,12 @@ export async function redeemInvite(directory: string, code: string): Promise<Dae
 }
 
 /**
- * Redeems a one-time pairing code minted by the service (Contract A). Unauthenticated
- * on purpose -- the code is the credential -- and what comes back is a workspace-scoped
- * `ccw_` token, never a user session, so this path never puts credentials that can act as
- * the user into a terminal. Works without a prior `crosscode init`: pairing is allowed to
- * be the very first thing a fresh checkout does.
- */
-export async function redeemPairingCode(
-  directory: string,
-  code: string,
-  options: { serviceUrl?: string; replicaName?: string; actorId?: string } = {}
-): Promise<DaemonConfig & { deviceFingerprint?: string }> {
-  const existing = await readDaemonConfig(directory).catch(() => undefined);
-  const serviceUrl = options.serviceUrl ?? existing?.service?.url;
-  if (!serviceUrl) throw new Error("A service URL is required to pair; pass --service <url>");
-  const repository = await discoverRepository(directory);
-  const actorId = options.actorId ?? existing?.actorId ?? `${process.env.USER ?? "local-user"}@${hostname()}`;
-  // A fresh device identity per pairing. Registering it in the claim is what lets the
-  // minting side see a fingerprint to compare and, once a human has compared it, wrap the
-  // workspace keyring to this machine -- the coordination service relays both halves and
-  // can open neither.
-  const device = encryptionEnabled() ? generateDeviceKeyPair() : undefined;
-  const request = claimPairingCodeRequestSchema.parse({
-    code: code.trim().toUpperCase(),
-    actorId,
-    replicaName: options.replicaName ?? hostname(),
-    repoRoot: repository.root,
-    repoRemote: await repoRemoteUrl(repository.root, repository.remotes),
-    devicePublicKey: device?.publicKey
-  });
-  const response = await fetch(new URL("/v1/pairing-codes/claim", serviceUrl), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(request),
-    signal: AbortSignal.timeout(5_000)
-  });
-  const envelope = await response.json().catch(() => undefined) as
-    | { ok: true; data: unknown }
-    | { ok: false; error: string }
-    | undefined;
-  if (!response.ok || !envelope?.ok) {
-    // 410 is the one status worth translating: the service deliberately cannot say
-    // whether the code was already claimed, expired, or never existed.
-    if (response.status === 410) throw new Error("Pairing code is no longer valid; ask a workspace admin to mint a new one");
-    throw new Error(envelope && !envelope.ok ? envelope.error : `Pairing failed with status ${response.status}`);
-  }
-  const claimed = claimPairingCodeResponseSchema.parse(envelope.data);
-  const updated: DaemonConfig = {
-    ...existing,
-    workspaceId: claimed.workspaceId,
-    replicaId: claimed.replicaId,
-    actorId,
-    service: { ...existing?.service, url: serviceUrl, workspaceToken: claimed.token }
-  };
-  await writeDaemonConfig(directory, updated);
-  if (!device) return updated;
-  // Device identity only -- no epoch keys. This checkout cannot read or write workspace
-  // content until the approving device grants it one, which is the correct state: the
-  // alternative is falling back to plaintext, and that is never the safer default.
-  await saveKeyring(directory, { version: 1, workspaceId: claimed.workspaceId, currentEpoch: null, epochs: {}, device });
-  return { ...updated, deviceFingerprint: deviceFingerprint(device.publicKey) };
-}
-
-// ---------------------------------------------------------------------------
-// Workspace encryption keys (docs/security.md#end-to-end-encryption)
-// ---------------------------------------------------------------------------
-
-/**
- * A service client for the CLI's one-shot key commands. Unlike the daemon's, this one is
- * built and thrown away per command, so it re-reads the config every time and never holds
- * a keyring in memory between calls.
- */
-async function keyClient(directory: string): Promise<{ client: CoordinationServiceClient; config: DaemonConfig }> {
-  const config = await readDaemonConfig(directory).catch(() => undefined);
-  if (!config) throw new Error("Run `crosscode init` before managing workspace keys");
-  if (!config.service) throw new Error("No coordination service is configured; run `crosscode login --service <url>` or `crosscode join --pair <code>`");
-  if (!config.replicaId) throw new Error("This checkout has no replica identity yet; start the daemon once so it can register");
-  if (!encryptionEnabled()) throw new Error("CROSSCODE_ENCRYPTION=off disables end-to-end encryption for this checkout");
-  return { client: createServiceClient(directory, config, config.service), config };
-}
-
-export type WorkspaceKeyStatus = {
-  workspaceId: string;
-  /** Null when this device has registered an identity but holds no key yet. */
-  currentEpoch: number | null;
-  epochs: number[];
-  deviceFingerprint: string;
-  encryptionEnabled: boolean;
-};
-
-export async function workspaceKeyStatus(directory: string): Promise<WorkspaceKeyStatus> {
-  const keyring = await loadKeyring(directory);
-  if (!keyring) throw new Error("This checkout has no workspace keyring yet; start the daemon once, or run `crosscode join --pair <code>`");
-  return {
-    workspaceId: keyring.workspaceId,
-    currentEpoch: keyring.currentEpoch,
-    epochs: Object.keys(keyring.epochs).map(Number).sort((left, right) => left - right),
-    deviceFingerprint: deviceFingerprint(keyring.device.publicKey),
-    encryptionEnabled: encryptionEnabled()
-  };
-}
-
-/**
- * Prints the workspace key as a recovery code. This is the only copy that can exist
- * outside a paired device, and we cannot reissue it -- there is nothing on our side to
- * reissue it from. Callers must not put it in `--json` output or scrollback casually;
- * `crosscode key export` writes it to stdout alone and says so.
- */
-export async function exportWorkspaceKey(directory: string): Promise<string> {
-  const keyring = await loadKeyring(directory);
-  if (!keyring) throw new Error("This checkout has no workspace keyring to export");
-  return exportRecoveryCode(keyring);
-}
-
-export async function importWorkspaceKey(directory: string, recoveryCode: string): Promise<WorkspaceKeyStatus> {
-  const config = await readDaemonConfig(directory).catch(() => undefined);
-  if (!config) throw new Error("Run `crosscode init` before importing a workspace key");
-  const existing = await loadKeyring(directory).catch(() => undefined);
-  const imported = importRecoveryCode(recoveryCode, config.workspaceId);
-  // Keep this machine's device identity if it already has one: it may already be a
-  // registered grant recipient, and swapping the public key would orphan those grants
-  // (the service refuses to re-register a device under a different key, by design).
-  const keyring: Keyring = existing ? { ...imported, device: existing.device } : imported;
-  await saveKeyring(directory, keyring);
-  return workspaceKeyStatus(directory);
-}
-
-/** Creates the workspace's first key. Refused by the service path if anyone already holds one. */
-export async function initWorkspaceKey(directory: string): Promise<WorkspaceKeyStatus> {
-  const { client, config } = await keyClient(directory);
-  const existing = await loadKeyring(directory).catch(() => undefined);
-  if (existing?.currentEpoch !== null && existing !== undefined) throw new Error("This checkout already holds a workspace key");
-  const created = createKeyring(config.workspaceId);
-  await saveKeyring(directory, existing ? { ...created, device: existing.device } : created);
-  await client.syncWorkspaceKeys();
-  return workspaceKeyStatus(directory);
-}
-
-export async function rotateWorkspaceKey(directory: string): Promise<{ epoch: number; keyId: string; granted: number }> {
-  const { client } = await keyClient(directory);
-  return client.rotateWorkspaceKey();
-}
-
-/** Local only: drops this checkout's copy of the key. Nothing server-side changes. */
-export async function forgetWorkspaceKey(directory: string): Promise<{ forgotten: boolean }> {
-  return { forgotten: await forgetKeyring(directory) };
-}
-
-/**
- * Every device that has registered an encryption key with this workspace, with the
- * fingerprint to compare and whether it already holds the key. This is the list to read
- * when something looks wrong: a device here that nobody recognises is what a coordination
- * service inserting itself would look like, and `crosscode key rotate` is the answer.
- */
-export async function listKeyDevices(directory: string): Promise<Array<{
-  replicaId: string; replicaName: string; actorId: string; fingerprint: string; epochs: number[]; holdsKey: boolean;
-}>> {
-  const recipients = await serviceRequest<{ recipients: Array<{ replicaId: string; replicaName: string; actorId: string; publicKey: string; epochs: number[] }> }>(
-    directory, "/v1/workspace-keys/recipients", { describe: "Key device list" }
-  );
-  return recipients.recipients.map((recipient) => ({
-    replicaId: recipient.replicaId,
-    replicaName: recipient.replicaName,
-    actorId: recipient.actorId,
-    fingerprint: deviceFingerprint(recipient.publicKey as Keyring["device"]["publicKey"]),
-    epochs: recipient.epochs,
-    holdsKey: recipient.epochs.length > 0
-  }));
-}
-
-/** Grants one named device every key epoch this one holds. See `crosscode key approve`. */
-export async function approveKeyDevice(directory: string, replicaId: string): Promise<{ granted: number; fingerprint: string }> {
-  const { client } = await keyClient(directory);
-  return client.approveKeyRecipient(replicaId);
-}
-
-export type PairingSession = {
-  code: string;
-  expiresAt: string;
-  pairingId: string;
-  /** Resolves once the code is claimed, with the claiming device's fingerprint to compare. */
-  claimed: Promise<{ replicaId: string; actorId: string; fingerprint: string | null }>;
-  approve: (replicaId: string) => Promise<{ granted: number; fingerprint: string }>;
-  cancel: () => void;
-};
-
-/**
- * The minting half of Contract A, plus the key handoff. Returns as soon as the code
- * exists so the caller can display it, and exposes the claim as a promise: the CLI prints
- * the code, waits, shows the claiming device's fingerprint, and only grants the workspace
- * keyring once a human has confirmed it matches what the other machine printed.
- */
-export async function startPairing(
-  directory: string,
-  options: { pollMs?: number; timeoutMs?: number } = {}
-): Promise<PairingSession> {
-  const { client } = await keyClient(directory);
-  const minted = await serviceRequest<{ code: string; expiresAt: string; pairingId: string }>(
-    directory, "/v1/pairing-codes", { method: "POST", body: {}, describe: "Pairing code" }
-  );
-  let cancelled = false;
-  const pollMs = options.pollMs ?? 2_000;
-  const deadline = Date.now() + (options.timeoutMs ?? PAIRING_CODE_TTL_MS);
-  const claimed = (async () => {
-    for (;;) {
-      if (cancelled) throw new Error("Pairing cancelled");
-      const status = await serviceRequest<{ status: string; replicaId: string | null; actorId: string | null; devicePublicKey: string | null }>(
-        directory, `/v1/pairing-codes/${encodeURIComponent(minted.pairingId)}`, { describe: "Pairing status" }
-      );
-      if (status.status === "claimed" && status.replicaId) {
-        return {
-          replicaId: status.replicaId,
-          actorId: status.actorId ?? "unknown",
-          fingerprint: status.devicePublicKey ? deviceFingerprint(status.devicePublicKey as Keyring["device"]["publicKey"]) : null
-        };
-      }
-      if (status.status === "expired" || Date.now() >= deadline) throw new Error("Pairing code expired before it was claimed");
-      await new Promise((resolveWait) => setTimeout(resolveWait, pollMs));
-    }
-  })();
-  return {
-    code: minted.code,
-    expiresAt: minted.expiresAt,
-    pairingId: minted.pairingId,
-    claimed,
-    approve: (replicaId: string) => client.approveKeyRecipient(replicaId),
-    cancel: () => { cancelled = true; }
-  };
-}
-
-async function repoRemoteUrl(root: string, remotes: string[]): Promise<string | null> {
-  const remote = remotes.includes("origin") ? "origin" : remotes[0];
-  if (!remote) return null;
-  const url = await execFile("git", ["-C", root, "remote", "get-url", remote])
-    .then(({ stdout }) => stdout.trim())
-    .catch(() => "");
-  return url || null;
-}
-
-/**
  * Drops every credential this checkout holds -- a Supabase session and/or a `ccw_`
  * workspace token. The token case matters: it used to return early whenever there was no
- * session, so on a pairing-only install (`crosscode join --pair`) logout was a no-op that
- * silently left a live bearer credential on disk.
+ * session, so logout was a no-op that silently left a live bearer credential on disk.
  *
- * Local only. Revoking a workspace token server-side is a workspace owner's action
- * (`crosscode devices revoke`), since a device cannot be trusted to retire itself.
+ * Local only. Revoking a workspace token server-side is a workspace owner's action, since
+ * a device cannot be trusted to retire itself.
  */
 export async function logout(directory: string): Promise<{ session: boolean; workspaceToken: boolean }> {
   const config = await readDaemonConfig(directory).catch(() => undefined);
@@ -528,18 +269,6 @@ export type ManagedDaemon = {
   stop: () => Promise<void>;
 };
 
-/**
- * Set CROSSCODE_ENCRYPTION=off to send file payloads to the coordination service in
- * plaintext. There is exactly one reason to: a self-hosted deployment, where the
- * "service" and the "customer" are the same party and readable payloads are worth more
- * than a property that party already has by owning the database. It cannot silently take
- * effect on a workspace that has already sent ciphertext -- the service latches, and
- * refuses the plaintext with a 409 rather than accepting the downgrade.
- */
-function encryptionEnabled(): boolean {
-  return (process.env.CROSSCODE_ENCRYPTION ?? "on").toLowerCase() !== "off";
-}
-
 function createServiceClient(directory: string, config: Pick<DaemonConfig, "workspaceId" | "actorId" | "replicaId">, service: NonNullable<DaemonConfig["service"]>): CoordinationServiceClient {
   const identity: CoordinationServiceIdentity = { workspaceId: config.workspaceId, actorId: config.actorId, replicaId: config.replicaId };
   return new CoordinationServiceClient(identity, service, {
@@ -553,7 +282,7 @@ function createServiceClient(directory: string, config: Pick<DaemonConfig, "work
       if (!latest) return;
       await writeDaemonConfig(directory, { ...latest, replicaId });
     }
-  }, encryptionEnabled() ? new KeyringSource(directory) : undefined);
+  });
 }
 
 /**
@@ -586,7 +315,7 @@ export async function runDaemonProcess(
       throw new Error("No replica identity configured; run `crosscode login` to enable self-service replica registration, or `crosscode init` for a local-only identity");
     }
   } catch (error) { await removeOwnedLock(lock); throw error; }
-  const daemonOptions = { workspaceId: config.workspaceId, replicaId: config.replicaId!, actorId: config.actorId, reviewer: new AgentDelegatedReviewer(), transport: serviceClient };
+  const daemonOptions = { workspaceId: config.workspaceId, replicaId: config.replicaId!, actorId: config.actorId, transport: serviceClient };
   try { running = await startDaemon(directory, daemonOptions); }
   catch (error) { await removeOwnedLock(lock); throw error; }
   let watcher: FSWatcher | undefined;
@@ -610,14 +339,7 @@ export async function runDaemonProcess(
         if (stopped) return;
         if (syncing) { rerunRequested = true; return; }
         syncing = true;
-        try {
-          // Before anything is uploaded or downloaded: install any workspace key epoch
-          // this device has been granted, and re-grant the ones it holds to devices that
-          // are missing them. Sealing and opening both depend on it, so a failure here
-          // has to fail the sync rather than silently fall through to a plaintext upload.
-          await client.syncWorkspaceKeys();
-          await running.daemon.runExclusive(() => running.daemon.syncRemote(client));
-        }
+        try { await running.daemon.runExclusive(() => running.daemon.syncRemote(client)); }
         catch { running.daemon.recordRemoteSyncFailure(); }
         finally {
           syncing = false;
@@ -627,10 +349,8 @@ export async function runDaemonProcess(
       void synchronize();
       syncTimer = setInterval(synchronize, options.syncPollMs ?? 1_000);
       syncTimer.unref();
-      // Live sync subscribes with whichever credential this checkout holds -- a Supabase
-      // session or a `ccw_` workspace token -- so a paired install gets the same push
-      // updates as a logged-in one. The polling loop above stays as the fallback for
-      // whenever the socket is down.
+      // Live sync subscribes with whichever credential this checkout holds. The polling
+      // loop above stays as the fallback for whenever the socket is down.
       if (options.liveSync ?? true) {
         liveSync = new LiveSyncClient(config, config.service, client, {
           onOperation: (operation) => {
@@ -639,21 +359,6 @@ export async function runDaemonProcess(
           onPresence: (presence) => {
             console.error(`Crosscode presence: ${presence.actorId} (${presence.replicaId}) is ${presence.status}`);
             options.onPresence?.(presence);
-          },
-          onTask: (task) => {
-            if (task.workspaceId === config.workspaceId) void synchronize();
-          },
-          onClaim: (claim) => {
-            if (claim.workspaceId === config.workspaceId) void synchronize();
-          },
-          onHandoff: (handoff) => {
-            if (handoff.workspaceId === config.workspaceId) void synchronize();
-          },
-          onIntent: (intent) => {
-            if (intent.workspaceId === config.workspaceId) void synchronize();
-          },
-          onValidation: (validation) => {
-            if (validation.workspaceId === config.workspaceId) void synchronize();
           }
         });
         liveSync.start();
@@ -663,10 +368,7 @@ export async function runDaemonProcess(
       if (observing || stopped) return;
       observing = true;
       try {
-        await running.daemon.runExclusive(async () => {
-          const transition = await running.daemon.observeGitTransition();
-          if (transition.kind !== "unchanged") await running.daemon.reanalyzePendingOperations();
-        });
+        await running.daemon.runExclusive(() => running.daemon.observeGitTransition());
       } catch (error) {
         console.error("Crosscode Git observer error", error);
       } finally {

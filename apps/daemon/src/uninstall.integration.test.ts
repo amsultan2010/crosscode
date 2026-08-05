@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { CoordinationService } from "../../service/src/index.js";
 import { LocalDaemon } from "./index.js";
 
 const exec = promisify(execFile);
@@ -24,20 +23,17 @@ afterEach(async () => { await Promise.all(directories.splice(0).map((path) => rm
 
 describe("removing Crosscode", () => {
   it("leaves an ordinary functioning repository with all code still present after Crosscode's state is deleted", async () => {
-    const senderRoot = await repo(); const receiverRoot = await repo(); const service = new CoordinationService();
-    const sender = await LocalDaemon.open(senderRoot, { workspaceId: "w", replicaId: "sender", actorId: "a" });
+    const receiverRoot = await repo();
     const receiver = await LocalDaemon.open(receiverRoot, { workspaceId: "w", replicaId: "receiver", actorId: "b" });
-    await writeFile(join(senderRoot, "a.txt"), "two\n");
-    const operation = await sender.capture("change", service);
-    await receiver.sync(service);
-    await receiver.accept(operation.id);
+    await writeFile(join(receiverRoot, "a.txt"), "two\n");
+    await receiver.capture("change");
     receiver.close();
 
     // "Removing/turning off Crosscode" means deleting all of its state; it never writes anything outside <git-dir>/crosscode.
     await rm(join(receiverRoot, ".git", "crosscode"), { recursive: true, force: true });
 
-    // The accepted change materialized as ordinary (still-uncommitted) file content -- exactly
-    // what plain `git status`/`git diff` would show if a developer had edited the file by hand.
+    // The synced change is ordinary (still-uncommitted) file content -- exactly what plain
+    // `git status`/`git diff` would show if a developer had edited the file by hand.
     expect(await readFile(join(receiverRoot, "a.txt"), "utf8")).toBe("two\n");
     expect((await exec("git", ["-C", receiverRoot, "status", "--porcelain"])).stdout.trim()).toBe("M a.txt");
     expect((await exec("git", ["-C", receiverRoot, "log", "--oneline"])).stdout.trim().split("\n")).toHaveLength(1);
