@@ -16,8 +16,8 @@ Everything here is off until it is configured. No key, no network call.
 
 ## What is never sent
 
-The service handles file payloads, paths, diffs, task titles, claim targets and handoff
-notes. None of them can reach Sentry. The report is built field by field from an allowlist
+The service handles file contents, paths, patches, and the branch names people work on.
+None of them can reach Sentry. The report is built field by field from an allowlist
 rather than by handing an `Error` to an SDK that serializes whatever it finds:
 
 - **The message** goes through `redact()`, which removes quoted spans, anything containing

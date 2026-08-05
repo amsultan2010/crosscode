@@ -1,96 +1,63 @@
 # Privacy: what we can and can't see
 
-Crosscode syncs your edits between checkouts, so your code passes through our
-coordination service. This page says exactly what that service can read.
+Crosscode syncs your uncommitted edits between checkouts, so those files pass through our
+coordination service. This page says exactly what that service holds.
 
-**We can't read your code.** File contents, patches, file paths, content hashes, and the
-change intent attached to a transaction are encrypted on your machine before they are sent,
-under a key generated on your machine that we never receive. The service stores ciphertext
-and relays it. This is not a policy we promise to follow. We do not have the key.
+**We hold your file contents.** There is no end-to-end encryption. Files are encrypted in
+transit (TLS) and at rest, under keys we manage, which means a Crosscode engineer with
+production access could read them. We would rather say that plainly than imply otherwise.
 
-That covers the file payload and nothing else. Coordination metadata still reaches us in
-the clear: task titles, claim targets, published intents, handoff notes, and validation
-output. Those can contain file paths and descriptions of what you are working on. The
-[full list is below](#what-we-can-see).
+If that is not acceptable for a given repository, do not sync it. Crosscode is opt-in per
+checkout and stopping it leaves an ordinary Git repository behind.
 
-Encryption is on by default. There is nothing to switch on.
+## What the service stores
 
-## What that means concretely
+- **The files you edit while syncing**: path, content, the hashes either side merged
+  against, and whether the change was a modify or a delete. Tracked files only.
+- **Your GitHub account identity** — the account you signed in with, and the project
+  memberships we use to decide who may sync with whom.
+- **Your repository, as `owner/repo`.** Projects are keyed on it. If a repository's *name*
+  is confidential, this is not the tool for it.
+- **Timestamps, sizes, and sequence numbers.** When you were active and how large a change
+  was.
+- **Presence**: which branch you are on and which paths you touched recently, so a teammate's
+  agent can answer "who is working on what". This is in memory in the websocket gateway, not
+  in the database.
 
-If someone dumped our database, subpoenaed us, or an engineer here went looking, they
-would get ciphertext for every file payload, and readable rows for the coordination
-metadata listed below. We cannot decrypt the payloads for them, for you, or for anyone. If
-you lose every copy of your key, we cannot recover your history either. That is the same
-fact stated from the other side.
+## What never leaves your machine
 
-Losing the key costs you the coordination history: past proposals, their diffs, the
-descriptions attached to them. It does not cost you any source code. Your repository is an
-ordinary Git repository the whole time, on your disk, and it always was.
+- **Untracked files.** Only files Git already tracks are ever sent.
+- **Secrets, even when tracked.** `.env*`, `*.pem`, `*.key`, and similar are on a hard
+  denylist, dropped before a change is captured rather than filtered later.
+- **Your commits, branches, index, stash, and remotes.** Crosscode reads and writes
+  working-tree files and one ref of its own (`refs/crosscode/shadow`). Nothing in Crosscode
+  pushes anywhere.
 
-You can print a recovery code with `crosscode key export` and keep it in your password
-manager. We recommend it.
+## How long it is kept
 
-## What we can see
+About 7 days. That window is what makes offline catch-up possible: a checkout that comes
+back within it replays what it missed, and one that has been away longer is told to
+resynchronize from full content rather than handed a partial history. Older changes are
+deleted by a scheduled job.
 
-Encryption doesn't hide everything, and it would be dishonest to imply otherwise. In the
-clear:
-
-- **Your account email**, and the workspace, device, and project identifiers we use to
-  decide who is allowed to sync with whom.
-- **Your repository's git remote URL**, for example `github.com/acme/project-name`. We
-  key projects on it. If a repository's *name* is itself confidential, self-host.
-- **Timestamps and sizes.** When you were active, how many files an edit touched, and
-  roughly how large the encrypted payload is. A big change looks like a big change.
-- **Whether each file in a change was added, modified, deleted, or renamed**, but not
-  which file.
-- **Task titles, claim targets, published intents, handoff notes, and validation output.**
-  None of these are encrypted yet. They can contain file paths and descriptions of what
-  you're working on. The file payload, which is the actual code, is encrypted. We would
-  rather say this plainly than let "end-to-end encrypted" imply more than it covers.
-
-We cannot see your file contents, your file paths, your diffs, hashes of your files, or the
-change intent recorded with a transaction.
-
-## How long we keep it
-
-Your plan's retention window (`crosscode billing status` shows it) is how long a proposal
-stays on our side before it is deleted. That is a deletion schedule, not a privacy control,
-because the ciphertext was unreadable to us the whole time it was there. A checkout that has been
-offline longer than the window is told to resynchronize rather than handed a partial
-history, so it finds out that it missed something instead of silently believing it is
-up to date.
+Your repository is the durable artifact the whole time, on your disk, as ordinary Git.
 
 ## What we never do
 
-- No third-party AI provider ever sees your code. Crosscode's AI reviewer runs on the
-  coding agent already on your machine. We store no model provider credentials.
-- We don't push to your Git remotes. Nothing in Crosscode does.
-- We don't sell or share your data, and there is little to sell: we hold ciphertext.
+- We never send your code to a third-party AI provider. Crosscode has no AI features and
+  stores no model provider credentials. The only agent involved is the one already on your
+  machine, and it reads your files locally.
+- We never push to your Git remotes.
+- We do not sell or share your data.
 
-## Adding a second machine
+## Removing someone
 
-When you pair a new device, both machines print a short fingerprint like `K4T9-2WQZ-8HMP`.
-**Compare them before confirming.** We relay the new device's encryption key, and that
-comparison is what proves we relayed the real one instead of substituting our own. It
-takes three seconds and it is the one step where being lazy actually costs you something.
+Removing a member from a project ends their access immediately: their daemon stops receiving
+on its next request. It cannot un-share what they already have — they had a full checkout of
+the repository. No product can reach into a copy someone already holds, and we would rather
+tell you that than let you believe otherwise.
 
-## Removing someone from a workspace
+## Deleting your data
 
-Removing a member ends their access immediately, and their devices stop syncing on their
-next request. Run `crosscode key rotate` afterwards and everything from that moment on is
-unreadable to them.
-
-What rotation cannot do is un-share what they already downloaded. They had a full checkout
-of the repository. No product can reach back into a copy someone already has, and we would
-rather tell you that than let you believe otherwise.
-
-## If you'd rather not trust us at all
-
-Self-host. Crosscode is MIT-licensed, the coordination service is one Node process, and
-self-hosting is free forever with no limits. Then none of this is a question of trust,
-because none of your data reaches us.
-
----
-
-The algorithms, the key exchange, the threat model, and what we gave up to get here are in
-the [safety model](/docs/safety.html#end-to-end-encryption).
+Ask us and we delete your account, your projects, and the change history attached to them.
+See [support](./support.md). Your repositories are unaffected, because they were never ours.
