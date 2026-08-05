@@ -22,15 +22,18 @@ Any other approaches you considered, and why you didn't go with them.
 
 ## Scope check
 
-Before filing, please check [BUILD_INSTRUCTIONS.md](../../BUILD_INSTRUCTIONS.md)
-for current scope decisions. In particular:
+Before filing, please check [PLAN.md](../../PLAN.md), which is the single source
+of truth for scope. In particular:
 
-- The supported product surface is the daemon and MCP server, plus the CLI as
-  the daemon's local tool. MCP is the only integration contract, so requests
-  for an editor extension will be declined.
-- Deterministic checks decide clear cases; AI only reviews ambiguity and never
-  becomes the source of truth. Proposals that would make AI authoritative over
-  local files are out of scope.
+- The supported surface is the daemon and MCP server, plus the CLI as the
+  daemon's local tool. MCP is the only integration contract, so requests for an
+  editor extension, a web app, or a TUI will be declined.
+- The hard limits are five CLI commands, four MCP tools, and one skill. A
+  request that adds to any of those has to argue why it belongs in the product
+  rather than in your own agent.
+- Crosscode delivers information and never judges a change. Requests that make
+  it classify risk, review code, or resolve a conflict on its own are out of
+  scope; that work belongs to the coding agent already on your machine.
 
 ## Additional context
 

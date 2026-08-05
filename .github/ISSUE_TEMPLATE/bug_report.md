@@ -40,14 +40,16 @@ What actually happened. Include exact error messages if any.
 - OS: (macOS/Linux/Windows, version)
 - Node.js version: (`node -v`)
 - pnpm version: (`pnpm -v`)
-- Crosscode commit/branch:
-- Coordination service: self-hosted against Supabase, or `infra/docker-compose.yml` local Postgres?
+- Crosscode version or commit/branch:
+- Coordination service: the hosted service at `getcrosscode.dev`, self-hosted
+  against Supabase, or `infra/docker-compose.yml` local Postgres?
 
-## Worktree / daemon state (if relevant)
+## Checkout / daemon state (if relevant)
 
-- Output of `pnpm crosscode -- status --json`, if the daemon is running
-- Was there a pending checkpoint, unaccepted proposal, or in-progress
-  validation at the time?
+- Output of `crosscode status --json`, if the daemon is running
+- Was there an unresolved conflict, a paused checkout, or an in-progress rebase,
+  merge, or bisect at the time?
+- The branch both sides were on, since sync only happens within one branch
 - Any relevant daemon log output (redact secrets/tokens first)
 
 ## Additional context

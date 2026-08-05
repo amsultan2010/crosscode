@@ -71,115 +71,115 @@
     <div class="docs-content">
       <h1>Documentation</h1>
       <p class="subtitle">
-        Crosscode lets several people and coding agents work on the same repository
-        at once, each in their own checkout, without overwriting each other. You run
-        the daemon and the coordination service yourself; it is not a hosted product.
+        Crosscode keeps several checkouts of one repository in sync in real time. You edit a
+        file, and everyone on the same branch has it within seconds. The only interruption is
+        a same-line conflict, which goes to your own coding agent rather than to a Crosscode
+        UI, because there isn't one.
       </p>
 
       <div class="card-grid">
         <div class="card">
           <h3><a href="/docs/architecture.html">Architecture</a></h3>
-          <p>The daemon, the coordination service, and how transactions and proposals move between them.</p>
+          <p>The daemon, the coordination service, the shadow ref, and the rule that decides whether an incoming change is written or surfaced.</p>
         </div>
         <div class="card">
           <h3><a href="/docs/install.html">Install &amp; quickstart</a></h3>
-          <p>Prerequisites, setting up Supabase and the coordination service, signing in, and the normal day-to-day workflow.</p>
+          <p>Prerequisites, <code>crosscode start</code>, inviting a teammate, and what the five commands do.</p>
         </div>
         <div class="card">
           <h3><a href="/docs/cli.html">CLI reference</a></h3>
-          <p>The scriptable <code>crosscode</code> command surface, including <code>--json</code> output.</p>
+          <p>All five commands, their flags, and the <code>--json</code> envelope agents can parse.</p>
         </div>
         <div class="card">
           <h3><a href="/docs/safety.html">Safety model</a></h3>
-          <p>The rules that govern when Crosscode is allowed to touch your working tree.</p>
+          <p>The rules that govern when Crosscode is allowed to touch your working tree, and what a malicious member can do.</p>
         </div>
         <div class="card">
           <h3><a href="/docs/privacy.html">Privacy</a></h3>
-          <p>Exactly what the hosted coordination service can and cannot read. Short answer: not your code.</p>
+          <p>Exactly what the coordination service stores and for how long. There is no end-to-end encryption, and the page says so plainly.</p>
         </div>
         <div class="card">
           <h3><a href="/docs/protocol.html">Network protocol</a></h3>
-          <p>The wire schema shared by the daemon, CLI, MCP server, and coordination service.</p>
+          <p>The wire contract shared by the daemon, CLI, MCP server, and service. One file is one change.</p>
         </div>
         <div class="card">
           <h3><a href="/docs/mcp-clients.html">MCP client setup</a></h3>
-          <p>Connecting Claude Code, Codex CLI, and OpenCode to the local <code>crosscode-mcp</code> server.</p>
+          <p>Connecting Claude Code, Codex CLI, OpenCode, and any other MCP client to the local <code>crosscode-mcp</code> server.</p>
         </div>
         <div class="card">
           <h3><a href="/docs/limitations.html">Current limitations</a></h3>
-          <p>What is still in progress, taken directly from the project README.</p>
+          <p>What is not built yet, kept deliberately blunt.</p>
         </div>
       </div>
 
       <div class="callout">
-        <strong>If you're an agent:</strong> you generally don't need this website
-        for day-to-day work &mdash; status, claim, publish, accept/reject all happen
-        over the <code>crosscode</code> CLI or the local MCP server. Fetch
-        <a href="/llms.txt">/llms.txt</a> for a curated markdown index of this site,
-        or <a href="/docs/mcp-clients.html#available-tools">the MCP tool catalog</a>
-        for the exact tool surface. The capability ladder and trust model for
-        agent-delegated actions live in this repository's root
-        <a href="https://github.com/amsultan2010/crosscode/blob/main/AGENTS.md">AGENTS.md</a>.
+        <strong>If you're an agent:</strong> you do not need this website for day-to-day work.
+        You get four MCP tools, <code>status</code>, <code>conflicts</code>,
+        <code>resolve</code>, and <code>pause</code>, plus the <code>crosscode</code> skill
+        that says when to use them and when to do nothing. Every tool response carries any
+        pending conflicts, whether you asked for them or not. Fetch
+        <a href="/llms.txt">/llms.txt</a> for a markdown index of this site, or
+        <a href="/docs/mcp-clients.html">the MCP client page</a> for the exact tool surface.
       </div>
 
       <h2>What Crosscode is</h2>
       <p>
-        Everyone works in their own ordinary Git checkout. A background program &mdash;
-        the daemon &mdash; watches that checkout, notices whenever an edit has settled,
-        and sends a record of it to a shared coordination service, which passes it on
-        to everyone else. Their edits are never written into your files automatically:
-        each one arrives as a <em>proposal</em> you inspect and then accept or reject.
+        Everyone works in their own ordinary Git checkout. A small background daemon per
+        checkout notices an edit once it has settled, sends that one file to whoever is on the
+        same branch, and applies their edits to your working tree the same way. Most of the
+        time you are on different files and nothing is ever shown to you.
       </p>
       <p>
-        Git remains the durable history and publishing layer. Crosscode does not
-        replace your editor, agent, Git host, branches, worktrees, staging area, or
-        normal commits &mdash; stop running it and your repository is unchanged.
+        When you both changed the same lines of the same file, that is the one case that
+        genuinely needs a decision. It goes to your own coding agent with all three sides of
+        the merge, and the agent fixes it. Crosscode never judges a change, classifies risk,
+        or reviews code.
+      </p>
+      <p>
+        Git stays the durable history and publishing layer. Only uncommitted working-tree
+        files are in scope: commits, branches, the index, the stash, and remotes are never
+        touched, and nothing Crosscode does pushes. Stop running it and your repository is
+        unchanged.
       </p>
 
       <h2>What works today</h2>
 
-      <h3>Watching your checkout</h3>
+      <h3>The merge core</h3>
       <ul>
-        <li>One daemon per Git checkout/worktree, which survives restarts</li>
-        <li>Captures an edit once it has settled, with before/after hashes so a stale change can't land on top of a newer one</li>
-        <li>An append-only SQLite log locally, plus an outbox so work made offline is never lost</li>
-        <li>Hidden Git checkpoints that never move <code>HEAD</code>, touch your index, or appear in branch history</li>
-        <li>Notices branch switches, commits, resets, index changes, merges, rebases, cherry-picks, and reverts</li>
+        <li>A single ref, <code>refs/crosscode/shadow</code>, holding the last state both sides agreed on. It never moves <code>HEAD</code> and never appears in <code>git log</code></li>
+        <li>The apply rule: write silently when your copy matches the shadow and the sender built from it, otherwise a 3-way merge, and only surface a conflict when that merge does not come out clean</li>
+        <li>Proven against disjoint files, same-file disjoint hunks, same-file same lines, delete versus edit, rename, binary, and offline-then-reconnect</li>
+        <li>Binaries are never merged, so concurrent binary edits are always a conflict. A conflicted path is quarantined until it is resolved</li>
       </ul>
 
-      <h3>Sharing work</h3>
+      <h3>The daemon</h3>
       <ul>
-        <li>A coordination service backed by Supabase-hosted PostgreSQL, with an immutable audit log</li>
-        <li>Idempotent uploads, and cursor-based resume from exactly where the daemon left off after a disconnect</li>
-        <li>Live presence, tasks, claims, handoffs, and intents over WebSocket, falling back to polling</li>
-        <li>Text and binary files (binaries base64-encoded, restored byte-for-byte) and renames tracked as real renames</li>
+        <li>One per checkout, started by <code>crosscode start</code>, restarted automatically if it crashes</li>
+        <li>Watches tracked files with a hard denylist, and debounces about 300ms per file so an edit is sent once it settles</li>
+        <li>Never writes a file you or your agent touched in the last ten seconds</li>
+        <li>Pauses during a rebase, merge, or bisect, then resyncs</li>
+        <li>Reconnects and catches up from its cursor, or resyncs from full content when the cursor is too old</li>
+        <li>Binds to loopback only, with a mode-<code>0600</code> connection descriptor in the Git directory</li>
       </ul>
 
-      <h3>Reviewing before anything lands</h3>
+      <h3>The service</h3>
       <ul>
-        <li>Explicit inspection, diffing, acceptance, and rejection of every proposal</li>
-        <li>Crash-safe application that preserves newer local edits</li>
-        <li>Validation profiles that come only from a committed <code>.crosscode/config.yaml</code></li>
-        <li>An advisory AI reviewer for ambiguous conflicts &mdash; non-authoritative, off unless workspace policy enables it, and still gated behind human approval</li>
-        <li>A per-workspace autonomy tier: always ask, auto-apply when clean, or auto-apply always</li>
-        <li><code>publish --branch</code> with a dry-run plan, turning accepted work into ordinary commits on a real remote</li>
+        <li>A store-and-forward relay on Supabase-hosted PostgreSQL, with Row Level Security from the first migration</li>
+        <li>Six tables. Presence is in memory in the websocket gateway, not a table</li>
+        <li>Sequence numbers, fan-out, cursor-based catch-up, and about 7 days of retention</li>
+        <li>It does not merge, classify, or inspect anything</li>
       </ul>
 
-      <h3>Accounts and teams</h3>
+      <h3>Your tools</h3>
       <ul>
-        <li>Self-serve sign-up from the site or <code>crosscode signup</code>, with a personal workspace provisioned automatically &mdash; no administrator step</li>
-        <li>Multiple workspaces, memberships, roles, invite codes, and one-time pairing codes, all from the CLI or the service's HTTP API</li>
-        <li>Supabase Auth sign-in, in a browser (<code>crosscode login</code>) or headlessly (<code>crosscode login --email/--password</code>), with this machine registering itself on first daemon start</li>
-      </ul>
-
-      <h3>Connecting your tools</h3>
-      <ul>
-        <li>An HTTP-backed CLI and a standards-compliant MCP server that starts the daemon on first connection</li>
-        <li>Any MCP-capable agent or editor: Claude Code, Codex CLI, OpenCode, Cursor, VS Code, Gemini CLI &mdash; no plugin to install</li>
+        <li>Five CLI commands: <code>start</code>, <code>invite</code>, <code>join</code>, <code>status</code>, <code>stop</code></li>
+        <li>Four MCP tools and one skill, with conflicts attached to every response</li>
+        <li>Any MCP-capable agent or editor: Claude Code, Codex CLI, OpenCode, Cursor, VS Code, Gemini CLI. There is no plugin to install</li>
       </ul>
 
       <p>
-        See <a href="/docs/limitations.html">current limitations</a> for the honest gaps.
+        See <a href="/docs/limitations.html">current limitations</a> for what is not built
+        yet, including the parts of the quickstart you cannot run today.
       </p>
 
       <div class="docs-next">
