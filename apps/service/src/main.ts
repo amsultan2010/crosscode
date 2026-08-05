@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { createSupabaseJwks } from "./auth.js";
 import { assertSafeServiceBinding, createServiceServer, type BillingOptions } from "./http.js";
+import { createObservability, observeRequest } from "./observability.js";
 import { DEFAULT_SWEEP_INTERVAL_MS, startRetentionSweep } from "./retention.js";
 import { PgStore } from "./store.js";
 import { StripeBillingProvider, parseStripePriceCatalog } from "./stripe.js";
@@ -27,6 +28,9 @@ export async function main(environment: NodeJS.ProcessEnv = process.env): Promis
   const allowedOrigins = parseAllowedOrigins(environment.CROSSCODE_ALLOWED_ORIGINS);
   const billing = loadBilling(environment);
   const store = new PgStore(databaseUrl);
+  // Inert unless SENTRY_DSN is set. Created before the store check so a startup that
+  // fails on privileges is reported rather than only printed to a log nobody watches.
+  const reporter = createObservability(environment);
   let server: ReturnType<typeof createServiceServer>;
   try {
     await store.assertRuntimePrivileges();
@@ -34,6 +38,9 @@ export async function main(environment: NodeJS.ProcessEnv = process.env): Promis
     // reverse proxy in front, which is exactly the condition under which
     // x-forwarded-for is trustworthy and the socket address is not.
     server = createServiceServer({ store, jwks, supabaseUrl, tls, allowedOrigins, billing, trustProxy: trustProxyTls });
+    // A second request listener alongside the route handler: it only reads the status the
+    // response ends with, so it cannot change what any route does.
+    server.on("request", (request, response) => { observeRequest(reporter, request, response); });
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(port, host, () => {
@@ -42,6 +49,8 @@ export async function main(environment: NodeJS.ProcessEnv = process.env): Promis
       });
     });
   } catch (error) {
+    reporter.capture(error, { route: "/startup", method: "PROCESS" });
+    await reporter.flush();
     await store.close();
     throw error;
   }

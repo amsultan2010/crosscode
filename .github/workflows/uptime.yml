@@ -1,0 +1,95 @@
+name: Uptime
+
+# An external check on the hosted coordination service. The API answered 500 on every
+# route for an unknown length of time and we found out by running curl by hand, which is
+# the failure this job exists to prevent.
+#
+# GitHub's scheduler is the free tier of uptime monitoring: 5 minutes is the shortest cron
+# it accepts, and a scheduled run is queued rather than guaranteed, so a busy Actions
+# window can delay it by 10 minutes or more. That is fine for "the API is down" and it is
+# not fine for a latency SLO. docs/observability.md says when to add a paid monitor.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe the health route
+        id: probe
+        env:
+          # Repository variable, so the URL can be changed without a commit. Settings ->
+          # Secrets and variables -> Actions -> Variables -> CROSSCODE_HEALTH_URL.
+          HEALTH_URL: ${{ vars.CROSSCODE_HEALTH_URL || 'https://www.getcrosscode.dev/api/v1/health' }}
+        run: |
+          set -u
+          # Two attempts 20 seconds apart. One failed probe is as likely to be a cold
+          # start or a dropped connection from a shared runner as a real outage, and an
+          # issue opened for that trains everyone to ignore the next one.
+          for attempt in 1 2; do
+            # Truncated first: a connection that never opens leaves the previous attempt's
+            # body on disk, and reporting that as the response is worse than reporting none.
+            : > /tmp/body.txt
+            status=$(curl --silent --show-error --max-time 10 --output /tmp/body.txt --write-out '%{http_code}' "$HEALTH_URL") || status="000"
+            if [ "$status" = "200" ]; then
+              echo "healthy=true" >> "$GITHUB_OUTPUT"
+              echo "Health check passed: $status"
+              exit 0
+            fi
+            echo "Attempt $attempt failed with status $status"
+            [ "$attempt" = "1" ] && sleep 20
+          done
+          echo "healthy=false" >> "$GITHUB_OUTPUT"
+          {
+            echo "url=$HEALTH_URL"
+            echo "status=$status"
+            echo "body<<EOF"
+            head -c 500 /tmp/body.txt || true
+            echo ""
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the outage issue
+        if: steps.probe.outputs.healthy == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          URL: ${{ steps.probe.outputs.url }}
+          STATUS: ${{ steps.probe.outputs.status }}
+          BODY: ${{ steps.probe.outputs.body }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list --label uptime --state open --limit 1 --json number --jq '.[0].number // empty')
+          comment=$(printf 'Still failing at %s.\n\n- URL: %s\n- Status: %s\n- Run: %s\n\n```\n%s\n```\n' "$(date -u +%FT%TZ)" "$URL" "$STATUS" "$RUN_URL" "$BODY")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$comment"
+          else
+            gh issue create \
+              --title "Service health check failing" \
+              --label uptime \
+              --body "$(printf 'The scheduled health check could not get a 200 from the coordination service on two attempts 20 seconds apart.\n\n- URL: %s\n- Status: %s\n- Run: %s\n\n```\n%s\n```\n\nRunbook: docs/observability.md#when-the-uptime-check-fires\n' "$URL" "$STATUS" "$RUN_URL" "$BODY")"
+          fi
+
+      - name: Close the outage issue once the route answers again
+        if: steps.probe.outputs.healthy == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list --label uptime --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" --comment "Health check passed again at $(date -u +%FT%TZ). Run: $RUN_URL"
+          fi
