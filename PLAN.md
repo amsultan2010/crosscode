@@ -90,13 +90,16 @@ We built all of this once. That's why we lost the plot.
 
 **Hard limits:**
 
-| | Now | Target |
-|---|---|---|
-| CLI commands | ~45 | **5** — `start` `invite` `join` `status` `stop` |
-| MCP tools | 22 | **4** — `status` `conflicts` `resolve` `pause` |
-| Skills | 0 | **1** |
-| DB tables | 24 | **6** |
-| Source lines | ~13,700 | **~3,500** |
+| | Start | Now | Target |
+|---|---|---|---|
+| CLI commands | ~45 | 4 | **5** — `start` `invite` `join` `status` `stop` |
+| MCP tools | 22 | 1 | **4** — `status` `conflicts` `resolve` `pause` |
+| Skills | 0 | 0 | **1** |
+| DB tables | 24 | 11 | **6** |
+| Source lines | ~13,700 | ~6,000 | **~3,500** |
+
+The remaining gap to target is Phase 3's rewrite, not more deleting. What is left is the
+old transaction-shaped protocol and the routes built on it.
 
 ---
 
@@ -131,7 +134,10 @@ Presence is in-memory in the websocket gateway.
 
 ## Checklist
 
-Phases 1 and 2 are done. Phase 3 is next.
+**Done:** 1 (strip) · 2 (merge core proven). **Next:** 3. Nothing in 3–7 is started.
+
+Phase 2's proof lives in `spike/` — throwaway, outside the build. Read its README before
+starting Phase 4; port the algorithm, not the code.
 
 ### 1 — Strip
 - [x] Tasks / claims / handoffs / intents — daemon, routes, 4 tables, CLI, MCP
@@ -149,8 +155,6 @@ Phases 1 and 2 are done. Phase 3 is next.
 - [x] Shadow ref + apply rule + hot-file deferral + loop suppression
 - [x] Cases: disjoint files · same file disjoint hunks · same file same lines · delete vs edit · rename · binary · offline then reconnect
 - [x] **Verify:** both sides converge byte-identical with zero interaction; same-line case yields exactly one conflict and writes nothing
-
-> If this isn't clean, stop and rethink before going further.
 
 ### 3 — Protocol + service
 - [ ] Rewrite `packages/protocol` (~1,000 lines → ~150)
@@ -193,6 +197,7 @@ Phases 1 and 2 are done. Phase 3 is next.
 ## Known risks
 
 - Writing to a file with an unsaved editor buffer, or one the agent is mid-edit on
-- Convergence loops when both sides rebroadcast a merge result
 - Secrets: real-time syncing an untracked `.env` would be a serious incident
 - A file watcher over a large monorepo isn't free — measure, don't assume
+- Three-way convergence is unproven; the spike only ran two replicas. Test before Phase 4
+- Under sustained typing a hot file can defer forever — deferral needs a ceiling
