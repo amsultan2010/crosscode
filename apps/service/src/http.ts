@@ -244,7 +244,25 @@ async function handleRequest(
     }
   };
 
+  /**
+   * Liveness *and* whether the runtime role can still use the database.
+   *
+   * The second half is not padding. Migrations create tables but have never granted to
+   * `crosscode_runtime` -- the original six were granted once, by hand -- so a table added
+   * later arrives readable by nobody and the first request touching it 500s with
+   * `permission denied`. That is how `device_codes` shipped, and this route reported `ok`
+   * throughout, because answering "is the process up" was all it did.
+   *
+   * A degraded answer is 503 so the scheduled probe treats it as an outage, and it names
+   * the tables rather than returning a bare boolean somebody then has to go and diagnose.
+   * Naming them leaks nothing: they are already listed in a public migration.
+   */
   if (method === "GET" && (url.pathname === "/health" || url.pathname === "/healthz")) {
+    const { unreadableTables } = await options.store.checkHealth();
+    if (unreadableTables.length > 0) {
+      send(response, 503, { status: "degraded", service: "crosscode-service", unreadableTables });
+      return;
+    }
     sendHealth(response);
     return;
   }

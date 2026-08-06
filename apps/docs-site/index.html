@@ -76,9 +76,9 @@
         </div>
 
         <p class="hero-foot reveal">
-          Node 24 and a Git checkout. Nothing to deploy. Pre-1.0: sign-in and the agent
-          pre-edit hook are still landing, and nothing here has been run end to end on a
-          clean machine. <a href="#status">What that means</a>.
+          Node 24 and a Git checkout. Nothing to deploy. Pre-1.0: GitHub sign-in cannot
+          complete yet, and nothing here has been run end to end on a clean machine.
+          <a href="#status">What that means</a>.
         </p>
       </div>
 
@@ -402,7 +402,7 @@ Crosscode to me unless there is a conflict you cannot merge on your own.</code><
         <div class="status-strip reveal">
           <p class="kicker">Pre-1.0, and honest about it</p>
           <ul>
-            <li>The merge core, the daemon, and the wire contract are built and tested. The two things in front of them are not: GitHub sign-in, which every command needs before it does anything, and the pre-edit hook, which is written but wired to the wrong command so it does not fire.</li>
+            <li>The merge core, the daemon, and the wire contract are built and tested, and so now are the pre-edit hook and the device handshake that <code>crosscode start</code> opens with. The thing still in front of them is not code: the GitHub OAuth application behind our Supabase project is misconfigured, so the browser half of sign-in ends on a GitHub 404 and no session is ever minted. Every command needs one before it does anything.</li>
             <li>Nothing here has been verified end to end on a clean machine. The quickstart is the intended path, not a measured one, and the same goes for any timing claim you read about onboarding.</li>
             <li>There is no end-to-end encryption. The service can read the files it relays, and the privacy section above lists what it keeps.</li>
             <li>There is no web app for syncing and there will not be one. This site is a landing page, sign-in, and docs.</li>

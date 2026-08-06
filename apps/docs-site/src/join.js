@@ -28,15 +28,23 @@ export function inviteCodeFromPath(pathname) {
  * a URL anyone can forward, so having the link is not evidence of anything. The repo is the
  * gate.
  */
-export async function resolveJoin({ code, accessToken, serviceUrl = SERVICE_URL, fetchImpl = fetch }) {
+export async function resolveJoin({ code, accessToken, githubToken, serviceUrl = SERVICE_URL, fetchImpl = fetch }) {
   if (!code) return { status: "bad-link" };
   if (!accessToken) return { status: "signed-out" };
+  // Redeeming asks GitHub whether *this* visitor can read the repo, and only the visitor's
+  // own OAuth token can answer that. Supabase hands it over at sign-in and does not keep
+  // it, so a session restored from storage has none -- which is a sign-out, not a denial.
+  if (!githubToken) return { status: "signed-out" };
 
   let response;
   try {
     response = await fetchImpl(new URL(`/v1/invites/${encodeURIComponent(code)}/redeem`, serviceUrl || window.location.origin), {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${accessToken}`,
+        "x-crosscode-github-token": githubToken
+      },
       body: "{}"
     });
   } catch {
@@ -50,9 +58,11 @@ export async function resolveJoin({ code, accessToken, serviceUrl = SERVICE_URL,
   if (response.status === 404 || response.status === 410) return { status: "expired" };
   if (!response.ok) return { status: "unreachable" };
 
-  const body = await response.json();
-  if (!body?.repo || !body?.cloneCommand) return { status: "unreachable" };
-  return { status: "ready", code, repo: body.repo, cloneCommand: body.cloneCommand };
+  // Every service route answers `{ ok, data }`, so the invite itself is one level in.
+  // Reading it off the envelope is why a *successful* redeem used to render as "unreachable".
+  const { data } = await response.json();
+  if (!data?.repo || !data?.cloneCommand) return { status: "unreachable" };
+  return { status: "ready", code, repo: data.repo, cloneCommand: data.cloneCommand };
 }
 
 /** The whole of onboarding, as text. Two lines; a third would be a bug. */
@@ -108,7 +118,11 @@ export async function mountJoinPage(root, { location = window.location } = {}) {
   const supabase = getSupabaseClient();
   const { data } = await supabase.auth.getSession();
   const code = inviteCodeFromPath(location.pathname);
-  const state = await resolveJoin({ code, accessToken: data.session?.access_token });
+  const state = await resolveJoin({
+    code,
+    accessToken: data.session?.access_token,
+    githubToken: data.session?.provider_token ?? undefined
+  });
   renderJoin(root, state);
 
   root.querySelector("[data-github-signin]")?.addEventListener("click", () => {

@@ -148,9 +148,10 @@ short-lived and single-use.
 **Not started:** 7 beyond the docs rewrite.
 
 A box is ticked when the thing is on `main` and its verify line was actually run. It is not
-ticked because the design is agreed or the code is written on a branch somewhere. The four
-boxes left open below are open for that reason, and every one of them is a thing a user
-would notice.
+ticked because the design is agreed or the code is written on a branch somewhere. Every one
+of the four boxes left open below is a thing a user would notice, and three of them are one
+fact seen from three sides: sign-in has never once run to completion. It is a dashboard
+setting away rather than a line of code away, which makes it easy to keep calling done.
 
 Phase 2's proof lives in `spike/` — throwaway, outside the build. Read its README before
 starting Phase 4; port the algorithm, not the code.
@@ -175,10 +176,12 @@ starting Phase 4; port the algorithm, not the code.
 ### 3 — Protocol + service
 - [x] Rewrite `packages/protocol` — 282 lines, and nothing transaction-shaped left in it
 - [x] 6-table migration, RLS from day one
-- [ ] GitHub OAuth — `POST /v1/auth/github/device` and `/device/token`, a `device_codes`
-      table, and a `/device` page that binds the code. Neither route exists yet, so an
-      unmatched path falls to the bearer check and `crosscode start` stops at a 401. This
-      one blocks `start`, `invite`, and `join` alike.
+- [ ] GitHub OAuth — routes, table and `/device` page are built and live: `start` gets a
+      code from `POST /v1/auth/github/device`, `/device/token` polls, and the page binds
+      the code to a Supabase session. What is left is not code. The GitHub OAuth
+      application configured on the Supabase project is wrong — its `client_id` sends a
+      signed-in browser to a GitHub 404 — so no session is ever minted and this still
+      blocks `start`, `invite`, and `join` alike. Fix in the Supabase dashboard, not here.
 - [x] `POST /v1/projects` · `POST /v1/invites` · `POST /v1/invites/:code/redeem` · `GET /v1/changes?since=` · `POST /v1/changes`
 - [x] Websocket `/v1/stream`
 - [x] **Verify:** two replicas, 100 changes in order; cursor catch-up after forced disconnect
@@ -197,20 +200,19 @@ starting Phase 4; port the algorithm, not the code.
 - [x] `invite` → URL; `/join/:code` page verifies repo access → copy-paste block
 - [x] `join <code>` → redeem → same setup
 - [ ] **Verify:** fresh machine, link to syncing in under 60s, typing only the two given
-      lines. Blocked on sign-in above, and unstartable until it lands: all three commands
-      need a session before they do anything. Nobody has run this on a clean machine, so
-      the 60-second figure is a target and no page may print it as a measurement.
+      lines. Still blocked on the OAuth application above: `start` now reaches sign-in and
+      prints a real code, and stops there because no browser can complete it. Nobody has
+      run this on a clean machine, so the 60-second figure is a target and no page may
+      print it as a measurement.
 
 ### 6 — Agent surface
 - [x] The `crosscode` skill — what's happening in the background · how to resolve a conflict · when to do nothing
 - [x] 4 MCP tools, conflicts piggybacked on every response
-- [ ] Claude Code + Codex hooks firing before file edits. The hook itself is written and
-      tested (`apps/mcp-server/src/hook-main.ts`) and is simply never reached: `start`
-      installs `crosscode status --json`, which ignores stdin, never learns which file is
-      being edited, and cannot exit 2. The entrypoint that works is `crosscode-mcp hook`.
-      Until that is corrected the MCP fallback covers it — the agent finds out on its next
-      tool call instead of before the write, which is the degradation this phase exists to
-      remove.
+- [x] Claude Code + Codex hooks firing before file edits. `start` installs
+      `crosscode-mcp hook`, which reads the payload on stdin and exits 2 on a conflicted
+      path. 0.1.0 installed `crosscode status --json` instead — stdin ignored, no way to
+      learn the file, no way to exit 2 — so an upgrade rewrites that entry in place rather
+      than leaving it and adding a second.
 - [ ] **Verify:** two live agent sessions on one repo; neither mentions Crosscode until a real conflict, which the receiving agent resolves unprompted
 
 ### 7 — Docs + harden
@@ -229,16 +231,20 @@ starting Phase 4; port the algorithm, not the code.
 - A file watcher over a large monorepo isn't free — measure, don't assume
 - Three-way convergence is unproven; the spike only ran two replicas. Test before Phase 4
 - Under sustained typing a hot file can defer forever — deferral needs a ceiling
-- **A same-branch `HEAD` move is invisible to the daemon.** `observeGit` reacts to a branch
-  change and to a rebase/merge/bisect in progress, and to nothing else. A plain
-  `git commit` or `git pull` moves `HEAD` without either, so the shadow keeps pointing at a
-  tree that is no longer what both sides agreed on. Detect it and rebase the shadow; the
-  crux is doing that without discarding genuinely-local uncommitted edits or firing a
-  republish on every commit
+- **Migrations do not grant to the runtime role, and nothing catches it.** `001` created
+  six tables and granted `crosscode_runtime` nothing; the grants were applied once, by
+  hand, outside the repo. So `device_codes` shipped unreadable and every sign-in 500ed with
+  `permission denied` while CI was green and `/healthz` said `ok`. `002` now carries its
+  own grant and health fails on an unreadable table, but the next migration has to remember
+  the same thing, and only a convention says it will
 - **`git pull` can refuse where the content is identical, and we do not fix it.** Alice
   commits and pushes what she and Bob both hold uncommitted; Bob's `git pull` refuses with
   "your local changes would be overwritten", even though the bytes match. Making it succeed
   would mean touching Bob's working tree to line it up with a commit, which is exactly the
-  magic this product refuses. The scope of the fix is to notice and to tell Bob's agent, so
-  it can clear the way itself. That leaves a real papercut in place on purpose, and it is
-  the first thing a real team will hit
+  magic this product refuses. What ships is the noticing: the daemon rebases the shadow and
+  tells Bob's agent, which can clear the way itself. That leaves a real papercut in place on
+  purpose, and it is the first thing a real team will hit
+- **Sign-in has never completed once, end to end.** Every piece is deployed and the pieces
+  answer correctly in isolation, which is a state that reads as working and is not. Nothing
+  should be called done here until one person has gone from `crosscode start` to a synced
+  file without being told what to type
