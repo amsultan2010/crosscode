@@ -25,8 +25,8 @@ rather than by handing an `Error` to an SDK that serializes whatever it finds:
   (ciphertext, hashes, tokens), everything after the first line, and anything past 200
   characters.
 - **The route** is a template. Every path segment that is not a fixed part of the API
-  surface becomes `:id`, so `/v1/workspaces/7e0a.../operations` is reported as
-  `/v1/workspaces/:id/operations`. Query strings are dropped whole.
+  surface becomes `:id`, so `/v1/invites/CC-7F3A-9C2E/redeem` is reported as
+  `/v1/invites/:id/redeem`. Query strings are dropped whole.
 - **Custom error properties and `cause` are not read at all**, so an error that carries a
   patch or a path on a property cannot leak it.
 - **Stack frames** are sent as basename, function, line and column. The raw stack string is
@@ -76,14 +76,14 @@ Run this from a checkout, with the DSN in the environment. It sends one event an
 ```bash
 SENTRY_DSN='<your DSN>' npx tsx -e 'import("./apps/service/src/observability.js").then(async (module) => {
   const reporter = module.createObservability(process.env);
-  reporter.capture(new Error("crosscode observability smoke test"), { route: "/v1/health", method: "GET", status: 500 });
+  reporter.capture(new Error("crosscode observability smoke test"), { route: "/v1/changes", method: "GET", status: 500 });
   await reporter.flush();
   console.log("sent:", reporter.enabled);
 })'
 ```
 
 It prints `sent: true`. Within about 30 seconds the Sentry issue stream shows
-`Error: crosscode observability smoke test` tagged `route:/v1/health`, `method:GET`,
+`Error: crosscode observability smoke test` tagged `route:/v1/changes`, `method:GET`,
 `status:500`. If it prints `sent: false`, the DSN did not parse.
 
 Then check the deployed service: an unhandled error or any 5xx response opens an issue with
@@ -134,30 +134,35 @@ link click on the landing page and the form submit that follows it are one event
 
 ### 7. Confirm the health route the uptime job watches
 
-`.github/workflows/uptime.yml` probes `https://www.getcrosscode.dev/api/v1/health` by
-default, **and that is the wrong path.** The service answers health at `/health` and
-`/healthz`, so behind the `/api` prefix the live routes are:
+`.github/workflows/uptime.yml` probes `https://www.getcrosscode.dev/api/healthz`. The
+service answers health at `/health` and `/healthz`, outside the versioned surface:
 
 ```
 https://www.getcrosscode.dev/api/health     → 200
 https://www.getcrosscode.dev/api/healthz    → 200
-https://www.getcrosscode.dev/api/v1/health  → 401   ← what the workflow probes
+https://www.getcrosscode.dev/api/v1/health  → 401   ← no such route
 ```
 
-There is no `/v1/health`; the path falls through to the bearer check like any other
-unmatched route. So the check fails on every run and reports an outage that is not
-happening — the worst possible state for an alert, because it teaches everyone to ignore
-it. Point it at `/api/health`, either by fixing the default in the workflow or by setting a
-repository variable: **Settings, Secrets and variables, Actions, Variables, New repository
-variable**, named `CROSSCODE_HEALTH_URL`.
+The default used to be `/api/v1/health`, which matches nothing and therefore fell to the
+bearer check like any other unmatched path. The job reported an outage on every run against
+a healthy service — the worst state an alert can be in, because it teaches everyone to
+ignore it. If you need to repoint it, prefer a repository variable over a commit:
+**Settings, Secrets and variables, Actions, Variables, New repository variable**, named
+`CROSSCODE_HEALTH_URL`.
 
-### 8. Create the `uptime` label
+Health is not only liveness. It answers 503, and names the tables, when the runtime role
+cannot read one. That is not hypothetical: `device_codes` shipped without a grant to
+`crosscode_runtime`, every sign-in failed on `permission denied`, and this route answered
+`ok` throughout, because whether the process was running was all it asked.
 
-The workflow files issues under the label `uptime`, and `gh issue create` fails on a label
-that does not exist:
+### 8. The `uptime` label
+
+The workflow files issues under the label `uptime`, and `gh issue create` fails outright on
+a label that does not exist — so a real outage would have gone unfiled on top of going
+undetected. The label now exists on this repository. Recreate it only on a fork:
 
 ```bash
-gh label create uptime --color B60205 --description "Automated health check failures"
+gh label create uptime --color B45309 --description "Automated service health check failures"
 ```
 
 ### 9. Make the failure reach a person
@@ -170,7 +175,7 @@ A GitHub issue nobody is watching is not an alert. Do one of these:
 
 Then run the workflow by hand once (**Actions, Uptime, Run workflow**) and check the run
 log. Point `CROSSCODE_HEALTH_URL` at a path you know is broken first, confirm an issue
-opens, then point it back at `/api/health` and confirm the issue closes. Proving both
+opens, then point it back at `/api/healthz` and confirm the issue closes. Proving both
 directions is the point: an alert that fires is only half of a working alert path.
 
 ## What the uptime check does

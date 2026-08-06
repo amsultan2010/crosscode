@@ -73,10 +73,13 @@ in the websocket gateway, not a table.
 
 Routes: `POST /v1/projects`, `POST /v1/invites`, `POST /v1/invites/:code/redeem`,
 `POST /v1/replicas`, `GET /v1/changes?since=`, `POST /v1/changes`, and the websocket at
-`/v1/stream`. Sign-in adds `POST /v1/auth/github/device` and `/device/token` — the only
-routes exempt from the bearer check, because their whole job is to hand out a session to a
-caller who has none. Redeeming an invite verifies the invitee actually has access to the
-repo. Row Level Security is on from the first migration.
+`/v1/stream`. Sign-in adds `POST /v1/auth/github/device`, `/device/token`, and
+`/device/bind` — with `GET /health` and `/healthz`, the only routes exempt from the bearer
+check, because their whole job is to serve a caller who has no session yet. Redeeming an
+invite verifies the invitee actually has access to the repo, using the invitee's own GitHub
+token passed as `x-crosscode-github-token`. Row Level Security is on from the first
+migration; `device_codes` carries no policy at all, which denies it to every role that does
+not bypass RLS.
 
 The service assigns sequence numbers and fans changes out. It does not merge, classify, or
 inspect anything. Changes are retained about 7 days; a replica whose cursor is older than

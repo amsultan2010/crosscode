@@ -119,4 +119,4 @@ No operation, task, claim, handoff, intent, snapshot, validation, or review shap
 nothing an incoming change has to be approved through. The old transaction-shaped schemas
 are gone: `packages/protocol/src/index.ts` now holds only the daemon's own on-disk shapes —
 its loopback connection descriptor and the config `crosscode start` writes — and re-exports
-`sync.ts`. The two files together are 282 lines.
+`sync.ts`. The two files together are 296 lines.

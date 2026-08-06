@@ -95,19 +95,19 @@ We built all of this once. That's why we lost the plot.
 | CLI commands | ~45 | 5 | **5** — `start` `invite` `join` `status` `stop` |
 | MCP tools | 22 | 4 | **4** — `status` `conflicts` `resolve` `pause` |
 | Skills | 0 | 1 | **1** |
-| DB tables | 24 | 6 | **7** — the six below plus `device_codes` for sign-in |
-| Source lines | ~13,700 | ~7,200 | **~3,500** |
+| DB tables | 24 | 7 | **7** — the six below plus `device_codes` for sign-in |
+| Source lines | ~13,700 | ~7,850 | **~3,500** |
 
 Counted, not remembered. `.command("` in `apps/cli/src/index.ts`, `TOOL_NAMES` in
 `apps/mcp-server/src/tool-catalog.ts`, `CREATE TABLE` in `apps/service/migrations/`, and
 `find apps/*/src packages/*/src -name '*.ts' -not -name '*.test.ts' | xargs wc -l`.
 
 Four of the five rows are at target. Source lines are not, and the honest reading is that
-the number has gone **up** since the last count: the service and the daemon grew while the
-protocol shrank. The gap is no longer one rewrite waiting to happen — `packages/protocol`
-is already down to 282 lines and holds nothing transaction-shaped. Closing the rest means
-deleting from `apps/service` (2,109) and `apps/daemon` (1,893), and nothing on this page
-authorises that yet.
+the number keeps going **up**: 7,200 at the last count, 7,850 now, because sign-in and the
+`HEAD`-move handling both landed. The gap is no longer one rewrite waiting to happen —
+`packages/protocol` is 296 lines and holds nothing transaction-shaped. Closing the rest
+means deleting from `apps/service` (2,441) and `apps/daemon` (2,023), and nothing on this
+page authorises that yet.
 
 ---
 
@@ -174,7 +174,7 @@ starting Phase 4; port the algorithm, not the code.
 - [x] **Verify:** both sides converge byte-identical with zero interaction; same-line case yields exactly one conflict and writes nothing
 
 ### 3 — Protocol + service
-- [x] Rewrite `packages/protocol` — 282 lines, and nothing transaction-shaped left in it
+- [x] Rewrite `packages/protocol` — 296 lines, and nothing transaction-shaped left in it
 - [x] 6-table migration, RLS from day one
 - [ ] GitHub OAuth — routes, table and `/device` page are built and live: `start` gets a
       code from `POST /v1/auth/github/device`, `/device/token` polls, and the page binds
