@@ -74,6 +74,12 @@ session-authenticated, because its purpose is to produce a session:
 | --- | --- | --- |
 | `POST /v1/auth/github/device` | none | `{ deviceCode, userCode, verificationUrl, intervalSeconds, expiresInSeconds }` |
 | `POST /v1/auth/github/device/token` | `{ deviceCode }` | `{ status: "pending" }` **or** `{ status: "complete", session }` |
+| `POST /v1/auth/github/device/bind` | `{ userCode }` | binds a signed-in browser session to the pending code |
+
+Three more carry terms acceptance: `GET /v1/legal` returns the current terms and privacy
+versions, `POST /v1/legal/acceptances` records one, and `GET /v1/legal/acceptances` reports
+what the account still owes. `POST /v1/replicas` refuses with 403 until nothing is
+outstanding.
 
 `session` is the same `{ accessToken, refreshToken, expiresAt }` that
 `syncDaemonConfig.service.session` already pins, so nothing downstream of sign-in has a
@@ -93,7 +99,7 @@ The client sends `subscribe` (`projectId`, `branch`, `replicaId`, `since`) and t
 agent can answer "who is working on what" without any ambient UI.
 
 The stream is the fast path, not the only one. A host that cannot serve a WebSocket upgrade
-— a serverless function, for one — leaves a daemon publishing happily and receiving
+(a serverless function, for one) leaves a daemon publishing happily and receiving
 nothing, so a daemon that cannot open the stream falls back to polling `GET /v1/changes?since=`
 every few seconds. Edits still arrive, a few seconds later than they would have. Presence
 does not: it exists only on the socket, so a polling room goes quiet about who is where.
@@ -123,6 +129,6 @@ connection descriptor and an `{ ok, data }` envelope. They are listed in
 
 No operation, task, claim, handoff, intent, snapshot, validation, or review shape, and
 nothing an incoming change has to be approved through. The old transaction-shaped schemas
-are gone: `packages/protocol/src/index.ts` now holds only the daemon's own on-disk shapes —
-its loopback connection descriptor and the config `crosscode start` writes — and re-exports
-`sync.ts`. The two files together are 296 lines.
+are gone: `packages/protocol/src/index.ts` now holds only the daemon's own on-disk
+shapes (its loopback connection descriptor and the config `crosscode start` writes) and
+re-exports `sync.ts`. The two files together are 296 lines.

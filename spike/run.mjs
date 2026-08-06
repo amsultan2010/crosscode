@@ -12,7 +12,7 @@ for (const fn of [...ALL, ...COUNTEREXAMPLES]) {
   try {
     result = fn();
   } catch (err) {
-    console.log(`FAIL  ${fn.name} — threw: ${err.message}`);
+    console.log(`FAIL  ${fn.name}: threw ${err.message}`);
     failed++;
     total++;
     continue;
@@ -23,8 +23,8 @@ for (const fn of [...ALL, ...COUNTEREXAMPLES]) {
   if (bad.length) failed++;
   console.log(`${bad.length ? "FAIL" : "PASS"}  ${result.name}  (${result.checks.length - bad.length}/${result.checks.length} checks)`);
   for (const c of result.checks) {
-    if (!c.ok) console.log(`        ✗ ${c.label}${c.detail ? ` — ${c.detail}` : ""}`);
-    else if (process.env.VERBOSE) console.log(`        ✓ ${c.label}${c.detail ? ` — ${c.detail}` : ""}`);
+    if (!c.ok) console.log(`        ✗ ${c.label}${c.detail ? `: ${c.detail}` : ""}`);
+    else if (process.env.VERBOSE) console.log(`        ✓ ${c.label}${c.detail ? `: ${c.detail}` : ""}`);
   }
 }
 

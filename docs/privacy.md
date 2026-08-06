@@ -3,8 +3,8 @@
 Crosscode syncs your uncommitted edits between checkouts, so those files pass through our
 coordination service. This page says exactly what that service holds.
 
-This is the honest summary. The complete, formal notice — legal bases, retention per
-category, your rights and how to exercise them — is the
+This is the honest summary. The complete, formal notice (legal bases, retention per
+category, your rights and how to exercise them) is the
 [Privacy Policy](./privacy-policy.md). Alongside it: [Cookies and local
 storage](./cookies.md), [Subprocessors](./subprocessors.md), and the [Data Processing
 Agreement](./dpa.md) for personal data that sits inside the files you sync.
@@ -46,8 +46,8 @@ checkout and stopping it leaves an ordinary Git repository behind.
 
 About 7 days. That window is what makes offline catch-up possible: a checkout that comes
 back within it replays what it missed, and one that has been away longer is told to
-resynchronize from full content rather than handed a partial history. Older changes are
-deleted by a scheduled job.
+resynchronize from full content rather than handed a partial history. Beyond that window,
+history is no longer served back to any checkout.
 
 Your repository is the durable artifact the whole time, on your disk, as ordinary Git.
 
@@ -71,6 +71,6 @@ tell you that than let you believe otherwise.
 Ask us and we delete your account, your projects, and the change history attached to them.
 See [support](./support.md). Your repositories are unaffected, because they were never ours.
 
-Your other rights — access, rectification, restriction, portability, objection — and the
+Your other rights (access, rectification, restriction, portability, objection) and the
 one-month response time are in §9 of the [Privacy Policy](./privacy-policy.md). Write to
 privacy@getcrosscode.dev for any of them.

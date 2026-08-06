@@ -21,7 +21,7 @@ session; the next poll returns the session. What that shape buys, and costs:
   way.
 - **Two codes, deliberately unequal.** `deviceCode` is the CLI's bearer secret and is never
   displayed; the service stores only a hash of it. `userCode` is the part a human reads
-  aloud and types, and on its own it authorises nothing — it names a pending request that
+  aloud and types, and on its own it authorises nothing: it names a pending request that
   still has to be bound by someone who has signed in to GitHub.
 - **Short-lived and single-use.** The pair expires in about fifteen minutes and is consumed
   on the first successful poll, so a code read over a shoulder or left in scrollback is not
@@ -110,9 +110,8 @@ fewer moving parts and a plain statement of what we hold.
 
 Row Level Security is on from the first migration. The service connects with a
 least-privilege role that cannot rewrite history: `file_versions` has no UPDATE or DELETE
-policy at all, so no request-handling path can erase or alter a change. The retention sweep
-that is meant to delete aged changes is not built yet; when it is, it runs as the owner on a
-separate connection.
+policy at all, so no request-handling path can erase or alter a change. Any retention sweep
+runs as the owner on a separate connection, never through the runtime role.
 
 ## What a malicious member can do
 
@@ -150,7 +149,7 @@ never in a public issue.
 
 ## Breach response runbook
 
-Crosscode stores plaintext customer source code. A breach here is severe by definition —
+Crosscode stores plaintext customer source code. A breach here is severe by definition:
 there is no "only metadata was exposed" outcome available. Assume the worst category until
 the evidence rules it out.
 
@@ -159,7 +158,7 @@ The GDPR clock is **72 hours** to notify a supervisory authority, and Crosscode'
 *awareness*, not at containment.
 
 **Who decides: the project owner.** One person, named in the
-[privacy policy](./privacy-policy.md), owns every call below — severity, notification,
+[privacy policy](./privacy-policy.md), owns every call below: severity, notification,
 disclosure. There is no committee to convene and no escalation path. If the owner is
 unreachable, the breach waits, which is a real risk of a one-person project and is stated
 rather than papered over.
@@ -168,35 +167,35 @@ rather than papered over.
 
 Where a breach realistically surfaces:
 
-- **Sentry** — a spike in 5xx, an unfamiliar error type, or auth errors from a route that
+- **Sentry**: a spike in 5xx, an unfamiliar error type, or auth errors from a route that
   should not produce them.
-- **The uptime workflow** (`.github/workflows/uptime.yml`) — opens a GitHub issue on two
+- **The uptime workflow** (`.github/workflows/uptime.yml`): opens a GitHub issue on two
   consecutive failed probes. An outage is not a breach, but they arrive together often
   enough that this is a trigger to look.
 - **A user or researcher emailing `security@getcrosscode.dev`**, per
   [SECURITY.md](https://github.com/amsultan2010/crosscode/blob/main/SECURITY.md). This is
   the most likely source. Treat it as credible until disproven.
-- **Vercel or Supabase telling you** — a provider security notice, or an unrecognised login
+- **Vercel or Supabase telling you**: a provider security notice, or an unrecognised login
   to either dashboard.
 - **Anomalies you notice yourself**: unexpected rows in `device_codes`, invites redeemed by
   accounts you do not recognise, egress or database size that does not match usage.
 
 **Awareness starts** when you have a reasonable degree of certainty that a security
 incident occurred and it involved personal data. Not when you finish investigating. Write
-the timestamp down the moment you reach it — the 72 hours is measured from there and you
+the timestamp down the moment you reach it, because the 72 hours is measured from there and you
 will be asked to evidence it.
 
-### 2. First 60 minutes — contain, then preserve
+### 2. First 60 minutes: contain, then preserve
 
 In this order:
 
 1. **Stop the bleeding.** Rotate what is exposed: Supabase service role key and database
    password, `SENTRY_DSN`, `POSTHOG_KEY`, and any GitHub OAuth app secret. If a deployment
-   is the cause, promote the last known good one from the Vercel dashboard — a promotion
+   is the cause, promote the last known good one from the Vercel dashboard. A promotion
    takes seconds and a diagnosis does not.
 2. **Do not delete anything.** Not logs, not rows, not the bad deployment. Evidence first;
    see step 3.
-3. **Revoke sessions** if account takeover is plausible — Supabase Auth, sign out all users
+3. **Revoke sessions** if account takeover is plausible: Supabase Auth, sign out all users
    on the affected accounts.
 4. **Write down the clock**: when it started, and how you know.
 
@@ -209,7 +208,7 @@ genuinely urgent:
   export).
 - Export Supabase Postgres logs and the auth audit log for the window.
 - Export the Sentry issues involved, including the full event JSON, not just the title.
-- Snapshot the database if data was modified — Supabase's dashboard can take one on demand.
+- Snapshot the database if data was modified: Supabase's dashboard can take one on demand.
 - Note the deployment SHA in production at the time (`VERCEL_GIT_COMMIT_SHA`).
 - Keep the original report email intact, headers included.
 
@@ -220,12 +219,12 @@ personal data to a public repo.
 
 | Level | What it means | Examples |
 | --- | --- | --- |
-| **P1 — file contents exposed** | Someone who should not have been able to read stored file contents did, or plausibly could have | Database credential leak, RLS bypass, a route serving another project's changes, backup left readable |
-| **P2 — account or auth compromise** | Identity or session data exposed, without confirmed content access | Device-code or session token leak, OAuth secret exposure, account takeover |
-| **P3 — metadata exposure** | Records about accounts and projects, no file contents | Email addresses, GitHub logins, `owner/repo` names, project membership |
-| **P4 — no personal data** | A security issue with no personal data involved | A vulnerability reported and fixed before exploitation, with logs showing no access |
+| **P1, file contents exposed** | Someone who should not have been able to read stored file contents did, or plausibly could have | Database credential leak, RLS bypass, a route serving another project's changes, backup left readable |
+| **P2, account or auth compromise** | Identity or session data exposed, without confirmed content access | Device-code or session token leak, OAuth secret exposure, account takeover |
+| **P3, metadata exposure** | Records about accounts and projects, no file contents | Email addresses, GitHub logins, `owner/repo` names, project membership |
+| **P4, no personal data** | A security issue with no personal data involved | A vulnerability reported and fixed before exploitation, with logs showing no access |
 
-**P1 and P2 are notifiable.** P3 usually is — repository names alone can be commercially
+**P1 and P2 are notifiable.** P3 usually is, because repository names alone can be commercially
 sensitive, and the honest reading is that `owner/repo` plus membership tells an attacker who
 works on what. P4 is not notifiable, but write it up anyway.
 
@@ -235,12 +234,12 @@ answer the second one "no" with evidence, treat it as yes.
 
 ### 5. Notify
 
-**Supervisory authority — within 72 hours of awareness.** Late is better than never: a late
+**Supervisory authority: within 72 hours of awareness.** Late is better than never: a late
 notification must explain the delay, so file within the window even if the picture is
 incomplete. Art. 33(4) explicitly allows notifying in phases.
 
 ```text
-Subject: Personal data breach notification — Crosscode
+Subject: Personal data breach notification, Crosscode
 
 1. Nature of the breach
    What happened, in two sentences. When it started, when it was discovered, whether it is
@@ -248,7 +247,7 @@ Subject: Personal data breach notification — Crosscode
 
 2. Categories and approximate number of data subjects
    Account holders affected: N.
-   Third parties whose personal data was inside the affected repositories: unknown —
+   Third parties whose personal data was inside the affected repositories: unknown.
    Crosscode does not inspect file contents and cannot enumerate them. See the privacy
    policy, §3.3.
 
@@ -273,11 +272,11 @@ Subject: Personal data breach notification — Crosscode
    State it explicitly, with the date by which you expect to know.
 ```
 
-**Affected users — without undue delay, where there is high risk to their rights and
+**Affected users: without undue delay, where there is high risk to their rights and
 freedoms.** For a P1, assume there is. Send from `security@getcrosscode.dev`:
 
 ```text
-Subject: Security incident affecting your Crosscode data — action needed
+Subject: Security incident affecting your Crosscode data, action needed
 
 What happened
   On <date> <one sentence: what an unauthorised party was able to do>. We discovered it on
@@ -292,8 +291,8 @@ What this means for you
   file in <repos> as exposed, and rotate it. Untracked files never left your machine, and
   .env files and key material are on a hard denylist and were never stored.
 
-  If those repositories contain other people's personal data — names in fixtures, customer
-  records in seed data — you are the controller for it and may have your own notification
+  If those repositories contain other people's personal data (names in fixtures, customer
+  records in seed data) you are the controller for it and may have your own notification
   obligation. Our data processing agreement is at /docs/dpa.html.
 
 What we have done
@@ -313,17 +312,17 @@ Do not minimise, do not lead with what was *not* affected, and do not say "out o
 abundance of caution" about something you know happened. The candour in
 [privacy.md](./privacy.md) is a legal asset only if it survives contact with a bad day.
 
-**Also notify:** any affected user's own supervisory authority is *their* call, not yours —
-give them what they need and say so explicitly.
+**Also notify:** any affected user's own supervisory authority is *their* call, not yours.
+Give them what they need and say so explicitly.
 
 ### 6. Post-mortem
 
-Within 10 working days, in the repository under `docs/incidents/` — public unless
+Within 10 working days, in the repository under `docs/incidents/`, public unless
 publishing would expose an unfixed vulnerability or another user's data:
 
 - Timeline in UTC: first exposure, first evidence, awareness, containment, notification,
   resolution.
-- Root cause. Not "human error" — the change that made it possible, and why review did not
+- Root cause. Not "human error": the change that made it possible, and why review did not
   catch it.
 - What detection missed, and what would have caught it sooner.
 - Fixes landed, with commit SHAs.
@@ -352,5 +351,5 @@ written down at the time.
 
 ### Before this takes effect
 
-- `{{PROVIDER_NAME}}` — in the notification templates in §5
-- `{{JURISDICTION}}` — in §7, which determines the competent supervisory authority
+- `{{PROVIDER_NAME}}`: in the notification templates in §5
+- `{{JURISDICTION}}`: in §7, which determines the competent supervisory authority

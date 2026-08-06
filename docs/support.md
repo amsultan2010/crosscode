@@ -1,6 +1,7 @@
 # Support
 
-Something is broken, or you need a human. This page says where to go and what to bring.
+Something is not going the way you expect, or you need a human. This page says where to go
+and what to bring.
 
 ## Where to go
 
@@ -10,8 +11,8 @@ Something is broken, or you need a human. This page says where to go and what to
 | Account access, a lost project, a compromised credential | support@getcrosscode.dev | 1 business day |
 | Deleting your account or your data | support@getcrosscode.dev | 2 business days |
 | A security vulnerability | [SECURITY.md](https://github.com/amsultan2010/crosscode/blob/main/SECURITY.md), never a public issue | 2 business days |
-| Illegal content, or content that breaches [section 4 of the terms](/docs/terms.html) | abuse@getcrosscode.dev — see the [DSA contact page](/docs/dsa-contact.html) for what to include | 2 business days |
-| A copyright complaint or counter-notice | legal@getcrosscode.dev — see the [DMCA page](/docs/dmca.html) | 2 business days |
+| Illegal content, or content that breaches [section 4 of the terms](/docs/terms.html) | abuse@getcrosscode.dev, see the [DSA contact page](/docs/dsa-contact.html) for what to include | 2 business days |
+| A copyright complaint or counter-notice | legal@getcrosscode.dev, see the [DMCA page](/docs/dmca.html) | 2 business days |
 | A privacy request: access, deletion, or a question about what we hold | privacy@getcrosscode.dev | 30 days, usually much sooner |
 
 Those are targets, not a service level agreement. Crosscode is a small project and there is
@@ -72,18 +73,18 @@ Redact anything you would not post publicly. We do not need your source code.
   sees local modifications in the way and stops, even though the bytes are identical. This
   is git behaving correctly and Crosscode declining to intervene: making the pull succeed
   would mean checking files out on your behalf, and Crosscode never touches your tree
-  around a commit. Ask your agent to clear the way — it can stash, pull, and drop the
-  stash — or do it yourself. Nothing is lost while the pull is outstanding; the two
+  around a commit. Ask your agent to clear the way (it can stash, pull, and drop the
+  stash) or do it yourself. Nothing is lost while the pull is outstanding; the two
   checkouts keep syncing uncommitted files in the meantime.
 
 ## Legal
 
 - [Terms of Service](/docs/terms.html)
-- [Privacy: what we can and can't see](/docs/privacy.html) — the plain-language version
-- [Privacy Policy](/docs/privacy-policy.html) — the formal notice, and how to exercise your rights
+- [Privacy: what we can and can't see](/docs/privacy.html): the plain-language version
+- [Privacy Policy](/docs/privacy-policy.html): the formal notice, and how to exercise your rights
 - [Cookies](/docs/cookies.html)
-- [Subprocessors](/docs/subprocessors.html) — the third parties that process data for us
-- [Data Processing Addendum](/docs/dpa.html) — for business users; applies without signing
+- [Subprocessors](/docs/subprocessors.html): the third parties that process data for us
+- [Data Processing Addendum](/docs/dpa.html): for business users; applies without signing
 - [Copyright and DMCA](/docs/dmca.html)
 - [DSA contact and illegal content reports](/docs/dsa-contact.html)
 - [Accessibility](/docs/accessibility.html)

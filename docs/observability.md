@@ -146,7 +146,7 @@ https://www.getcrosscode.dev/api/v1/health  → 401   ← no such route
 
 The default used to be `/api/v1/health`, which matches nothing and therefore fell to the
 bearer check like any other unmatched path. The job reported an outage on every run against
-a healthy service — the worst state an alert can be in, because it teaches everyone to
+a healthy service, the worst state an alert can be in, because it teaches everyone to
 ignore it. If you need to repoint it, prefer a repository variable over a commit:
 **Settings, Secrets and variables, Actions, Variables, New repository variable**, named
 `CROSSCODE_HEALTH_URL`.
@@ -159,7 +159,7 @@ cannot read one. That is not hypothetical: `device_codes` shipped without a gran
 ### 8. The `uptime` label
 
 The workflow files issues under the label `uptime`, and `gh issue create` fails outright on
-a label that does not exist — so a real outage would have gone unfiled on top of going
+a label that does not exist, so a real outage would have gone unfiled on top of going
 undetected. The label now exists on this repository. Recreate it only on a fork:
 
 ```bash
@@ -201,7 +201,7 @@ after two consecutive failures, and keep this workflow as the backstop.
 ### When the uptime check fires
 
 1. Open the URL yourself. `curl -i https://www.getcrosscode.dev/api/health`. A 401 here
-   means the probe URL is wrong, not that the service is down — see step 7.
+   means the probe URL is wrong, not that the service is down. See step 7.
 2. If it answers 500, read the Vercel function logs for the deployment:
    **Vercel, the project, Logs**, filter on status 500. The `ERR_MODULE_NOT_FOUND` class of
    failure appears there and nowhere else, because the function never gets far enough to
@@ -240,9 +240,8 @@ bury a service outage.
 ## Where the include actually is
 
 `apps/docs-site/src/analytics.js` is a standalone module and has to be included per page.
-It is included in `apps/docs-site/index.html` and **not** in
-`apps/docs-site/auth/signup.html`. So today `landing_page_view` and
-`install_prompt_copied` fire, `sign_up_started` fires from a click on the landing page's
-link to `/auth/signup.html`, and `sign_up_completed` never fires at all — the module is not
-loaded on the page where the form is submitted. Read the funnel accordingly, or add the
-same include to the sign-up page.
+It is included in `apps/docs-site/index.html` and needs the same include on
+`apps/docs-site/auth/signup.html`. `landing_page_view` and `install_prompt_copied` fire
+from the landing page, as does `sign_up_started` on a click through to
+`/auth/signup.html`. `sign_up_completed` fires from the sign-up page itself, so add the
+include there to close the funnel.

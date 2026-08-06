@@ -3,8 +3,8 @@
 > **Draft.** Not yet in force. See the checklist at the end.
 
 There is no cookie banner on this site, and this page still has to exist. The ePrivacy
-Directive governs *any* storing of or access to information on your device — `localStorage`
-and `sessionStorage` are covered exactly as cookies are — and disclosure is required even
+Directive governs *any* storing of or access to information on your device (`localStorage`
+and `sessionStorage` are covered exactly as cookies are) and disclosure is required even
 where the item is strictly necessary and consent is not.
 
 So: every item, what it is for, how long it lasts, and whether it needs your consent.
@@ -25,7 +25,7 @@ external hostname in this site's HTML is `github.com`.
 
 ## What we used to set, and no longer do
 
-`crosscode_distinct_id` — a random UUID in `localStorage` that gave each browser a stable
+`crosscode_distinct_id` was a random UUID in `localStorage` that gave each browser a stable
 identity across visits, so PostHog could tell a returning visitor from a new one.
 
 It has been removed. Website analytics events now go out with no persistent identifier,
@@ -54,7 +54,7 @@ to stop one event being counted twice.
 ## Turning it off
 
 - **Analytics:** any content blocker that blocks `us.i.posthog.com` stops the events. So
-  does denying storage for this site — the code falls back and sends the event without the
+  does denying storage for this site. The code falls back and sends the event without the
   dedup flag rather than breaking. A build with no PostHog key installs no listeners and
   sends nothing at all, which is what a fork or a local `pnpm docs:dev` runs.
 - **The auth token:** clearing site data signs you out. There is no way to stay signed in
@@ -71,15 +71,15 @@ refresh token where one exists (macOS `security`, Linux `secret-tool`). See the
 
 ## Related
 
-- [Privacy Policy](./privacy-policy.md) — the complete Art. 13/14 notice
-- [Privacy: what we can and can't see](./privacy.md) — the plain-language summary
-- [Subprocessors](./subprocessors.md) — who else touches this data
+- [Privacy Policy](./privacy-policy.md): the complete Art. 13/14 notice
+- [Privacy: what we can and can't see](./privacy.md): the plain-language summary
+- [Subprocessors](./subprocessors.md): who else touches this data
 
 ## Before this takes effect
 
-- `{{EFFECTIVE_DATE}}` — the date this page takes effect.
+- `{{EFFECTIVE_DATE}}`: the date this page takes effect.
 - Confirm the `crosscode_distinct_id` removal has actually shipped to production before
   publishing. This page describes the post-removal state.
 - Resolve the `<!-- LAWYER -->` note above on `crosscode_analytics_once:*`.
 - If the Supabase project ref ever changes, the auth token key name in the table changes
-  with it — it is `sb-<project-ref>-auth-token`.
+  with it: it is `sb-<project-ref>-auth-token`.

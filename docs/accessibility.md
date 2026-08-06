@@ -1,6 +1,6 @@
 # Accessibility
 
-This statement covers **www.getcrosscode.dev** — the landing page, the docs, and the
+This statement covers **www.getcrosscode.dev**: the landing page, the docs, and the
 sign-in, join, and device pages. It does not cover the `crosscode` CLI, the daemon, or the
 MCP server, which are terminal programs and inherit whatever your terminal and screen
 reader already do.
@@ -16,7 +16,7 @@ checks we could run by hand pass too. We have not run this site with a screen re
 to end, so we cannot claim full conformance, and we are not going to claim it.
 
 What we have verified, on the landing page, all twelve docs pages, and the sign-in,
-sign-up, join, and device pages — in the case of the last four, in every state they can
+sign-up, join, and device pages, in the case of the last four, in every state they can
 render, including their error states:
 
 - No `axe-core` violations at WCAG 2.2 AA, plus axe's best-practice rules, in a real
@@ -25,7 +25,7 @@ render, including their error states:
   link that points at its `<main>`. Every page scanned has one `<h1>` and heading levels
   that do not skip.
 - All text meets 4.5:1 contrast (3:1 for large text) against the background actually
-  composited behind it. Interactive control borders — input boxes, button outlines —
+  composited behind it. Interactive control borders (input boxes, button outlines)
   meet 3:1.
 - No horizontal scrolling at a 320px-wide viewport, or at 200% zoom.
 - Every clickable target is at least 24×24px, except links sitting inside a sentence,
@@ -63,13 +63,13 @@ These are real, and we would rather list them than let you find them.
 7. **Two pages were only checked structurally.** `/auth/reset.html` and `/auth/cli.html`
    build themselves from scripts that need live credentials to run at all, so they were
    checked for skip link, language, and title, and their form markup matches the sign-in
-   form that was scanned — but they have not been through `axe-core` as rendered.
+   form that was scanned, but they have not been through `axe-core` as rendered.
 8. **We do not target level AAA**, and there is no plan to.
 
 ## Tell us about a barrier
 
 Email **support@getcrosscode.dev**. Say what page you were on, what you were trying to
-do, and what you use — the browser, the screen reader, the magnification, whatever is
+do, and what you use: the browser, the screen reader, the magnification, whatever is
 relevant. A description of what went wrong is enough; you do not need to know which WCAG
 criterion it was.
 
@@ -81,7 +81,7 @@ criterion it was.
 - Anything else goes on the list. We will tell you whether it is queued or declined, and
   why, rather than leaving you without an answer.
 
-Crosscode is a one-person, pre-1.0 project. That is not an excuse for a barrier, but it is
+Crosscode is a one-person project. That is not an excuse for a barrier, but it is
 the reason the promise above is 5 days and 30 days rather than something faster.
 
 ## How this was assessed
@@ -109,5 +109,5 @@ regression suite runs in the meantime.
 
 Fill these in:
 
-- `{{PROVIDER_NAME}}` — the legal name of the individual who publishes Crosscode, used
+- `{{PROVIDER_NAME}}`: the legal name of the individual who publishes Crosscode, used
   above under "Assessed by".

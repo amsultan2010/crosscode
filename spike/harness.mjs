@@ -91,7 +91,7 @@ export class Bus {
     for (let i = 1; i <= maxRounds; i++) {
       if (!this.round()) return i;
     }
-    throw new Error(`did not settle in ${maxRounds} rounds — possible rebroadcast loop`);
+    throw new Error(`did not settle in ${maxRounds} rounds, possible rebroadcast loop`);
   }
 
   pendingCount() {

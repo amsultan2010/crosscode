@@ -3,11 +3,11 @@
 </h1>
 
 <p align="center">
+  <a href="https://www.npmjs.com/package/crosscode-cli"><img src="https://img.shields.io/npm/v/crosscode-cli?style=flat&color=08C&label=npm" alt="crosscode-cli on npm" /></a>
   <a href="https://github.com/amsultan2010/crosscode/actions/workflows/ci.yml"><img src="https://github.com/amsultan2010/crosscode/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://github.com/amsultan2010/crosscode"><img src="https://img.shields.io/github/stars/amsultan2010/crosscode?style=flat&label=%E2%98%85&color=08C" alt="GitHub stars" /></a>
   <img src="https://img.shields.io/badge/license-MIT-08C?style=flat" alt="License: MIT" />
   <img src="https://img.shields.io/badge/node-24%2B-4493F8?style=flat" alt="Requires Node 24 or newer" />
-  <img src="https://img.shields.io/badge/status-pre--1.0-B45309?style=flat" alt="Status: pre-1.0" />
 </p>
 
 <p align="center">
@@ -21,22 +21,15 @@
 </p>
 
 > [!IMPORTANT]
-> **Pre-1.0, and specific about it.** `crosscode-cli` installs from npm, and the sync
-> engine underneath it — the shadow ref, the three-way merge, hot-file deferral, offline
-> catch-up — is built and tested. The pre-edit hook now registers the command that actually
-> runs, and the daemon now notices a commit or a pull on the branch you are already on.
+> [`crosscode-cli`](https://www.npmjs.com/package/crosscode-cli) installs from npm, and the
+> sync engine underneath it (the shadow ref, the
+> three-way merge, hot-file deferral, offline catch-up) is built and tested. The pre-edit
+> hook registers the command that runs, and the daemon notices a commit or a pull on the
+> branch you are already on.
 >
-> One thing between you and a working `crosscode start` is not finished. The device
-> handshake itself is live: `start` gets a URL and a confirmation code from the service, and
-> polls for the session. But the GitHub OAuth application behind our Supabase project is
-> misconfigured, so the browser half of the sign-in ends on a GitHub 404. Until that is
-> corrected, `start`, `invite`, and `join` all stop at sign-in, because all three need a
-> session first.
->
-> Nobody has yet completed the quickstart on a clean machine, so treat it as the intended
-> path rather than a measured one. There is also no end-to-end encryption: the coordination
-> service can read the files you sync, which [docs/privacy.md](./docs/privacy.md) spells out
-> in full. [PLAN.md](./PLAN.md) is the single source of truth for what is done.
+> There is no end-to-end encryption: the coordination service can read the files you sync,
+> which [docs/privacy.md](./docs/privacy.md) spells out in full. [PLAN.md](./PLAN.md) tracks
+> what is done.
 
 ## How it works
 
@@ -115,11 +108,13 @@ Codex also get a pre-edit hook.
 ### Secrets never move
 
 Dropped before capture, even when Git tracks them: `.env*` and `.envrc`/`.npmrc`/`.netrc`/
-`.pgpass`/`.htpasswd`; `.aws/`, `.ssh/`, `.kube/`, `.gnupg/`; `id_rsa` and friends;
-`*.pem`/`*.key`/`*.p12`/`*.pfx`/`*.jks`/`*.gpg`/`*.asc`; `*credentials*`,
-`*service-account*.json`, `kubeconfig`; `*.tfvars` and `*.tfstate`. The full list is one
-regex in [`packages/core/src/index.ts`](./packages/core/src/index.ts). Untracked files are
-never sent.
+`.pgpass`/`.htpasswd`/`.pypirc`/`.dockercfg`/`.git-credentials`; `.aws/`, `.ssh/`,
+`.kube/`, `.gnupg/`; `id_rsa` and friends; `*.pem`/`*.key`/`*.p8`/`*.p12`/`*.pfx`/`*.jks`/
+`*.keystore`/`*.keytab`/`*.kdbx`/`*.ovpn`/`*.gpg`/`*.asc`; anything with `credentials` or
+`secrets` in a path segment, `*service-account*.json`, `kubeconfig`; `*.tfvars` and
+`*.tfstate`. The patterns are anchored to path segments and extensions so ordinary source
+keeps syncing, and the full list is
+[`SECRET_PATH_PATTERNS`](./packages/core/src/index.ts). Untracked files are never sent.
 
 [Docs →](./docs/privacy.md)
 
@@ -156,6 +151,10 @@ npm install -g crosscode-cli
 cd your-repo
 crosscode start
 ```
+
+The published package is [`crosscode-cli`](https://www.npmjs.com/package/crosscode-cli),
+which ships both binaries: `crosscode` (the CLI) and `crosscode-mcp` (the MCP server and
+pre-edit hook).
 
 `crosscode start` does the whole setup and is safe to re-run: it signs you in with GitHub,
 attaches this checkout to a project, starts the background daemon, and installs the MCP
@@ -220,9 +219,9 @@ Every response from every tool carries any pending conflicts, whether the tool w
 them or not. That is deliberate. An agent only looks at anything when it is invoked, so a
 conflict that arrives while it is idle would otherwise sit unseen. This way it trips over
 one the next time it does anything at all. Claude Code and Codex additionally get a hook
-that runs before a file edit, which moves that moment earlier still — a conflict on a file
+that runs before a file edit, which moves that moment earlier still: a conflict on a file
 is known before the agent writes over it rather than after. The hook is a bonus on top of
-MCP, not a requirement — every other client relies on the piggybacked conflicts alone.
+MCP, not a requirement, and every other client relies on the piggybacked conflicts alone.
 
 The bar this is built to: **neither side's agent mentions Crosscode until a real conflict**,
 which the receiving agent then resolves without being asked. See
@@ -238,10 +237,10 @@ The sync unit is one file: `{ path, op, baseHash, contentHash, content-or-patch 
 bundles, no lifecycle, no accept or reject. For an incoming change to path `P`, where `L` is
 your disk and `S` is the shadow:
 
-1. `L == S` **and the sender built from `S`** → write it, silently.
-2. Otherwise → 3-way merge against the sender's base. Clean → write it silently. Conflict →
-   surface it to your agent.
-3. Only if that base blob is genuinely missing → catch up from the cursor and retry.
+1. `L == S` **and the sender built from `S`**: write it, silently.
+2. Otherwise, 3-way merge against the sender's base. Clean means write it silently. A
+   conflict is surfaced to your agent.
+3. Only if that base blob is genuinely missing, catch up from the cursor and retry.
 
 Binaries are never merged, so concurrent binary edits are always a conflict. A conflicted
 path is quarantined, neither published nor applied, until it is resolved.
@@ -285,10 +284,12 @@ pnpm build          # typecheck + bundle
 pnpm test           # vitest
 ```
 
-Layout: `packages/protocol` (the wire contract), `packages/core` and `packages/git` (the
-merge core), `apps/daemon` (per-checkout sync), `apps/service` (the hosted coordination
-service), `apps/cli`, `apps/mcp-server` (four tools and the pre-edit hook),
-`skills/crosscode` (the agent skill), `apps/docs-site` (landing page and these docs).
+Layout: `packages/protocol` (the wire contract), `packages/sync` (the apply rule, shadow
+ref, and 3-way merge), `packages/git` (the git plumbing it runs on), `packages/core` (the
+denylist and hashing), `apps/daemon` (per-checkout sync), `apps/service` (the hosted
+coordination service), `apps/cli` (five commands), `apps/mcp-server` (four tools and the
+pre-edit hook), `skills/crosscode` (the agent skill), `apps/docs-site` (landing page and
+these docs).
 
 Want to contribute? See [CONTRIBUTING.md](./CONTRIBUTING.md). `PLAN.md` is the only plan
 document in this repository, and `spike/` holds a throwaway proof of the merge core outside
@@ -318,6 +319,6 @@ Crosscode is free and open source under the [MIT License](./LICENSE).
 ## Trademark
 
 The MIT License covers the code. It does not cover the name "Crosscode" or the logos in
-[`assets/`](./assets). Fork it, ship it, write about it — just don't present a modified
+[`assets/`](./assets). Fork it, ship it, write about it. Just don't present a modified
 version as Crosscode itself. [TRADEMARK.md](./TRADEMARK.md) has the details, and
 `legal@getcrosscode.dev` handles anything it doesn't cover.

@@ -58,7 +58,7 @@ A project is one repository. Whoever creates it can invite others, and an invite
 redeemed by a GitHub account that already has access to that repository. A project member
 can be removed, which takes effect on the next request their daemon makes.
 
-<!-- LAWYER: sanctions screening here is contractual only — no automated screening is
+<!-- LAWYER: sanctions screening here is contractual only, no automated screening is
 implemented. Decide whether that is acceptable at this scale or whether the clause should
 be softened to match. -->
 
@@ -119,8 +119,8 @@ makes you the controller of it, we act as your processor. The
 into these terms by reference and applies without a separate signature. If you need a signed
 copy or a different set of terms, write to legal@getcrosscode.dev.
 
-**Feedback.** If you send us an idea, a feature request, or a bug report — in a GitHub
-issue, by email, or anywhere else — we may use it, build it, and ship it without owing you
+**Feedback.** If you send us an idea, a feature request, or a bug report (in a GitHub
+issue, by email, or anywhere else) we may use it, build it, and ship it without owing you
 anything and without any obligation of confidence. You keep whatever rights you already had;
 you simply do not gain a claim against us because we built something you suggested.
 
@@ -134,19 +134,19 @@ We say that plainly rather than implying more:
 
 - Do not sync a repository whose contents you are not willing to place with us on that
   basis. Crosscode is opt-in per checkout.
-- Untracked files are never sent, and tracked files matching a hard denylist — `.env*`,
+- Untracked files are never sent, and tracked files matching a hard denylist (`.env*`,
   `.envrc`, `.npmrc`, `.netrc`, `credentials`, `secrets`, SSH private keys, and
-  `.pem`/`.key`/`.p12`/`.pfx`/`.jks`/`.keystore` files — are dropped before a change is
+  `.pem`/`.key`/`.p12`/`.pfx`/`.jks`/`.keystore` files) are dropped before a change is
   captured. The list itself is in `packages/core/src/index.ts`, so it is checkable.
 - Your repository is the durable artifact throughout. If you stop, nothing of yours is lost.
 
 The documents that describe this in detail are incorporated into these terms by reference:
 
-- [`docs/privacy.md`](/docs/privacy.html) — the plain-language statement of what we hold and
+- [`docs/privacy.md`](/docs/privacy.html): the plain-language statement of what we hold and
   what we can see.
-- [Privacy Policy](/docs/privacy-policy.html) — the formal notice, including your rights and
+- [Privacy Policy](/docs/privacy-policy.html): the formal notice, including your rights and
   the legal bases we rely on.
-- [Cookies](/docs/cookies.html) and [Subprocessors](/docs/subprocessors.html) — what is set
+- [Cookies](/docs/cookies.html) and [Subprocessors](/docs/subprocessors.html): what is set
   in your browser, and which third parties process data on our behalf.
 
 ## 7. Price
@@ -176,8 +176,8 @@ is flagrant.
 
 **We tell you why.** If we remove content, disable access to it, suspend a project, or
 terminate an account, we will email the affected account with: what we did, what content or
-account it affected, why — including which part of section 4 or which report it rests on and
-whether the decision was based on a report or on our own assessment — that no automated
+account it affected, why (including which part of section 4 or which report it rests on and
+whether the decision was based on a report or on our own assessment) that no automated
 decision-making was involved, and how to contest it. You can contest any such decision by
 replying to that email or writing to legal@getcrosscode.dev, and a human will look at it
 again. We will not send the notice where the law forbids it, such as where doing so would
@@ -215,7 +215,7 @@ express or implied, including merchantability, fitness for a particular purpose,
 non-infringement. We do not warrant that the service will be uninterrupted, that changes
 will always be delivered promptly, or that it is free of defects.
 
-**Crosscode is pre-1.0 software run as a side project.** The current release is 0.1.0. The
+**Crosscode is software run as a side project.** The current release is 0.1.3. The
 protocol, the CLI's commands and flags, the data we store, and the service itself can change
 or break between releases without notice, and features can be withdrawn. Treat it as beta
 and do not put anything on it that cannot survive it going away.
@@ -247,7 +247,7 @@ by this section.
 ## 12. Your indemnity
 
 You will defend us against any third-party claim arising out of the content you sync through
-the hosted service, your use of the service, or your breach of these terms — and you will
+the hosted service, your use of the service, or your breach of these terms, and you will
 pay the damages, costs, and legal fees finally awarded against us or agreed in a settlement
 you approve. That covers, in particular, a claim that something you synced infringes
 someone's copyright or other rights, and a claim that you shared a repository's contents
@@ -309,7 +309,7 @@ formed to take over the operation of Crosscode.
 
 **Third parties:** no one other than you and us has any right to enforce these terms.
 
-### Optional: arbitration and class-action waiver — NOT IN FORCE
+### Optional: arbitration and class-action waiver (NOT IN FORCE)
 
 <!-- LAWYER: US only. This block is drafted but deliberately switched off. It is the
 strongest anti-suit clause available in the US and is largely unenforceable against UK and
@@ -333,16 +333,16 @@ terms.
 
 Fill these in and delete the banner at the top of this page:
 
-- `{{PROVIDER_NAME}}` — the provider's legal name, as an individual. Appears in the header
+- `{{PROVIDER_NAME}}`: the provider's legal name, as an individual. Appears in the header
   and in section 14.
-- `{{PROVIDER_ADDRESS}}` — postal address for legal notices. Appears in the header and in
+- `{{PROVIDER_ADDRESS}}`: postal address for legal notices. Appears in the header and in
   section 14.
-- `{{JURISDICTION}}` — governing law and venue. Appears in the header, in section 14, and in
+- `{{JURISDICTION}}`: governing law and venue. Appears in the header, in section 14, and in
   the optional arbitration block.
-- `{{EFFECTIVE_DATE}}` — the date this page takes effect. Appears in the header.
+- `{{EFFECTIVE_DATE}}`: the date this page takes effect. Appears in the header.
 
 Then decide whether the optional arbitration block in section 14 is switched on, and have a
 lawyer read the whole page.
 
 Questions about these terms go to legal@getcrosscode.dev. Everything else goes to
-support@getcrosscode.dev — see the [Support page](/docs/support.html).
+support@getcrosscode.dev. See the [Support page](/docs/support.html).
