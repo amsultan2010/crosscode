@@ -10,9 +10,15 @@ import { repositoryRoot } from "@crosscode/sync";
  * Everything the sync daemon keeps on disk, all of it inside `.git/crosscode/` so it is
  * per checkout, never committed, and removed with the clone.
  *
- * `sync.json`   the project and the credential (the wire contract's SyncDaemonConfig)
+ * `config.json` the project and the credential (the wire contract's SyncDaemonConfig)
  * `sync.state`  the replica id and cursor, so a restart resumes instead of resyncing
  * `daemon.json` the loopback port and secret the CLI and MCP server connect on
+ *
+ * `config.json` is the name the CLI writes and `apps/daemon/src/runtime.ts` reads. This
+ * module called it `sync.json` for one release, which meant `crosscode start` wrote a
+ * config the daemon it then spawned could not find: the daemon exited with "this checkout
+ * is not joined to a Crosscode project" and `start` failed with DAEMON_DID_NOT_START,
+ * having just written the very file it was looking for.
  */
 
 export const syncStateSchema = z.object({
@@ -35,7 +41,7 @@ async function statePath(directory: string, name: string): Promise<string> {
   return resolveGitPath(await repositoryRoot(directory), `crosscode/${name}`);
 }
 
-export const syncConfigPath = (directory: string) => statePath(directory, "sync.json");
+export const syncConfigPath = (directory: string) => statePath(directory, "config.json");
 export const syncStatePath = (directory: string) => statePath(directory, "sync.state");
 export const daemonDescriptorPath = (directory: string) => statePath(directory, "daemon.json");
 

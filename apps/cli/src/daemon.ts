@@ -4,19 +4,22 @@ import { readFile, rm } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { resolveGitPath } from "@crosscode/git";
-import { z } from "zod";
-import { syncStatusSchema, type SyncStatus } from "../../../packages/protocol/src/sync.js";
+import { type SyncStatus } from "../../../packages/protocol/src/sync.js";
+import { DaemonClient } from "../../daemon/src/client.js";
+import { daemonDescriptorSchema } from "../../daemon/src/sync-config.js";
 import { CliError } from "./errors.js";
 
 /**
  * The daemon, as a narrow interface: one per checkout, started by `crosscode start`, stopped
  * by `crosscode stop`, and asked for the contract's `syncStatus` by `crosscode status`.
  *
- * The daemon is being written in parallel. The contract fixes what `status` returns
- * (`syncStatusSchema`) but says nothing about how a CLI reaches a daemon on the same
- * machine, so everything below the interface is a STUB of that workstream's local API:
- * a handshake file at `<git dir>/crosscode/daemon.json` holding `{ pid, port }`, and
- * `GET /status` / `POST /stop` on that port bound to loopback.
+ * The descriptor schema and the loopback client are the daemon's own, imported rather than
+ * described again here. This file used to carry a stub of both, written before the daemon
+ * existed, and every part of the guess was wrong once it did: the descriptor gained
+ * `secret` and `startedAt`, and a `.strict()` two-field schema rejected it, so `status`
+ * reported "no daemon is running" against a daemon that was running and answering. The
+ * route is `/v1/status`, not `/status`, and it needs the descriptor's secret as a bearer
+ * token. Importing the real thing is what stops that drifting again.
  */
 
 export type DaemonControl = {
@@ -26,18 +29,16 @@ export type DaemonControl = {
   status(): Promise<SyncStatus>;
 };
 
-/** STUB: handshake file shape is not described by the wire contract. */
-const handshakeSchema = z.object({ pid: z.number().int().positive(), port: z.number().int().positive() }).strict();
-type Handshake = z.infer<typeof handshakeSchema>;
+type Handshake = { pid: number; port: number };
 
-export function localDaemon(repoRoot: string, fetchImpl: typeof fetch = fetch): DaemonControl {
+export function localDaemon(repoRoot: string): DaemonControl {
   const handshakePath = () => resolveGitPath(repoRoot, "crosscode/daemon.json");
 
   async function running(): Promise<Handshake | undefined> {
     const path = await handshakePath();
     const contents = await readFile(path, "utf8").catch(() => undefined);
     if (contents === undefined) return undefined;
-    const parsed = handshakeSchema.safeParse(JSON.parse(contents));
+    const parsed = daemonDescriptorSchema.safeParse(JSON.parse(contents));
     if (!parsed.success) return undefined;
     // A handshake file outliving its process is the normal aftermath of a crash or a reboot,
     // so liveness is the pid, not the file.
@@ -69,14 +70,16 @@ export function localDaemon(repoRoot: string, fetchImpl: typeof fetch = fetch): 
     async stop() {
       const handshake = await running();
       if (!handshake) return { wasRunning: false };
-      await fetchImpl(`http://127.0.0.1:${handshake.port}/stop`, { method: "POST" }).catch(() => {
-        // A daemon that will not answer still has to stop; SIGTERM is the fallback.
-        try {
-          process.kill(handshake.pid, "SIGTERM");
-        } catch {
-          // Already gone.
-        }
-      });
+      // SIGTERM, which main.ts handles by shutting the supervisor down cleanly. This used to
+      // POST to `/stop` and fall back to the signal only if that *threw* -- but the daemon
+      // has no such route, and an unmatched route answers 401 rather than rejecting, so
+      // fetch resolved, the fallback never ran, and `crosscode stop` deleted the descriptor
+      // out from under a daemon that went on running with nothing left pointing at it.
+      try {
+        process.kill(handshake.pid, "SIGTERM");
+      } catch {
+        // Already gone.
+      }
       await rm(await handshakePath(), { force: true });
       return { wasRunning: true };
     },
@@ -86,11 +89,11 @@ export function localDaemon(repoRoot: string, fetchImpl: typeof fetch = fetch): 
       if (!handshake) {
         throw new CliError("DAEMON_UNAVAILABLE", "No daemon is running for this checkout", "Run `crosscode start` to configure this checkout and start it.");
       }
-      const response = await fetchImpl(`http://127.0.0.1:${handshake.port}/status`).catch(() => undefined);
-      if (!response?.ok) {
+      const client = await DaemonClient.connect(repoRoot).catch(() => undefined);
+      if (!client) {
         throw new CliError("DAEMON_UNAVAILABLE", "The daemon for this checkout is not answering", "Run `crosscode stop` then `crosscode start`.");
       }
-      return syncStatusSchema.parse(await response.json());
+      return client.status();
     }
   };
 }
