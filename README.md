@@ -4,20 +4,48 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/crosscode-cli"><img src="https://img.shields.io/npm/v/crosscode-cli?style=flat&color=08C&label=npm" alt="crosscode-cli on npm" /></a>
+  <a href="https://www.npmjs.com/package/crosscode-cli"><img src="https://img.shields.io/npm/dw/crosscode-cli?style=flat&color=08C&label=downloads" alt="crosscode-cli weekly downloads" /></a>
   <a href="https://github.com/amsultan2010/crosscode/actions/workflows/ci.yml"><img src="https://github.com/amsultan2010/crosscode/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://github.com/amsultan2010/crosscode"><img src="https://img.shields.io/github/stars/amsultan2010/crosscode?style=flat&label=%E2%98%85&color=08C" alt="GitHub stars" /></a>
-  <img src="https://img.shields.io/badge/license-MIT-08C?style=flat" alt="License: MIT" />
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-08C?style=flat" alt="License: MIT" /></a>
   <img src="https://img.shields.io/badge/node-24%2B-4493F8?style=flat" alt="Requires Node 24 or newer" />
 </p>
 
 <p align="center">
-  <strong>Real-time codebase sync between teammates.</strong><br/>
+  <strong>Real-time codebase sync between teammates and coding agents, so nobody overwrites
+  anyone else's work.</strong><br/>
   You edit a file, their checkout updates within seconds. They edit, yours does.
   Nobody presses anything and nobody watches anything.
 </p>
 
 <p align="center">
   <sub>Node 24 and a Git checkout. Nothing to deploy.</sub>
+</p>
+
+<!-- TODO(abdullah): record a ~10s screen capture of a sync landing in a second
+     checkout (edit on the left, file updating on the right), save it as
+     assets/demo.gif, and replace this comment with:
+     <p align="center"><img src="assets/demo.gif" alt="A file edit in one checkout appearing in another within seconds" width="720" /></p>
+-->
+
+```bash
+npm install -g crosscode-cli
+```
+
+## Works with the agent you already run
+
+<p>
+  <kbd>Claude Code</kbd> &nbsp;
+  <kbd>Codex CLI</kbd> &nbsp;
+  <kbd>OpenCode</kbd> &nbsp;
+  <kbd>Cursor</kbd> &nbsp;
+  <kbd>Gemini CLI</kbd> &nbsp;
+  <kbd>VS Code</kbd> &nbsp;
+  <kbd>Amp</kbd> &nbsp;
+  <kbd>Cline</kbd> &nbsp;
+  <kbd>Zed</kbd> &nbsp;
+  <kbd>Windsurf</kbd> &nbsp;
+  <kbd>+ any MCP client</kbd>
 </p>
 
 > [!IMPORTANT]
@@ -194,38 +222,16 @@ Cursor, or any MCP-capable agent, and it runs the same commands and wires up the
 itself. Codex CLI's config is TOML and `start` does not write it, so Codex users add a
 three-line entry by hand. See [MCP client setup](./docs/mcp-clients.md).
 
-## Works with the agent you already run
+## What syncs, and what never does
 
-<p>
-  <kbd>Claude Code</kbd> &nbsp;
-  <kbd>Codex CLI</kbd> &nbsp;
-  <kbd>OpenCode</kbd> &nbsp;
-  <kbd>Cursor</kbd> &nbsp;
-  <kbd>Gemini CLI</kbd> &nbsp;
-  <kbd>VS Code</kbd> &nbsp;
-  <kbd>Amp</kbd> &nbsp;
-  <kbd>Cline</kbd> &nbsp;
-  <kbd>Zed</kbd> &nbsp;
-  <kbd>Windsurf</kbd> &nbsp;
-  <kbd>+ any MCP client</kbd>
-</p>
+Tracked files only, plus a hard denylist. Your commits, branches, index, stash, and remotes
+are never touched, and nothing Crosscode does pushes to a remote. If you stop Crosscode or
+remove it, your repository is an ordinary Git repository, exactly as it was.
 
-## What your agent sees
-
-Four MCP tools, `status`, `conflicts`, `resolve`, and `pause`, plus one skill that says how
-to use them and, mostly, when to leave them alone.
-
-Every response from every tool carries any pending conflicts, whether the tool was asked for
-them or not. That is deliberate. An agent only looks at anything when it is invoked, so a
-conflict that arrives while it is idle would otherwise sit unseen. This way it trips over
-one the next time it does anything at all. Claude Code and Codex additionally get a hook
-that runs before a file edit, which moves that moment earlier still: a conflict on a file
-is known before the agent writes over it rather than after. The hook is a bonus on top of
-MCP, not a requirement, and every other client relies on the piggybacked conflicts alone.
-
-The bar this is built to: **neither side's agent mentions Crosscode until a real conflict**,
-which the receiving agent then resolves without being asked. See
-[`skills/crosscode/SKILL.md`](./skills/crosscode/SKILL.md) for what the agent is told.
+Your files do pass through the hosted coordination service, and there is no end-to-end
+encryption, so we can read them. [docs/privacy.md](./docs/privacy.md) lists exactly what the
+service stores and for how long, and [docs/security.md](./docs/security.md) has the threat
+model.
 
 ## The apply rule
 
@@ -254,21 +260,27 @@ Rules that keep it invisible:
 
 More in [architecture](./docs/architecture.md) and [protocol](./docs/protocol.md).
 
-## What syncs, and what never does
-
-Tracked files only, plus a hard denylist. Your commits, branches, index, stash, and remotes
-are never touched, and nothing Crosscode does pushes to a remote. If you stop Crosscode or
-remove it, your repository is an ordinary Git repository, exactly as it was.
-
-Your files do pass through the hosted coordination service, and there is no end-to-end
-encryption, so we can read them. [docs/privacy.md](./docs/privacy.md) lists exactly what the
-service stores and for how long, and [docs/security.md](./docs/security.md) has the threat
-model.
-
 ## Pricing
 
 The hosted service is free. There are no paid plans, no seats, and no payment details
 collected. See [docs/terms.md](./docs/terms.md).
+
+## What your agent sees
+
+Four MCP tools, `status`, `conflicts`, `resolve`, and `pause`, plus one skill that says how
+to use them and, mostly, when to leave them alone.
+
+Every response from every tool carries any pending conflicts, whether the tool was asked for
+them or not. That is deliberate. An agent only looks at anything when it is invoked, so a
+conflict that arrives while it is idle would otherwise sit unseen. This way it trips over
+one the next time it does anything at all. Claude Code and Codex additionally get a hook
+that runs before a file edit, which moves that moment earlier still: a conflict on a file
+is known before the agent writes over it rather than after. The hook is a bonus on top of
+MCP, not a requirement, and every other client relies on the piggybacked conflicts alone.
+
+The bar this is built to: **neither side's agent mentions Crosscode until a real conflict**,
+which the receiving agent then resolves without being asked. See
+[`skills/crosscode/SKILL.md`](./skills/crosscode/SKILL.md) for what the agent is told.
 
 ## What Crosscode is not
 
