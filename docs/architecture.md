@@ -82,8 +82,10 @@ migration; `device_codes` carries no policy at all, which denies it to every rol
 not bypass RLS.
 
 The service assigns sequence numbers and fans changes out. It does not merge, classify, or
-inspect anything. Changes are retained about 7 days; a replica whose cursor is older than
-that is told to resync from full content rather than handed a partial history.
+inspect anything. About 7 days of changes are replayable (`HISTORY_RETENTION_DAYS` in
+`apps/service/src/store.ts`); a replica whose cursor is older than that is told to resync
+from full content rather than handed a partial history. The sweep that deletes aged rows is
+not built yet, so today the service keeps them past that window — see PLAN.md.
 
 A room is one project plus one branch name. Different branches do not sync, because
 different branches mean you did not want to.

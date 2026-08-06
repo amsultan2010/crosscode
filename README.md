@@ -114,8 +114,12 @@ Codex also get a pre-edit hook.
 
 ### Secrets never move
 
-`.env*`, `*.pem`, `*.key`, and anything credential-shaped are dropped before capture, even
-when Git tracks them. Untracked files are never sent.
+Dropped before capture, even when Git tracks them: `.env*` and `.envrc`/`.npmrc`/`.netrc`/
+`.pgpass`/`.htpasswd`; `.aws/`, `.ssh/`, `.kube/`, `.gnupg/`; `id_rsa` and friends;
+`*.pem`/`*.key`/`*.p12`/`*.pfx`/`*.jks`/`*.gpg`/`*.asc`; `*credentials*`,
+`*service-account*.json`, `kubeconfig`; `*.tfvars` and `*.tfstate`. The full list is one
+regex in [`packages/core/src/index.ts`](./packages/core/src/index.ts). Untracked files are
+never sent.
 
 [Docs →](./docs/privacy.md)
 
@@ -310,3 +314,10 @@ Docs: [architecture](./docs/architecture.md) · [protocol](./docs/protocol.md) �
 ## License
 
 Crosscode is free and open source under the [MIT License](./LICENSE).
+
+## Trademark
+
+The MIT License covers the code. It does not cover the name "Crosscode" or the logos in
+[`assets/`](./assets). Fork it, ship it, write about it — just don't present a modified
+version as Crosscode itself. [TRADEMARK.md](./TRADEMARK.md) has the details, and
+`legal@getcrosscode.dev` handles anything it doesn't cover.

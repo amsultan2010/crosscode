@@ -126,8 +126,9 @@ built file is 0.05 kB and contains no PostHog URL.
 
 Four events exist and no more: `landing_page_view`, `install_prompt_copied`,
 `sign_up_started`, `sign_up_completed`. They answer whether anyone activates. Each carries
-`$current_url`, `$referrer` and a random `distinct_id` from `localStorage`. No email, no
-account id, nothing derived from the visitor.
+`$current_url`, `$referrer` and a random `distinct_id` held in `sessionStorage`. It dies
+with the browser tab, so a returning visitor is a new one; nothing persistent is written to
+the device. No email, no account id, nothing derived from the visitor.
 
 `sign_up_started` and `sign_up_completed` are counted once per browser tab session, so the
 link click on the landing page and the form submit that follows it are one event, not two.

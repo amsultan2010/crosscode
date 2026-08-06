@@ -18,7 +18,9 @@ async function main(): Promise<void> {
       await store.pool.query(`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${role}`);
       await store.pool.query(`GRANT USAGE ON SCHEMA public TO ${role}`);
       await store.pool.query(`GRANT SELECT ON ALL TABLES IN SCHEMA public TO ${role}`);
-      await store.pool.query(`GRANT INSERT ON users, projects, project_members, invites, replicas, file_versions, device_codes TO ${role}`);
+      // terms_acceptances is in the INSERT list and in no other: an acceptance record the
+      // service can rewrite proves nothing about which text somebody agreed to.
+      await store.pool.query(`GRANT INSERT ON users, projects, project_members, invites, replicas, file_versions, device_codes, terms_acceptances TO ${role}`);
       // The one table the runtime may delete from. A device code is an ephemeral credential
       // rather than a record of anything: the whole point is that an expired one stops
       // existing, which is the opposite of the change log's append-only guarantee above.

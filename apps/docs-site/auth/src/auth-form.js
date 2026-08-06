@@ -1,4 +1,5 @@
 import { getSupabaseClient } from "./supabase.js";
+import { consentFieldHtml, consentGiven, CONSENT_MESSAGES, fetchLegal, recordAcceptance, showConsentError } from "../../src/legal.js";
 
 const SERVICE_URL = import.meta.env.VITE_SERVICE_URL ?? "http://127.0.0.1:8788";
 
@@ -16,9 +17,32 @@ async function createWorkspace(accessToken, name) {
   }
 }
 
+/**
+ * The terms, on the two pages an account is made and used from.
+ *
+ * Sign-up gets an unticked checkbox and the eligibility line the terms require; sign-in gets
+ * the statement immediately above the button it applies to. Both are recorded server-side
+ * the moment a session exists -- a ticked box the service never hears about proves nothing,
+ * and the surface is recorded so the record says which of the two it was.
+ *
+ * Never pre-ticked. There is no code path here that sets `checked`.
+ */
+export function legalNoticeHtml(isSignup, legal) {
+  if (!legal) return "";
+  if (isSignup) return consentFieldHtml({ legal, ageGate: true });
+  const links = legal.documents
+    .map((entry) => `<a href="${entry.url}" target="_blank" rel="noopener">${entry.document === "terms" ? "Terms of Service" : "Privacy Policy"}</a> (version ${entry.version})`)
+    .join(" and ");
+  return `<p class="muted consent" id="accept-terms-notice">By signing in you agree to the ${links}.</p>
+          <p class="error" id="accept-terms-error" role="alert" hidden></p>`;
+}
+
 // Renders the shared email/password + OAuth form. `onSession` is called with the
 // Supabase session once one is issued; each page decides what to do with it.
-export function mountAuthForm(container, { mode = "signin", onSession }) {
+export async function mountAuthForm(container, { mode = "signin", onSession }) {
+  // Fetched once, before anything is drawn: the version shown beside the link has to be the
+  // version the service will record, and the service is the only thing that knows it.
+  const legal = await fetchLegal();
   render();
 
   function render() {
@@ -45,6 +69,7 @@ export function mountAuthForm(container, { mode = "signin", onSession }) {
             Password
             <input type="password" name="password" required minlength="6" autocomplete="${isSignup ? "new-password" : "current-password"}" aria-describedby="auth-error" />
           </label>
+          ${legalNoticeHtml(isSignup, legal)}
           <button type="submit">${isSignup ? "Sign up" : "Sign in"}</button>
           <!-- Both stay in the DOM and empty rather than toggling the hidden attribute.
                A live region a screen reader cannot see when the text arrives announces
@@ -74,6 +99,13 @@ export function mountAuthForm(container, { mode = "signin", onSession }) {
 
     container.querySelectorAll(".auth-oauth-btn").forEach((button) => {
       button.addEventListener("click", () => {
+        // The OAuth flow leaves this page, so the acceptance cannot be recorded here -- the
+        // service asks again on /device before it signs any terminal in. What the tick does
+        // here is stop an account being created by somebody who has not agreed at all.
+        if (isSignup && legal && !consentGiven(container)) {
+          showConsentError(container, CONSENT_MESSAGES.unticked);
+          return;
+        }
         void getSupabaseClient().auth.signInWithOAuth({
           provider: button.dataset.provider,
           options: { redirectTo: window.location.href }
@@ -107,6 +139,12 @@ export function mountAuthForm(container, { mode = "signin", onSession }) {
       const email = String(formData.get("email") ?? "");
       const password = String(formData.get("password") ?? "");
       const submitButton = form.querySelector("button[type=submit]");
+      // Checked before Supabase is called, so a sign-up that was never consented to does not
+      // leave an account behind.
+      if (isSignup && legal && !consentGiven(container)) {
+        showConsentError(container, CONSENT_MESSAGES.unticked);
+        return;
+      }
       submitButton.disabled = true;
       try {
         if (isSignup) {
@@ -118,11 +156,15 @@ export function mountAuthForm(container, { mode = "signin", onSession }) {
             statusEl.textContent = "Check your email to confirm your account, then sign in.";
             return;
           }
+          // Recorded before the workspace is created, so the first thing this account does
+          // is the acceptance rather than something the acceptance was meant to cover.
+          if (!await acceptTerms(data.session)) return;
           await createWorkspace(data.session.access_token, `${email}'s workspace`);
           await onSession(data.session);
         } else {
           const { data, error } = await getSupabaseClient().auth.signInWithPassword({ email, password });
           if (error) throw error;
+          if (!await acceptTerms(data.session)) return;
           await onSession(data.session);
         }
       } catch (error) {
@@ -134,6 +176,23 @@ export function mountAuthForm(container, { mode = "signin", onSession }) {
       } finally {
         submitButton.disabled = false;
       }
+    }
+
+    /**
+     * Writes the acceptance down. False means it was not recorded and the flow stops there:
+     * carrying on would sign somebody in having told them they agreed to something the
+     * service has no record of them agreeing to.
+     */
+    async function acceptTerms(session) {
+      if (!legal || !session?.access_token) return true;
+      const recorded = await recordAcceptance({
+        surface: isSignup ? "signup" : "signin",
+        legal,
+        accessToken: session.access_token
+      });
+      if (recorded.status === "recorded") return true;
+      showConsentError(container, CONSENT_MESSAGES[recorded.status] ?? CONSENT_MESSAGES.unreachable);
+      return false;
     }
   }
 }

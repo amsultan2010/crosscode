@@ -95,9 +95,9 @@ describe("auth pages, as rendered", () => {
     it(`${mode} form has no axe violations`, async () => {
       await expectClean(`auth/${mode}.html`, async () => {
         const { mountAuthForm } = (await import(AUTH_FORM)) as {
-          mountAuthForm: (root: HTMLElement, options: { mode: string; onSession: () => void }) => void;
+          mountAuthForm: (root: HTMLElement, options: { mode: string; onSession: () => void }) => Promise<void>;
         };
-        mountAuthForm(document.querySelector("#auth")!, { mode, onSession: () => {} });
+        await mountAuthForm(document.querySelector("#auth")!, { mode, onSession: () => {} });
       });
     });
   }
@@ -107,9 +107,9 @@ describe("auth pages, as rendered", () => {
   it("sign-in form with a visible error has no axe violations", async () => {
     await expectClean("auth/signin.html", async () => {
       const { mountAuthForm } = (await import(AUTH_FORM)) as {
-        mountAuthForm: (root: HTMLElement, options: { mode: string; onSession: () => void }) => void;
+        mountAuthForm: (root: HTMLElement, options: { mode: string; onSession: () => void }) => Promise<void>;
       };
-      mountAuthForm(document.querySelector("#auth")!, { mode: "signin", onSession: () => {} });
+      await mountAuthForm(document.querySelector("#auth")!, { mode: "signin", onSession: () => {} });
       document.querySelector<HTMLElement>("#auth-error")!.textContent = "Invalid login credentials";
       for (const input of document.querySelectorAll("#auth-form input")) input.setAttribute("aria-invalid", "true");
     });

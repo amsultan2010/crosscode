@@ -197,7 +197,7 @@
           <li class="reveal"><b>Pure Git underneath.</b> One ref holds the last agreed state. <code>HEAD</code> never moves and nothing appears in <code>git log</code>.</li>
           <li class="reveal"><b>One-command undo.</b> Anything Crosscode wrote comes back with <code>git checkout refs/crosscode/shadow -- &lt;path&gt;</code>.</li>
           <li class="reveal"><b>Same-branch rooms.</b> Sync happens within one project and one branch name. Different branches means you did not want to sync.</li>
-          <li class="reveal"><b>Secrets never move.</b> <code>.env*</code>, <code>*.pem</code>, <code>*.key</code>, and similar are dropped before capture. Untracked files are never sent.</li>
+          <li class="reveal"><b>Secrets never move.</b> Environment files, <code>.ssh/</code>, <code>.aws/</code>, <code>.kube/</code>, private keys and keystores, <code>*credentials*</code>, <code>kubeconfig</code>, <code>*.tfvars</code> and <code>*.tfstate</code> are dropped before capture. Untracked files are never sent.</li>
           <li class="reveal"><b>MCP native.</b> A standard stdio MCP server, so there is no editor extension to install.</li>
           <li class="reveal"><b>Survives the network.</b> The daemon keeps capturing offline and catches up from its cursor when it reconnects.</li>
         </ul>
@@ -236,9 +236,9 @@
           <h2>We can read the files you sync</h2>
           <p class="lede">
             Your edits pass through our coordination service. There is no end-to-end
-            encryption: files are encrypted in transit and at rest under keys we manage,
-            which means someone with production access could read them. We would rather say
-            that plainly than imply otherwise.
+            encryption: files travel over TLS and sit at rest inside Supabase and Vercel,
+            encrypted under keys those providers hold, which means someone with production
+            access could read them. We would rather say that plainly than imply otherwise.
           </p>
         </div>
 
@@ -247,7 +247,7 @@
             <h3>Never leaves your machine</h3>
             <ul>
               <li>Untracked files</li>
-              <li>Secrets, even when tracked: <code>.env*</code>, <code>*.pem</code>, <code>*.key</code></li>
+              <li>Secrets, even when tracked: <code>.env*</code>, <code>.ssh/</code>, <code>.aws/</code>, <code>*.pem</code>, <code>*.key</code>, <code>*credentials*</code>, <code>kubeconfig</code>, <code>*.tfvars</code> (<a href="https://github.com/amsultan2010/crosscode/blob/main/packages/core/src/index.ts">the exact list</a>)</li>
               <li>Your commits, branches, index, and stash</li>
               <li>Your remotes. Nothing here pushes</li>
             </ul>
@@ -262,7 +262,7 @@
               <li>Timestamps, sizes, and sequence numbers</li>
               <li>Presence: your branch and recently touched paths, in memory only</li>
             </ul>
-            <p class="seal-note">Kept about 7 days, which is what makes offline catch-up work.</p>
+            <p class="seal-note">About 7 days of change history is replayable, which is what makes offline catch-up work. Pre-1.0: the sweep that deletes older history is not running yet, so the service still holds it.</p>
           </div>
         </div>
 
@@ -425,7 +425,7 @@ Crosscode to me unless there is a conflict you cannot merge on your own.</code><
           <details class="faq-item reveal">
             <summary>Can you read my code?</summary>
             <div class="faq-body">
-              <p>The files you sync, yes. There is no end-to-end encryption, so contents are encrypted in transit and at rest under keys we manage and a Crosscode engineer with production access could read them. If that is not acceptable for a repository, do not sync it: Crosscode is opt-in per checkout. The <a href="/docs/privacy.html">privacy page</a> lists everything the service holds.</p>
+              <p>The files you sync, yes. There is no end-to-end encryption: contents travel over TLS and are encrypted at rest by our hosts, Supabase and Vercel, under keys they hold, so a Crosscode engineer with production access could read them. If that is not acceptable for a repository, do not sync it: Crosscode is opt-in per checkout. The <a href="/docs/privacy.html">privacy page</a> lists everything the service holds.</p>
             </div>
           </details>
           <details class="faq-item reveal">
@@ -500,8 +500,14 @@ Crosscode to me unless there is a conflict you cannot merge on your own.</code><
         <h2>Trust</h2>
         <a href="/docs/safety.html">Safety model</a>
         <a href="/docs/privacy.html">Privacy</a>
+        <a href="/docs/privacy-policy.html">Privacy Policy</a>
+        <a href="/docs/cookies.html">Cookies</a>
+        <a href="/docs/subprocessors.html">Subprocessors</a>
+        <a href="/docs/dpa.html">Data Processing Agreement</a>
         <a href="/docs/limitations.html">Limitations</a>
         <a href="/docs/terms.html">Terms</a>
+        <a href="/docs/dmca.html">Copyright and DMCA</a>
+        <a href="/docs/dsa-contact.html">EU DSA contact</a>
         <a href="/docs/support.html">Support</a>
         <a href="/docs/accessibility.html">Accessibility</a>
       </nav>
