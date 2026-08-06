@@ -41,7 +41,8 @@ function environmentWithDaemon(daemon: Partial<DaemonControl>): Environment {
       status: async () => STATUS,
       ...daemon
     }),
-    installAgentSurface: unused
+    installAgentSurface: unused,
+    confirmTerms: unused
   };
 }
 

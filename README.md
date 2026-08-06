@@ -314,3 +314,10 @@ Docs: [architecture](./docs/architecture.md) · [protocol](./docs/protocol.md) �
 ## License
 
 Crosscode is free and open source under the [MIT License](./LICENSE).
+
+## Trademark
+
+The MIT License covers the code. It does not cover the name "Crosscode" or the logos in
+[`assets/`](./assets). Fork it, ship it, write about it — just don't present a modified
+version as Crosscode itself. [TRADEMARK.md](./TRADEMARK.md) has the details, and
+`legal@getcrosscode.dev` handles anything it doesn't cover.

@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import type { Change, CreateProjectRequest, FileVersion, SyncProject } from "@crosscode/protocol";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
+import type { AcceptanceSurface, LegalDocument } from "./legal.js";
 
 export class StoreConflictError extends Error {}
 export class StoreUnauthorizedError extends Error {}
@@ -67,6 +68,22 @@ export type ChangePage =
 /** How long the change log is kept. The one retention promise the service makes. */
 export const HISTORY_RETENTION_DAYS = 7;
 
+/**
+ * Tables the runtime role must not be able to rewrite. Both are records of something that
+ * happened rather than state that changes: the change log, and who accepted which terms.
+ */
+const APPEND_ONLY_TABLES = ["file_versions", "terms_acceptances"];
+
+/** One assent, as it is written down. `version` is the published version of `document`. */
+export type RecordedAcceptance = {
+  userId: string;
+  document: LegalDocument;
+  version: string;
+  surface: AcceptanceSurface;
+  ip?: string;
+  userAgent?: string;
+};
+
 export class PgStore {
   readonly pool: Pool;
 
@@ -107,14 +124,25 @@ export class PgStore {
    * The change log is append-only, so the role the service runs as must not be able to
    * rewrite or erase it. Retention deletes rows, but it runs as the migration role, not
    * this one.
+   *
+   * `terms_acceptances` is held to the same rule for a different reason: the record's whole
+   * value is that it says which text a specific person accepted on a specific date, and a
+   * process that can rewrite it cannot prove anything with it. Append-only there is a
+   * privilege the runtime role does not hold, not a convention it observes.
    */
   async assertRuntimePrivileges(): Promise<void> {
-    const result = await this.pool.query<{ update: boolean; delete: boolean; truncate: boolean }>(
-      `SELECT has_table_privilege(current_user, 'file_versions', 'UPDATE') AS update,
-              has_table_privilege(current_user, 'file_versions', 'DELETE') AS delete,
-              has_table_privilege(current_user, 'file_versions', 'TRUNCATE') AS truncate`
+    const result = await this.pool.query<{ table: string }>(
+      `SELECT t AS table
+         FROM unnest($1::text[]) AS t
+        WHERE has_table_privilege(current_user, t, 'UPDATE')
+           OR has_table_privilege(current_user, t, 'DELETE')
+           OR has_table_privilege(current_user, t, 'TRUNCATE')
+        ORDER BY t`,
+      [APPEND_ONLY_TABLES]
     );
-    if (Object.values(result.rows[0]!).some(Boolean)) throw new Error("DATABASE_URL must use a least-privilege runtime role");
+    if (result.rows.length > 0) {
+      throw new Error(`DATABASE_URL must use a least-privilege runtime role; it can rewrite ${result.rows.map((row) => row.table).join(", ")}`);
+    }
   }
 
   /**
@@ -163,6 +191,55 @@ export class PgStore {
       [input.id, input.githubId ?? null, input.githubLogin ?? null, input.email ?? null]
     );
     return { created: result.rows[0]?.created ?? false };
+  }
+
+  /* -------------------------------------------------------------- terms acceptances */
+
+  /**
+   * Writes one row per document accepted. Never an upsert, never an update: a person who
+   * accepts version B keeps the row saying they accepted version A, because "which text did
+   * they agree to, and when" is the only question this table exists to answer.
+   *
+   * Deliberately not deduplicated either. Accepting twice on two surfaces is two facts.
+   */
+  async recordAcceptances(acceptances: readonly RecordedAcceptance[]): Promise<void> {
+    if (acceptances.length === 0) return;
+    await this.transaction(async (client) => {
+      for (const acceptance of acceptances) {
+        await client.query(
+          `INSERT INTO terms_acceptances (id, user_id, document, version, surface, ip, user_agent)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            randomUUID(),
+            acceptance.userId,
+            acceptance.document,
+            acceptance.version,
+            acceptance.surface,
+            acceptance.ip ?? null,
+            acceptance.userAgent ?? null
+          ]
+        );
+      }
+    });
+  }
+
+  /**
+   * The newest version of each document this user has accepted.
+   *
+   * Newest by `accepted_at`, not the largest version string: versions are compared for
+   * equality against what is currently published (see outstandingDocuments in legal.ts), so
+   * what matters is the last thing they were shown, not the highest-sorting one.
+   */
+  async latestAcceptedVersions(userId: string): Promise<Partial<Record<LegalDocument, string>>> {
+    if (!UUID_PATTERN.test(userId)) return {};
+    const result = await this.pool.query<{ document: LegalDocument; version: string }>(
+      `SELECT DISTINCT ON (document) document, version
+         FROM terms_acceptances
+        WHERE user_id = $1
+        ORDER BY document, accepted_at DESC`,
+      [userId]
+    );
+    return Object.fromEntries(result.rows.map((row) => [row.document, row.version]));
   }
 
   /* ------------------------------------------------------------------------ projects */
