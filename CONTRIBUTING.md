@@ -93,6 +93,39 @@ and pull request.
   security model.
 - Do not commit secrets, `.env` files, or real Supabase credentials.
 
+## Licensing your contribution
+
+Crosscode is [MIT licensed](./LICENSE), and everything you contribute is
+licensed under the MIT License too. You keep the copyright in your work; you are
+licensing it, not assigning it. There is no CLA to sign.
+
+To make that explicit on every commit, this project uses the [Developer
+Certificate of Origin](https://developercertificate.org/) (DCO). The DCO is a
+short statement that you wrote the change, or that you have the right to submit
+it under the same licence. Certify it by signing off your commits:
+
+```bash
+git commit -s -m "Your message"
+```
+
+That appends a line to the commit message:
+
+```
+Signed-off-by: Your Name <your.email@example.com>
+```
+
+Use your real name and an email you can be reached at; the name and email must
+match the commit's author. Forgot the sign-off? Fix the last commit with
+`git commit -s --amend`, or a whole branch with
+`git rebase --signoff origin/main`, then force-push.
+
+CI (`.github/workflows/dco.yml`) checks every non-merge commit in a pull request
+for a matching sign-off and fails the PR if one is missing. That check is the
+whole enforcement mechanism — there is no bot to comment and no other gate.
+
+The name and logo are not covered by the MIT License. See
+[TRADEMARK.md](./TRADEMARK.md) for what you can do with them.
+
 ## Reporting bugs and requesting features
 
 Use the issue templates under `.github/ISSUE_TEMPLATE/`. For security
