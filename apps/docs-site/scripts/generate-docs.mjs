@@ -127,7 +127,7 @@ const GENERATED_PAGES = [
     key: "architecture",
     title: "Architecture",
     description:
-      "The daemon in each checkout, the coordination service between them, and the exact path one file edit takes to reach a teammate's working tree.",
+      "How the Crosscode CLI, the daemon in each checkout, the stdio MCP server and the coordination service fit together, and the exact path one file edit takes to reach a teammate's working tree.",
     mdFile: "architecture.md",
     htmlOut: "architecture.html",
     nextHref: "/docs/safety.html",
@@ -137,7 +137,7 @@ const GENERATED_PAGES = [
     key: "safety",
     title: "Safety model",
     description:
-      "The threat model behind Crosscode: how the daemon, the coordination service and the local clients are each defended, and what none of them defends against.",
+      "The threat model behind the Crosscode CLI: how the daemon, the MCP server, the coordination service and the local clients are each defended, and what none of them defends against.",
     mdFile: "security.md",
     htmlOut: "safety.html",
     mdOutName: "safety.md",
@@ -148,7 +148,7 @@ const GENERATED_PAGES = [
     key: "privacy",
     title: "Privacy",
     description:
-      "What the hosted coordination service actually holds while your uncommitted edits pass through it, and what it never sees. The short, honest version.",
+      "What the hosted coordination service actually holds while uncommitted edits pass through it from the Crosscode CLI and its MCP server, and what it never sees. The short, honest version.",
     mdFile: "privacy.md",
     htmlOut: "privacy.html",
     nextHref: "/docs/protocol.html",
@@ -158,7 +158,7 @@ const GENERATED_PAGES = [
     key: "protocol",
     title: "Network protocol",
     description:
-      "The Zod wire contract shared by the daemon, CLI, MCP server and coordination service. One file is one change; every schema strict, protocol version 3.",
+      "The Zod wire contract shared by the daemon, the Crosscode CLI, the MCP server and the coordination service. One file is one change; every schema strict, protocol version 3.",
     mdFile: "protocol.md",
     htmlOut: "protocol.html",
     nextHref: "/docs/install.html",
@@ -168,7 +168,7 @@ const GENERATED_PAGES = [
     key: "mcp-clients",
     title: "MCP client setup",
     description:
-      "What crosscode start installs for a coding agent: the stdio MCP server, the skill that teaches an agent to use it, and hooks for Claude Code and Codex.",
+      "What the Crosscode CLI's start command installs for a coding agent: the stdio MCP server, the skill that teaches an agent to use it, and hooks for Claude Code and the Codex CLI.",
     mdFile: "mcp-clients.md",
     htmlOut: "mcp-clients.html",
     nextHref: "/docs/cli.html",
@@ -178,7 +178,7 @@ const GENERATED_PAGES = [
     key: "support",
     title: "Support",
     description:
-      "Where to take a bug, an account problem or a data deletion request, what to bring with you, and how long a first reply actually takes.",
+      "Where to take a bug in the Crosscode CLI or its MCP server, an account problem or a data deletion request, what to bring with you, and how long a first reply actually takes.",
     mdFile: "support.md",
     htmlOut: "support.html",
     nextHref: "/docs/terms.html",
@@ -188,7 +188,7 @@ const GENERATED_PAGES = [
     key: "terms",
     title: "Terms of Service",
     description:
-      "The agreement covering use of the hosted Crosscode coordination service: your content, acceptable use, availability, liability and termination.",
+      "The agreement covering use of the hosted coordination service the Crosscode CLI and its MCP server connect to: your content, acceptable use, availability, liability and termination.",
     mdFile: "terms.md",
     htmlOut: "terms.html",
     nextHref: "/docs/dmca.html",
@@ -296,7 +296,7 @@ function escapeAttr(value) {
 
 function renderPage({ title, activeKey, description, canonicalPath, bodyHtml, mdHref, mdSourceRel, nextHref, nextLabel }) {
   const canonical = `${SITE_URL}${canonicalPath}`;
-  const fullTitle = `${title} · Crosscode`;
+  const fullTitle = `${title} · Crosscode CLI (MCP server)`;
   const jsonLd = {
     "@context": "https://schema.org",
     "@graph": [
@@ -339,6 +339,8 @@ function renderPage({ title, activeKey, description, canonicalPath, bodyHtml, md
   <meta property="og:url" content="${canonical}" />
   <meta property="og:image" content="/brand/logo-social.png" />
   <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="${fullTitle}" />
+  <meta name="twitter:description" content="${escapeAttr(description)}" />
   <meta name="twitter:image" content="/brand/logo-social.png" />
   <link rel="stylesheet" href="/src/style.css" />
   <script type="application/ld+json">
