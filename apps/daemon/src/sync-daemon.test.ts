@@ -230,19 +230,22 @@ describe("the daemon around the engine", () => {
   it("still receives a peer's edits when the host cannot serve a stream at all", async () => {
     const service = await startSyncServiceStub({ streams: false });
     services.push(service);
-    const origin = await seedOrigin({ "a.txt": "0\n" });
+    const origin = await seedOrigin({ "a.txt": "0\n", "b.txt": "0\n" });
     const roots = await Promise.all(["alice", "bob"].map((name) => checkout(origin, name, service)));
     const [alice, bob] = [await start(roots[0]!), await start(roots[1]!)];
 
     // Reachable by the only transport there is, and honest about saying so.
     await waitFor("both daemons to report themselves connected", async () => alice.status().connected && bob.status().connected);
 
+    // Each direction gets its own file. Bouncing one file back immediately would land the
+    // reply inside the hot window the first write opened, which is a deferral test, not a
+    // transport one.
     await type(roots[0]!, "a.txt", "arrived without a socket\n");
     await waitFor("bob to receive it", () => allEqual(roots, "a.txt", "arrived without a socket\n"));
 
     // And the other way, so it is a two-way sync rather than one lucky direction.
-    await type(roots[1]!, "a.txt", "and back again\n");
-    await waitFor("alice to receive it", () => allEqual(roots, "a.txt", "and back again\n"));
+    await type(roots[1]!, "b.txt", "and back again\n");
+    await waitFor("alice to receive it", () => allEqual(roots, "b.txt", "and back again\n"));
   }, 60_000);
 
   /**
