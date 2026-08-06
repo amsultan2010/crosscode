@@ -10,6 +10,13 @@
 // command, which is exactly what this page needs to render; a separate "can I?" route would
 // be a second implementation of the same check that could disagree with it.
 
+// An invitee arrives here having never seen the terms, so this page asks before it redeems
+// anything. The service enforces the same order -- `POST /v1/invites/:code/redeem` refuses an
+// account with no current acceptance recorded -- so the checkbox below is the gate rather
+// than a courtesy, and redeeming is what turns this browser into a member of a room.
+
+import { consentFieldHtml, consentGiven, CONSENT_MESSAGES, fetchLegal, fetchOutstanding, recordAcceptance, showConsentError } from "./legal.js";
+
 const SERVICE_URL = import.meta.env?.VITE_SERVICE_URL ?? "";
 
 /**
@@ -104,6 +111,24 @@ export function renderJoin(root, state) {
     <p class="muted">Don't have the CLI yet? <code>npm install -g crosscode-cli</code></p>`;
 }
 
+/**
+ * The one screen between an invite link and a redemption: what Crosscode will do to this
+ * person's checkout, and an unticked box saying they agree to the terms that disclaim it.
+ */
+export function renderJoinConsent(root, state) {
+  root.innerHTML = `
+    <h1>You've been invited to a Crosscode project</h1>
+    <p>
+      Crosscode syncs uncommitted working-tree files between checkouts of the same repository.
+      Your teammates' edits are written into your working tree, and the files you edit are held
+      by the hosted service for about seven days.
+    </p>
+    <form data-consent-form class="stack">
+      ${consentFieldHtml({ legal: state.legal })}
+      <button type="submit">Accept and join</button>
+    </form>`;
+}
+
 function escapeHtml(value) {
   return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
 }
@@ -118,21 +143,51 @@ export async function mountJoinPage(root, { location = window.location } = {}) {
   const supabase = getSupabaseClient();
   const { data } = await supabase.auth.getSession();
   const code = inviteCodeFromPath(location.pathname);
-  const state = await resolveJoin({
-    code,
-    accessToken: data.session?.access_token,
-    githubToken: data.session?.provider_token ?? undefined
-  });
-  renderJoin(root, state);
+  const accessToken = data.session?.access_token;
+  const githubToken = data.session?.provider_token ?? undefined;
 
-  root.querySelector("[data-github-signin]")?.addEventListener("click", () => {
-    // Back to this same URL: the code is in the path, so the round trip through GitHub
-    // keeps it without a query parameter to carry.
-    void supabase.auth.signInWithOAuth({ provider: "github", options: { redirectTo: location.href } });
-  });
+  const signIn = () => {
+    root.querySelector("[data-github-signin]")?.addEventListener("click", () => {
+      // Back to this same URL: the code is in the path, so the round trip through GitHub
+      // keeps it without a query parameter to carry.
+      void supabase.auth.signInWithOAuth({ provider: "github", options: { redirectTo: location.href } });
+    });
+  };
 
-  root.querySelector("[data-copy-target]")?.addEventListener("click", (event) => {
-    void navigator.clipboard.writeText(commandBlock(state));
-    event.currentTarget.textContent = "Copied";
-  });
+  const redeem = async () => {
+    const state = await resolveJoin({ code, accessToken, githubToken });
+    renderJoin(root, state);
+    signIn();
+    root.querySelector("[data-copy-target]")?.addEventListener("click", (event) => {
+      void navigator.clipboard.writeText(commandBlock(state));
+      event.currentTarget.textContent = "Copied";
+    });
+  };
+
+  // Consent is asked for before the redeem call, not after: redeeming is what makes this
+  // person a member of a room whose files land in their checkout, and the service refuses to
+  // do it for an account that has accepted nothing.
+  const legal = accessToken && githubToken ? await fetchLegal() : undefined;
+  const outstanding = legal ? await fetchOutstanding({ accessToken }) : undefined;
+  if (legal && (outstanding?.outstanding?.length ?? 1) > 0) {
+    renderJoinConsent(root, { legal });
+    root.querySelector("[data-consent-form]")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void (async () => {
+        if (!consentGiven(root)) {
+          showConsentError(root, CONSENT_MESSAGES.unticked);
+          return;
+        }
+        const recorded = await recordAcceptance({ surface: "join", legal, accessToken });
+        if (recorded.status !== "recorded") {
+          showConsentError(root, CONSENT_MESSAGES[recorded.status] ?? CONSENT_MESSAGES.unreachable);
+          return;
+        }
+        await redeem();
+      })();
+    });
+    return;
+  }
+
+  await redeem();
 }

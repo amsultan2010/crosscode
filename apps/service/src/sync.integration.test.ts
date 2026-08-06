@@ -4,6 +4,7 @@ import type { Change, FileVersion, WsSyncServerMessage } from "@crosscode/protoc
 import { WebSocket } from "ws";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServiceServer } from "./http.js";
+import { LEGAL_VERSIONS } from "./legal.js";
 import { PgStore } from "./store.js";
 import { signTestSupabaseToken, testSupabaseJwks } from "./test-jwks.js";
 
@@ -179,7 +180,39 @@ describe.skipIf(!databaseUrl)("sync service on PostgreSQL", () => {
     expect((await post(teammate, `/v1/invites/${invite.code}/redeem`, {}, { "x-crosscode-github-token": "gho_test" })).status).toBe(409);
   });
 
+  /**
+   * The mechanical half of §9 and §10, against the real schema: an account with no row in
+   * `terms_acceptances` cannot reach a synced or registered state by any route. Until this
+   * holds, the warranty disclaimer and the liability cap are a page nobody agreed to.
+   */
+  it("will not let an account that accepted nothing create, join, or register anything", async () => {
+    const stranger = await signInWithoutAccepting();
+    const owner = await signIn();
+    const project = await createProject(owner);
+    const invite = (await (await post(owner, "/v1/invites", { projectId: project.id })).json() as Envelope<{ code: string }>).data;
+
+    expect((await post(stranger, "/v1/projects", { name: "app", repo: "acme/other" })).status).toBe(403);
+    expect((await post(stranger, `/v1/invites/${invite.code}/redeem`, {}, { "x-crosscode-github-token": "gho_test" })).status).toBe(403);
+    expect((await post(stranger, "/v1/replicas", { projectId: project.id, branch: "main" })).status).toBe(403);
+
+    // Nothing was written on the way to those refusals -- not a user row, not a membership.
+    const rows = await store.pool.query("SELECT 1 FROM terms_acceptances WHERE user_id = $1", [subjectOf(stranger)]);
+    expect(rows.rowCount).toBe(0);
+
+    // And the moment it accepts, the same routes answer.
+    expect((await post(stranger, "/v1/legal/acceptances", {
+      surface: "join", documents: { terms: LEGAL_VERSIONS.terms, privacy: LEGAL_VERSIONS.privacy }
+    })).status).toBe(201);
+    expect((await post(stranger, `/v1/invites/${invite.code}/redeem`, {}, { "x-crosscode-github-token": "gho_test" })).status).toBe(200);
+    expect((await post(stranger, "/v1/replicas", { projectId: project.id, branch: "main" })).status).toBe(201);
+  });
+
   /* ------------------------------------------------------------------------ helpers */
+
+  /** The `sub` claim out of a signed test token, so a row can be looked up by user id. */
+  function subjectOf(token: string): string {
+    return JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString("utf8")).sub;
+  }
 
   type Envelope<T> = { ok: boolean; data: T };
 
@@ -187,8 +220,25 @@ describe.skipIf(!databaseUrl)("sync service on PostgreSQL", () => {
     return { path, op: "modify", baseHash: null, contentHash: `hash-${path}`, content: `content of ${path}`, encoding: "utf8" };
   }
 
-  /** A fresh Supabase-authenticated GitHub user. */
+  /**
+   * A fresh Supabase-authenticated GitHub user who has accepted the current documents.
+   *
+   * The acceptance is part of signing in because it is part of signing in: every surface
+   * that issues a session records one, and every route below refuses an account that has
+   * not. `signInWithoutAccepting` is the same thing minus that step, which is what the test
+   * above uses to show the refusal is real.
+   */
   async function signIn(): Promise<string> {
+    const token = await signInWithoutAccepting();
+    const accepted = await post(token, "/v1/legal/acceptances", {
+      surface: "device",
+      documents: { terms: LEGAL_VERSIONS.terms, privacy: LEGAL_VERSIONS.privacy }
+    });
+    expect(accepted.status).toBe(201);
+    return token;
+  }
+
+  async function signInWithoutAccepting(): Promise<string> {
     const id = randomUUID();
     return signTestSupabaseToken(supabaseUrl, {
       sub: id, email: `${id}@example.com`, github: { id: id.slice(0, 8), login: `octo-${id.slice(0, 8)}` }
