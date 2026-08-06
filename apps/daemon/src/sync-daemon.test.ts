@@ -280,6 +280,40 @@ describe("the daemon around the engine", () => {
     expect(descriptor).toBeNull();
   }, 60_000);
 
+  /**
+   * A change built on a blob this checkout has never held makes apply() call catchUp() to
+   * fill the gap. Called from inside a drain, that re-walked the same page from the same
+   * cursor -- and the cursor cannot move past a change that has not applied, so it never
+   * moved. One such change from one peer span the real service at several requests a second
+   * indefinitely, while `crosscode status` showed `cursor` frozen and no error anywhere.
+   */
+  it("does not spin the service on a change it cannot rebase", async () => {
+    const service = await startSyncServiceStub();
+    services.push(service);
+    const origin = await seedOrigin({ "a.txt": "0\n" });
+    const root = await checkout(origin, "alice", service);
+    // A modify whose baseHash names a blob that exists nowhere: the sender's history is one
+    // this checkout has no way to reach.
+    service.changes.push({
+      sequence: 1, projectId: "project-1", branch: "main",
+      replicaId: "00000000-1111-4222-8333-444455556666",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      version: {
+        path: "a.txt", op: "modify", baseHash: "0".repeat(40),
+        contentHash: "1".repeat(40), content: "from a history we never had\n", encoding: "utf8"
+      }
+    });
+
+    const daemon = await start(root);
+    await waitFor("the cursor to get past it", async () => daemon.status().cursor >= 1);
+    const afterSettling = service.listCalls;
+    await new Promise((settle) => setTimeout(settle, 1_000));
+
+    // Ten polls a second would be a spin; the configured interval is 100ms in these tests,
+    // so a healthy daemon asks a handful of times in a second and no more.
+    expect(service.listCalls - afterSettling).toBeLessThan(20);
+  }, 60_000);
+
   it("resyncs from full content when the service says the cursor is too old", async () => {
     const service = await startSyncServiceStub();
     services.push(service);

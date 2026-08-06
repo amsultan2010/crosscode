@@ -70,6 +70,7 @@ class HttpError extends Error {
 export class SyncDaemon {
   private watcher?: FSWatcher;
   private server?: Server;
+  private draining = false;
   private descriptor?: DaemonDescriptor;
   /** Built when the loopback server binds, published only once start-up has fully succeeded. */
   private pendingDescriptor?: DaemonDescriptor;
@@ -259,6 +260,13 @@ export class SyncDaemon {
       // The sender built on a blob we have never held, so we are genuinely behind. Fill
       // the gap from the cursor and retry once; a second miss has to surface rather than
       // loop, which is what allowCatchup: false forces.
+      //
+      // That guard covers the retry but not the fill: called from inside a drain, catchUp
+      // re-walks the same page from the same cursor -- which the cursor cannot leave, because
+      // it only advances past a change that applied. One unrebasable change from a peer
+      // therefore span the service at several requests a second, forever, while `crosscode
+      // status` showed a cursor that never moved. The guard inside catchUp makes the nested
+      // call a no-op, so the retry below decides, and an honest conflict reaches the agent.
       await this.catchUp();
       result = await this.engine.receive(change.version, { peer: change.replicaId, allowCatchup: false });
     }
@@ -279,6 +287,18 @@ export class SyncDaemon {
    * is what turns a dropped socket into a gap that closes itself.
    */
   private async catchUp(): Promise<void> {
+    // Not re-entrant: apply() calls this to fill a gap, and the drain that is already
+    // running is the fill. See the note there for what the recursion cost.
+    if (this.draining) return;
+    this.draining = true;
+    try {
+      await this.drainChanges();
+    } finally {
+      this.draining = false;
+    }
+  }
+
+  private async drainChanges(): Promise<void> {
     for (let page = 0; page < 100; page += 1) {
       const response = await this.client.changes(this.cursor);
       if ("status" in response) {
