@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { syncDaemonConfigSchema } from "../../../packages/protocol/src/sync.js";
+// The daemon's own reader, imported deliberately: the point of the test below is that the
+// two sides agree, so asserting it with the CLI's helper alone would prove nothing.
+import { readSyncConfig, syncConfigPath } from "../../daemon/src/sync-config.js";
 import { installAgentSurface } from "./agent-surface.js";
 import { configPath, readConfig } from "./config.js";
 import type { DaemonControl } from "./daemon.js";
@@ -94,6 +97,24 @@ describe("crosscode start", () => {
       repo: "acme/app"
     });
     expect(result.agent).toMatchObject({ mcp: { changed: true }, skill: { changed: true }, hooks: { changed: true } });
+  });
+
+  /**
+   * The assertion above checks the CLI wrote a valid config *at the path the CLI chooses*,
+   * which is exactly half the question and the half that cannot fail. The daemon is the
+   * consumer, and for one release it read `crosscode/sync.json` while the CLI wrote
+   * `crosscode/config.json` -- so `start` signed in, wrote the config, spawned a daemon that
+   * exited with "this checkout is not joined to a Crosscode project", and failed with
+   * DAEMON_DID_NOT_START. Both sides were individually correct and separately tested.
+   */
+  it("writes the config where the daemon actually looks for it", async () => {
+    const root = await checkout();
+    const { environment } = stubEnvironment();
+
+    await setup(root, environment);
+
+    expect(await syncConfigPath(root)).toBe(await configPath(root));
+    expect(await readSyncConfig(root)).toMatchObject({ projectId: "project-1", repo: "acme/app" });
   });
 
   // The property the invite flow depends on: the person sending the link has already run
