@@ -23,6 +23,7 @@ export default defineConfig({
         limitations: resolve(root, "docs/limitations.html"),
         support: resolve(root, "docs/support.html"),
         terms: resolve(root, "docs/terms.html"),
+        accessibility: resolve(root, "docs/accessibility.html"),
         dmca: resolve(root, "docs/dmca.html"),
         dsaContact: resolve(root, "docs/dsa-contact.html"),
         privacyPolicy: resolve(root, "docs/privacy-policy.html"),

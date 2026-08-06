@@ -40,6 +40,14 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   return defaultLinkOpen(tokens, idx, options, env, self);
 };
 
+// `pre` scrolls sideways (overflow-x: auto in style.css), and a scrollable region a
+// keyboard cannot reach is WCAG 2.1.1 -- the arrow keys need somewhere to land. Making
+// it focusable is the whole fix; a markdown code block has no name of its own to give it.
+for (const rule of ["fence", "code_block"]) {
+  const base = md.renderer.rules[rule];
+  md.renderer.rules[rule] = (...args) => base(...args).replace("<pre", '<pre tabindex="0"');
+}
+
 // Gives every heading a stable slug id (e.g. "## Available tools" -> "available-tools")
 // so other pages can deep-link with an anchor, matching common markdown-site behavior.
 md.core.ruler.push("heading_anchor_ids", (state) => {
@@ -103,7 +111,8 @@ const NAV_GROUPS = [
       { href: "/docs/privacy-policy.html", label: "Privacy Policy", key: "privacy-policy" },
       { href: "/docs/cookies.html", label: "Cookies", key: "cookies" },
       { href: "/docs/subprocessors.html", label: "Subprocessors", key: "subprocessors" },
-      { href: "/docs/dpa.html", label: "Data Processing Agreement", key: "dpa" }
+      { href: "/docs/dpa.html", label: "Data Processing Agreement", key: "dpa" },
+      { href: "/docs/accessibility.html", label: "Accessibility", key: "accessibility" }
     ]
   }
 ];
@@ -213,6 +222,14 @@ const GENERATED_PAGES = [
     title: "Data Processing Agreement",
     mdFile: "dpa.md",
     htmlOut: "dpa.html",
+    nextHref: "/docs/accessibility.html",
+    nextLabel: "Accessibility"
+  },
+  {
+    key: "accessibility",
+    title: "Accessibility",
+    mdFile: "accessibility.md",
+    htmlOut: "accessibility.html",
     nextHref: "/docs/index.html",
     nextLabel: "Docs overview"
   }
@@ -260,8 +277,10 @@ function renderPage({ title, activeKey, bodyHtml, mdHref, mdSourceRel, nextHref,
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
   <header class="site-header">
-    <nav>
+    <nav aria-label="Primary">
       <a class="brand" href="/">Crosscode</a>
       <a href="/docs/index.html">Docs</a>
       <a href="/docs/install.html">Install &amp; quickstart</a>
@@ -274,7 +293,7 @@ function renderPage({ title, activeKey, bodyHtml, mdHref, mdSourceRel, nextHref,
     </nav>
   </header>
 
-  <main class="docs-layout wide">
+  <main id="main" class="docs-layout wide">
     <nav class="docs-sidebar" aria-label="Docs navigation">
 ${renderSidebar(activeKey)}
     </nav>
@@ -294,7 +313,7 @@ ${bodyHtml}
 
   <footer class="site-footer">
     <p>Crosscode: local-first Git coordination.</p>
-    <p><a href="/">Home</a> &middot; <a href="${GITHUB_REPO}" rel="noopener">View on GitHub</a></p>
+    <p><a href="/">Home</a> &middot; <a href="/docs/accessibility.html">Accessibility</a> &middot; <a href="${GITHUB_REPO}" rel="noopener">View on GitHub</a></p>
     <p>
       <a href="/docs/privacy.html">Privacy</a> &middot;
       <a href="/docs/privacy-policy.html">Privacy Policy</a> &middot;
@@ -363,7 +382,9 @@ function syncInstallPrompt() {
 
   const indexPath = path.join(siteRoot, "index.html");
   const indexHtml = readFileSync(indexPath, "utf8");
-  const blockRe = /(<pre><code id="install-prompt-text">)[\s\S]*?(<\/code><\/pre>)/;
+  // `<pre` carries attributes now (tabindex, for keyboard access to the scroll), so the
+  // match cannot assume a bare tag.
+  const blockRe = /(<pre[^>]*><code id="install-prompt-text">)[\s\S]*?(<\/code><\/pre>)/;
   if (!blockRe.test(indexHtml)) {
     throw new Error('Could not find <pre><code id="install-prompt-text"> block in index.html');
   }

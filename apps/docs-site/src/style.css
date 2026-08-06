@@ -19,9 +19,16 @@
   --bg-sunk: #08080a;
   --line: rgba(255, 255, 255, 0.09);
   --line-2: rgba(255, 255, 255, 0.2);
+  /* --line and --line-2 draw dividers and decorative edges, which WCAG 1.4.11 exempts.
+     --control-line draws the edge that *is* the control -- an input's box, a button's
+     outline -- and has to clear 3:1 against the surface behind it. On --bg-raise it is
+     about 4:1. Anything you can click or type into takes this one. */
+  --control-line: rgba(255, 255, 255, 0.42);
   --text: #ffffff;
   --text-2: #9d9da6;
-  --text-3: #67676f;
+  /* Was #67676f, which is 3.8:1 on black and fails 1.4.3 at the ~13-14px this token is
+     always used at. #8a8a92 is 6.1:1 on --bg and 5.7:1 on --bg-raise. */
+  --text-3: #8a8a92;
 
   /* White is the accent. Colour is reserved for things that mean something:
      a diff sign, a live dot. */
@@ -39,7 +46,9 @@
   --term-bg-2: #0e0e11;
   --term-line: rgba(255, 255, 255, 0.08);
   --term-text: #c9c9d1;
-  --term-dim: #6b6b73;
+  /* Was #6b6b73: 3.8:1 on --term-bg, and it carries real text (log lines, proposal
+     notes, code comments). #8c8c95 is 6.0:1. */
+  --term-dim: #8c8c95;
 
   --focus: var(--accent);
   --shadow-lg: 0 40px 90px -50px rgba(0, 0, 0, 1);
@@ -158,6 +167,33 @@ pre code {
 
 .skip-link:focus { top: 0; }
 
+/* For headings and labels that a sighted reader gets from layout and a screen
+   reader would otherwise never get at all. Not display:none, which would hide it
+   from both. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* WCAG 2.5.8 wants a 24px-tall target. A link sitting inside a sentence is exempt, which
+   covers most of this site's links; these are the standalone ones the audit measured
+   under 24px. Vertical padding rather than display:inline-block, so a long label can
+   still wrap at 320px. */
+.docs-next a,
+.auth-alt a,
+.card h3 a,
+.docs-sidebar-links a,
+.note > a:only-child {
+  padding-block: 0.25rem;
+}
+
 .wrap {
   width: 100%;
   max-width: var(--wrap);
@@ -219,7 +255,12 @@ pre code {
   padding: 0.72rem 1.5rem;
   display: flex;
   align-items: center;
-  gap: 1.4rem;
+  /* The docs shell has no mobile menu button -- its nav is a bare row of six links -- so
+     the row wraps rather than running 260px off the side of a 320px viewport, which is
+     WCAG 1.4.10. The landing nav is unaffected: below 60rem its links collapse into the
+     .nav-toggle dropdown and there is nothing left in the row to wrap. */
+  flex-wrap: wrap;
+  gap: 0.5rem 1.4rem;
   font-size: 0.9rem;
 }
 
@@ -254,7 +295,7 @@ pre code {
   align-items: center;
   gap: 0.5rem;
   background: none;
-  border: 1px solid var(--line);
+  border: 1px solid var(--control-line);
   border-radius: 999px;
   color: var(--text-2);
   font: inherit;
@@ -302,7 +343,7 @@ pre code {
   display: inline-flex;
   align-items: center;
   gap: 0.42rem;
-  border: 1px solid var(--line);
+  border: 1px solid var(--control-line);
   border-radius: 999px;
   padding: 0.32rem 0.78rem;
   text-decoration: none;
@@ -374,7 +415,7 @@ pre code {
 
 .btn-quiet {
   background: var(--bg-raise);
-  border-color: var(--line);
+  border-color: var(--control-line);
   color: var(--text);
 }
 
@@ -487,7 +528,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 
 .copy-btn {
   background: var(--bg-raise);
-  border: 1px solid var(--line);
+  border: 1px solid var(--control-line);
   border-radius: 999px;
   color: var(--text-2);
   font: inherit;
@@ -518,7 +559,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   justify-content: center;
   flex-wrap: wrap;
   gap: 0.25rem;
-  border: 1px solid var(--line);
+  border: 1px solid var(--control-line);
   border-radius: 999px;
   padding: 0.28rem;
   width: fit-content;
@@ -542,7 +583,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 
 .stage-tab:hover { color: var(--text-2); }
 
-.stage-tab[aria-selected="true"] {
+.stage-tab[aria-pressed="true"] {
   background: rgba(255, 255, 255, 0.1);
   color: var(--text);
 }
@@ -551,7 +592,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   display: block;
   margin: 1.5rem auto 0;
   background: none;
-  border: 1px solid var(--line);
+  border: 1px solid var(--control-line);
   border-radius: 999px;
   color: var(--text-3);
   font: inherit;
@@ -1095,7 +1136,9 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   border-top: 1px solid var(--line);
 }
 
-.plan-strip h4 { margin-bottom: 0.4rem; }
+/* h3 rather than h4 so the heading level does not skip one under the section's h2;
+   the size stays what the h4 was. */
+.plan-strip h3 { font-size: 0.94rem; letter-spacing: -0.01em; margin-bottom: 0.4rem; }
 .plan-strip p { font-size: 0.87rem; color: var(--text-3); margin: 0; }
 
 /* --- install ------------------------------------------------------------- */
@@ -1475,7 +1518,7 @@ main:not(.docs-layout):not(#main) {
 
 .subtitle { font-size: 1.05rem; color: var(--text-2); max-width: var(--prose); }
 .cta { display: inline-flex; align-items: center; gap: 0.45rem; font-weight: 620; padding: 0.7rem 1.35rem; border-radius: 999px; background: var(--accent); color: var(--accent-fg); text-decoration: none; }
-.cta.secondary { background: transparent; color: var(--text); border: 1px solid var(--line-2); }
+.cta.secondary { background: transparent; color: var(--text); border: 1px solid var(--control-line); }
 .install-steps { font-size: 0.88rem; color: var(--text-3); margin-top: 1.4rem; }
 
 .terminal { border: 1px solid var(--term-line); border-radius: var(--radius); background: var(--term-bg); overflow: hidden; margin: 1.5rem 0; }
@@ -1554,7 +1597,7 @@ main:not(.docs-layout):not(#main) {
 .auth-tabs {
   display: flex;
   gap: 0.25rem;
-  border: 1px solid var(--line);
+  border: 1px solid var(--control-line);
   border-radius: 999px;
   padding: 0.25rem;
   margin-bottom: 1.5rem;
@@ -1599,7 +1642,7 @@ main:not(.docs-layout):not(#main) {
   font: inherit;
   font-size: 0.95rem;
   background: var(--bg-sunk);
-  border: 1px solid var(--line-2);
+  border: 1px solid var(--control-line);
   border-radius: var(--radius-sm);
   padding: 0.6rem 0.75rem;
   color: var(--text);
@@ -1669,7 +1712,7 @@ main:not(.docs-layout):not(#main) {
   font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
-  border: 1px solid var(--line-2);
+  border: 1px solid var(--control-line);
   background: var(--bg-sunk);
   color: var(--text);
   border-radius: var(--radius-sm);
