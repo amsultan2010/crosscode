@@ -5,7 +5,10 @@ const root = resolve(__dirname);
 
 export default defineConfig({
   root,
-  base: "./",
+  // Absolute, not "./": the site is always served from a domain root, and a relative base
+  // makes join.html ask for /join/<code>/assets/*.js, which the /join rewrite answers with
+  // HTML and the browser rejects on its MIME check.
+  base: "/",
   build: {
     outDir: "dist",
     emptyOutDir: true,
@@ -37,7 +40,9 @@ export default defineConfig({
         // One page for every /join/:code; vercel.json rewrites the code into it.
         join: resolve(root, "join.html"),
         // Where `crosscode start` sends a terminal to be signed in.
-        device: resolve(root, "device.html")
+        device: resolve(root, "device.html"),
+        // Vercel serves a root 404.html automatically for static 404s.
+        notFound: resolve(root, "404.html")
       }
     }
   }

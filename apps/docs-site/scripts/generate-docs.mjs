@@ -21,6 +21,9 @@ const publicDocsDir = path.join(publicDir, "docs");
 const md = new MarkdownIt({ html: false, linkify: true });
 
 const GITHUB_REPO = "https://github.com/amsultan2010/crosscode";
+// Canonical origin. The apex 308-redirects here, so every canonical, og:url and sitemap
+// entry has to name www or it points at a redirect.
+const SITE_URL = "https://www.getcrosscode.dev";
 
 // Root docs/*.md sometimes link to repo-root files (../README.md,
 // ../BUILD_INSTRUCTIONS.md) with paths that only resolve inside the repo, not on
@@ -123,6 +126,8 @@ const GENERATED_PAGES = [
   {
     key: "architecture",
     title: "Architecture",
+    description:
+      "The daemon in each checkout, the coordination service between them, and the exact path one file edit takes to reach a teammate's working tree.",
     mdFile: "architecture.md",
     htmlOut: "architecture.html",
     nextHref: "/docs/safety.html",
@@ -131,6 +136,8 @@ const GENERATED_PAGES = [
   {
     key: "safety",
     title: "Safety model",
+    description:
+      "The threat model behind Crosscode: how the daemon, the coordination service and the local clients are each defended, and what none of them defends against.",
     mdFile: "security.md",
     htmlOut: "safety.html",
     mdOutName: "safety.md",
@@ -140,6 +147,8 @@ const GENERATED_PAGES = [
   {
     key: "privacy",
     title: "Privacy",
+    description:
+      "What the hosted coordination service actually holds while your uncommitted edits pass through it, and what it never sees. The short, honest version.",
     mdFile: "privacy.md",
     htmlOut: "privacy.html",
     nextHref: "/docs/protocol.html",
@@ -148,6 +157,8 @@ const GENERATED_PAGES = [
   {
     key: "protocol",
     title: "Network protocol",
+    description:
+      "The Zod wire contract shared by the daemon, CLI, MCP server and coordination service. One file is one change; every schema strict, protocol version 3.",
     mdFile: "protocol.md",
     htmlOut: "protocol.html",
     nextHref: "/docs/install.html",
@@ -156,6 +167,8 @@ const GENERATED_PAGES = [
   {
     key: "mcp-clients",
     title: "MCP client setup",
+    description:
+      "What crosscode start installs for a coding agent: the stdio MCP server, the skill that teaches an agent to use it, and hooks for Claude Code and Codex.",
     mdFile: "mcp-clients.md",
     htmlOut: "mcp-clients.html",
     nextHref: "/docs/cli.html",
@@ -164,6 +177,8 @@ const GENERATED_PAGES = [
   {
     key: "support",
     title: "Support",
+    description:
+      "Where to take a bug, an account problem or a data deletion request, what to bring with you, and how long a first reply actually takes.",
     mdFile: "support.md",
     htmlOut: "support.html",
     nextHref: "/docs/terms.html",
@@ -172,6 +187,8 @@ const GENERATED_PAGES = [
   {
     key: "terms",
     title: "Terms of Service",
+    description:
+      "The agreement covering use of the hosted Crosscode coordination service: your content, acceptable use, availability, liability and termination.",
     mdFile: "terms.md",
     htmlOut: "terms.html",
     nextHref: "/docs/dmca.html",
@@ -180,6 +197,8 @@ const GENERATED_PAGES = [
   {
     key: "dmca",
     title: "Copyright and DMCA",
+    description:
+      "How to send a copyright notice about a file stored in Crosscode's hosted service, how to counter-notify, and what happens to repeat infringers.",
     mdFile: "dmca.md",
     htmlOut: "dmca.html",
     nextHref: "/docs/dsa-contact.html",
@@ -188,6 +207,8 @@ const GENERATED_PAGES = [
   {
     key: "dsa-contact",
     title: "EU DSA contact",
+    description:
+      "Crosscode's single point of contact and its notice-and-action procedure under the EU Digital Services Act, Regulation (EU) 2022/2065.",
     mdFile: "dsa-contact.md",
     htmlOut: "dsa-contact.html",
     nextHref: "/docs/privacy-policy.html",
@@ -196,6 +217,8 @@ const GENERATED_PAGES = [
   {
     key: "privacy-policy",
     title: "Privacy Policy",
+    description:
+      "The full GDPR Article 13 and 14 notice: every category of personal data, the legal basis for it, how long it is kept, and how to exercise your rights.",
     mdFile: "privacy-policy.md",
     htmlOut: "privacy-policy.html",
     nextHref: "/docs/cookies.html",
@@ -204,6 +227,8 @@ const GENERATED_PAGES = [
   {
     key: "cookies",
     title: "Cookies and local storage",
+    description:
+      "Every cookie, localStorage and sessionStorage item Crosscode sets, what each is for, how long it lasts, and whether it needs your consent.",
     mdFile: "cookies.md",
     htmlOut: "cookies.html",
     nextHref: "/docs/subprocessors.html",
@@ -212,6 +237,8 @@ const GENERATED_PAGES = [
   {
     key: "subprocessors",
     title: "Subprocessors",
+    description:
+      "The six vendors that process data on Crosscode's behalf, what each one receives and where it sits. No fonts, no CDN scripts, no third-party tags.",
     mdFile: "subprocessors.md",
     htmlOut: "subprocessors.html",
     nextHref: "/docs/dpa.html",
@@ -220,6 +247,8 @@ const GENERATED_PAGES = [
   {
     key: "dpa",
     title: "Data Processing Agreement",
+    description:
+      "The Article 28 processor agreement for personal data inside the files you sync. It applies automatically to the hosted service, with nothing to sign.",
     mdFile: "dpa.md",
     htmlOut: "dpa.html",
     nextHref: "/docs/accessibility.html",
@@ -228,6 +257,8 @@ const GENERATED_PAGES = [
   {
     key: "accessibility",
     title: "Accessibility",
+    description:
+      "Where www.getcrosscode.dev stands against WCAG 2.2 level AA: what is tested, what is known to fall short, and how to report a barrier you hit.",
     mdFile: "accessibility.md",
     htmlOut: "accessibility.html",
     nextHref: "/docs/index.html",
@@ -259,22 +290,59 @@ ${links}
   }).join("\n");
 }
 
-function renderPage({ title, activeKey, bodyHtml, mdHref, mdSourceRel, nextHref, nextLabel }) {
+function escapeAttr(value) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function renderPage({ title, activeKey, description, canonicalPath, bodyHtml, mdHref, mdSourceRel, nextHref, nextLabel }) {
+  const canonical = `${SITE_URL}${canonicalPath}`;
+  const fullTitle = `${title} · Crosscode`;
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "TechArticle",
+        headline: fullTitle,
+        description,
+        url: canonical,
+        inLanguage: "en",
+        isPartOf: { "@type": "WebSite", name: "Crosscode", url: `${SITE_URL}/` },
+        publisher: { "@type": "Organization", name: "Crosscode", url: `${SITE_URL}/` }
+      },
+      {
+        "@type": "BreadcrumbList",
+        itemListElement: [
+          { "@type": "ListItem", position: 1, name: "Home", item: `${SITE_URL}/` },
+          { "@type": "ListItem", position: 2, name: "Docs", item: `${SITE_URL}/docs/index.html` },
+          { "@type": "ListItem", position: 3, name: title, item: canonical }
+        ]
+      }
+    ]
+  };
+
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${title} · Crosscode</title>
+  <title>${fullTitle}</title>
+  <meta name="description" content="${escapeAttr(description)}" />
+  <link rel="canonical" href="${canonical}" />
   <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml" />
   <link rel="alternate icon" href="/brand/favicon-32.png" sizes="32x32" />
   <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png" />
+  <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Crosscode" />
-  <meta property="og:title" content="${title} · Crosscode" />
+  <meta property="og:title" content="${fullTitle}" />
+  <meta property="og:description" content="${escapeAttr(description)}" />
+  <meta property="og:url" content="${canonical}" />
   <meta property="og:image" content="/brand/logo-social.png" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:image" content="/brand/logo-social.png" />
   <link rel="stylesheet" href="/src/style.css" />
+  <script type="application/ld+json">
+${JSON.stringify(jsonLd, null, 2)}
+  </script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -349,6 +417,8 @@ function generateDocPages() {
     const html = renderPage({
       title: p.title,
       activeKey: p.key,
+      description: p.description,
+      canonicalPath: `/docs/${p.htmlOut}`,
       bodyHtml,
       mdHref,
       mdSourceRel: `docs/${p.mdFile}`,
@@ -457,10 +527,38 @@ function generateLlmsFullTxt() {
   writeFileSync(path.join(publicDir, "llms-full.txt"), parts.join("\n"));
 }
 
+// The hand-written indexable pages. The generated ones come from GENERATED_PAGES, so the
+// sitemap cannot drift from the pages this script actually writes. The six per-user pages
+// (auth/*, join, device) and 404.html carry `robots: noindex` and are deliberately absent.
+// No <lastmod>: there is no honest source for one here, and a build-clock value would be a
+// lie that changes on every deploy.
+const STATIC_INDEXABLE_PATHS = [
+  "/",
+  "/docs/index.html",
+  "/docs/install.html",
+  "/docs/cli.html",
+  "/docs/limitations.html"
+];
+
+function generateSitemap() {
+  const paths = [...STATIC_INDEXABLE_PATHS, ...GENERATED_PAGES.map((p) => `/docs/${p.htmlOut}`)];
+
+  const lines = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ...paths.map((p) => `  <url><loc>${SITE_URL}${p}</loc></url>`),
+    "</urlset>",
+    ""
+  ];
+
+  writeFileSync(path.join(publicDir, "sitemap.xml"), lines.join("\n"));
+}
+
 mkdirSync(publicDir, { recursive: true });
 generateDocPages();
 syncInstallPrompt();
 generateLlmsTxt();
 generateLlmsFullTxt();
+generateSitemap();
 
-console.log("[generate-docs] wrote generated doc pages, public/docs/*.md, llms.txt, llms-full.txt");
+console.log("[generate-docs] wrote generated doc pages, public/docs/*.md, llms.txt, llms-full.txt, sitemap.xml");
