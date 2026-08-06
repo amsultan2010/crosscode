@@ -1,6 +1,7 @@
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { createServiceServer, type ServiceServerOptions } from "./http.js";
+import { LEGAL_VERSIONS } from "./legal.js";
 import { StoreUnauthorizedError, type PgStore } from "./store.js";
 import { signTestSupabaseToken, testSupabaseJwks } from "./test-jwks.js";
 
@@ -8,6 +9,13 @@ const supabaseUrl = "https://rzsslbmahvoesjxmgefr.supabase.co";
 const projectId = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
 const replicaId = "9a1e8b7c-1111-4222-8333-444455556666";
 const userId = "5c9f2a10-2222-4333-8444-555566667777";
+
+/**
+ * A caller who has accepted the current documents. Every route that does anything for a user
+ * gates on this now, so a stub without it answers 403 rather than whatever it was testing --
+ * see terms-acceptance.test.ts for the tests that are about the gate itself.
+ */
+const ACCEPTED = async () => ({ terms: LEGAL_VERSIONS.terms!, privacy: LEGAL_VERSIONS.privacy! });
 
 const servers: ReturnType<typeof createServiceServer>[] = [];
 
@@ -24,6 +32,7 @@ describe("service HTTP boundary", () => {
       flush: async () => {}
     };
     const store = {
+      latestAcceptedVersions: ACCEPTED,
       upsertUser: async () => ({ created: true }),
       createProject: async () => ({
         id: projectId, name: "app", repo: "acme/app", plan: "free", createdAt: "2026-01-01T00:00:00.000Z"
@@ -44,6 +53,7 @@ describe("service HTTP boundary", () => {
 
   it("creates a project, mints an invite, and registers a replica", async () => {
     const store = {
+      latestAcceptedVersions: ACCEPTED,
       upsertUser: async () => ({ created: false }),
       createProject: async () => ({
         id: projectId, name: "app", repo: "acme/app", plan: "free", createdAt: "2026-01-01T00:00:00.000Z"
@@ -81,6 +91,7 @@ describe("service HTTP boundary", () => {
   it("redeems an invite only for a caller GitHub says can read the repository", async () => {
     const redeemed: string[] = [];
     const store = {
+      latestAcceptedVersions: ACCEPTED,
       upsertUser: async () => ({ created: false }),
       findInvite: async (code: string) => code === "CC-7F3A-9C2E"
         ? { code, projectId, repo: "acme/app", expiresAt: "2099-01-01T00:00:00.000Z", redeemedAt: null }

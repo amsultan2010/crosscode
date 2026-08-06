@@ -10,7 +10,24 @@ import {
   type SyncInvite,
   type SyncProject
 } from "../../../packages/protocol/src/sync.js";
+import { z } from "zod";
 import { CliError } from "./errors.js";
+
+/**
+ * `GET /v1/legal/acceptances`: which documents this account still owes, and at which version
+ * the current ones are published.
+ *
+ * The versions are read off this answer and posted straight back, never composed locally.
+ * The service refuses a version that is not the current one, so a CLI that guessed would
+ * fail loudly rather than record an acceptance of a text nobody was shown.
+ */
+const legalStatusSchema = z.object({
+  accepted: z.record(z.string(), z.string()),
+  outstanding: z.array(z.string()),
+  documents: z.array(z.object({ document: z.string(), version: z.string(), url: z.string() }))
+});
+
+export type LegalStatus = z.infer<typeof legalStatusSchema>;
 
 /**
  * The three service routes the CLI needs, as a narrow interface.
@@ -43,6 +60,14 @@ export type SyncService = {
    * SignInResult in auth.ts.
    */
   redeemInvite(code: string, githubToken: string): Promise<RedeemSyncInviteResponse>;
+  /** `GET /v1/legal/acceptances`. What this account still has to accept. */
+  legalStatus(): Promise<LegalStatus>;
+  /**
+   * `POST /v1/legal/acceptances`. Records that the person at this terminal accepted, at the
+   * versions `legalStatus()` just reported. Client-side assent that is never sent is not
+   * evidence of anything, which is the whole reason this route exists.
+   */
+  acceptTerms(documents: Record<string, string>): Promise<void>;
 };
 
 /** The credential header the redeem route reads. Mirrors GITHUB_TOKEN_HEADER in the service. */
@@ -73,12 +98,33 @@ export function httpSyncService(baseUrl: string, accessToken: string, fetchImpl:
     return schema.parse(typeof payload === "object" && payload !== null && "data" in payload ? (payload as { data: unknown }).data : payload);
   }
 
+  async function get<T>(path: string, schema: { parse: (value: unknown) => T }, describe: string): Promise<T> {
+    const response = await fetchImpl(new URL(path, baseUrl), {
+      headers: { authorization: `Bearer ${accessToken}` }
+    }).catch((error: Error) => {
+      throw new CliError("SERVICE_UNREACHABLE", `${describe} could not reach ${baseUrl}: ${error.message}`, "Check your network connection and try again.");
+    });
+    if (!response.ok) {
+      throw new CliError(
+        response.status === 401 || response.status === 403 ? "SERVICE_FORBIDDEN" : "SERVICE_FAILED",
+        `${describe} failed: ${response.status}`,
+        response.status === 401 ? "Your sign-in has expired. Run `crosscode start` to sign in again." : undefined
+      );
+    }
+    const payload: unknown = await response.json();
+    return schema.parse(typeof payload === "object" && payload !== null && "data" in payload ? (payload as { data: unknown }).data : payload);
+  }
+
   return {
     createProject: (request) => post("/v1/projects", createProjectRequestSchema.parse(request), syncProjectSchema, "Creating the project"),
     createInvite: (request) => post("/v1/invites", createInviteRequestSchema.parse(request), syncInviteSchema, "Creating the invite"),
     redeemInvite: (code, githubToken) => post(
       `/v1/invites/${encodeURIComponent(code)}/redeem`, {}, redeemSyncInviteResponseSchema, "Redeeming the invite",
       { [GITHUB_TOKEN_HEADER]: githubToken }
-    )
+    ),
+    legalStatus: () => get("/v1/legal/acceptances", legalStatusSchema, "Checking the terms"),
+    acceptTerms: async (documents) => {
+      await post("/v1/legal/acceptances", { surface: "cli", documents }, z.unknown(), "Recording your acceptance of the terms");
+    }
   };
 }

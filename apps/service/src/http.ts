@@ -17,7 +17,16 @@ import { redactPath } from "@crosscode/core";
 import { z, ZodError } from "zod";
 import type { JWTVerifyGetKey } from "jose";
 import { checkGitHubRepoAccess, verifySupabaseAccessToken, type GitHubIdentity, type RepoAccessChecker } from "./auth.js";
-import { hashDeviceCode, normalizeUserCode, PgStore, StoreConflictError, StoreUnauthorizedError } from "./store.js";
+import {
+  ACCEPTANCE_SURFACES,
+  currentLegalDocuments,
+  isCurrentVersion,
+  LEGAL_DOCUMENTS,
+  outstandingDocuments,
+  REQUIRED_DOCUMENTS,
+  type LegalDocument
+} from "./legal.js";
+import { hashDeviceCode, normalizeUserCode, PgStore, StoreConflictError, StoreUnauthorizedError, type RecordedAcceptance } from "./store.js";
 import { attachWebSocketGateway, type WebSocketGateway } from "./ws.js";
 import type { Analytics } from "./analytics.js";
 
@@ -134,6 +143,20 @@ const deviceBindRequestSchema = z.object({
   refreshToken: z.string().min(1).max(4_096),
   /** Supabase's `provider_token`. See DeviceSession in store.ts for why it matters. */
   githubToken: z.string().min(1).max(4_096).optional()
+}).strict();
+
+/**
+ * What a surface posts once somebody has ticked the box.
+ *
+ * The version travels with each document rather than being taken from the server's own
+ * constant, and is then checked against it: that is what makes "the version we recorded is
+ * the version they were shown" a property of the request instead of a hope. A page that was
+ * open when the documents changed is refused and told to reload, rather than quietly
+ * recording assent to a text nobody read.
+ */
+const acceptanceRequestSchema = z.object({
+  surface: z.enum(ACCEPTANCE_SURFACES),
+  documents: z.record(z.enum(LEGAL_DOCUMENTS), z.string().min(1).max(64))
 }).strict();
 
 const JSON_TYPE = "application/json";
@@ -275,6 +298,17 @@ async function handleRequest(
 
   const bodyLimit = options.bodyLimitBytes ?? 1_048_576;
 
+  /**
+   * What has to be accepted, and at which version, for every surface that shows it.
+   *
+   * Unauthenticated, because the sign-up page shows the checkbox to somebody who has no
+   * account yet, and because there is nothing here that is not already published.
+   */
+  if (method === "GET" && url.pathname === "/v1/legal") {
+    send(response, 200, { documents: currentLegalDocuments(), required: REQUIRED_DOCUMENTS });
+    return;
+  }
+
   // The two halves of the device handshake the CLI drives. Both are before authenticate()
   // and therefore exempt from the bearer catch-all, which is not a hole: a terminal that
   // has never signed in has no token to present, and producing one is the entire purpose
@@ -324,6 +358,50 @@ async function handleRequest(
 
   const caller = await authenticate(request, options);
 
+  /**
+   * The record of assent. Every surface that shows the checkbox posts here, and this is the
+   * only way a row is ever written -- a client that ticks a box and tells nobody is not
+   * evidence of anything, which is why nothing about this is client-side.
+   */
+  if (method === "POST" && url.pathname === "/v1/legal/acceptances") {
+    const body = acceptanceRequestSchema.parse(await readJson(request, Math.min(bodyLimit, 4_096)));
+    const documents = body.documents as Partial<Record<LegalDocument, string>>;
+    for (const document of REQUIRED_DOCUMENTS) {
+      if (documents[document] === undefined) throw new HttpError(400, `Accepting requires the ${document} document`);
+    }
+    for (const [document, version] of Object.entries(documents) as [LegalDocument, string][]) {
+      // The page was open when the text changed. Refused rather than recorded: a row saying
+      // they accepted the current version would be a claim about a text they never saw.
+      if (!isCurrentVersion(document, version)) {
+        throw new HttpError(409, `The ${document} document has changed since this page was loaded; reload it and read it again`);
+      }
+    }
+    const acceptances: RecordedAcceptance[] = (Object.entries(documents) as [LegalDocument, string][]).map(([document, version]) => ({
+      userId: caller.userId,
+      document,
+      version,
+      surface: body.surface,
+      ip: remote,
+      userAgent: header(request, "user-agent")?.slice(0, 512)
+    }));
+    await options.store.recordAcceptances(acceptances);
+    // No analytics event: the acceptance table is the record, and the one thing that must
+    // not happen is a second, weaker copy of it somewhere a retention policy will thin out.
+    send(response, 201, { accepted: documents, outstanding: outstandingDocuments(documents) });
+    return;
+  }
+
+  /**
+   * What this caller still owes, which is what makes §11's re-acceptance promise keepable:
+   * a stored version that is not the published one is outstanding, so the surfaces ask
+   * again on the next sign-in instead of an email campaign nobody built.
+   */
+  if (method === "GET" && url.pathname === "/v1/legal/acceptances") {
+    const accepted = await options.store.latestAcceptedVersions(caller.userId);
+    send(response, 200, { accepted, outstanding: outstandingDocuments(accepted), documents: currentLegalDocuments() });
+    return;
+  }
+
   // The browser's half of the handshake, and the only authenticated one: whoever posts
   // here has just signed in with GitHub on getcrosscode.dev/device and is handing that
   // session to the terminal that printed the code they typed.
@@ -336,6 +414,10 @@ async function handleRequest(
     if (!caller.github) throw new HttpError(403, "Sign in with GitHub to authorize a terminal");
     const userCode = normalizeUserCode(body.userCode);
     if (!userCode) throw new HttpError(400, "That is not a Crosscode confirmation code");
+    // Before the session leaves for the terminal, not after: this handshake is what
+    // `crosscode start` turns into a running daemon that writes to somebody's working tree,
+    // and the disclaimer of that belongs in front of it.
+    await requireAcceptedTerms(options, caller.userId);
     const bound = await options.store.bindDeviceCode({
       userCode,
       userId: caller.userId,
@@ -364,6 +446,7 @@ async function handleRequest(
 
   if (method === "POST" && url.pathname === "/v1/projects") {
     const body = createProjectRequestSchema.parse(await readJson(request, Math.min(bodyLimit, 16_384)));
+    await requireAcceptedTerms(options, caller.userId);
     await upsertCaller(options, caller);
     const project = await options.store.createProject(caller.userId, body);
     options.analytics?.capture("project_created", caller.userId);
@@ -374,6 +457,8 @@ async function handleRequest(
   const redeemMatch = method === "POST" ? url.pathname.match(/^\/v1\/invites\/([^/]+)\/redeem$/) : null;
   if (redeemMatch) {
     const code = decodeURIComponent(redeemMatch[1]!);
+    // An invitee arrives here having never seen the terms, so this is where they are asked.
+    await requireAcceptedTerms(options, caller.userId);
     const invite = await options.store.findInvite(code);
     if (!invite) throw new HttpError(404, "Invite code is not valid");
     if (invite.redeemedAt) throw new HttpError(409, "Invite has already been redeemed");
@@ -418,6 +503,10 @@ async function handleRequest(
 
   if (method === "POST" && url.pathname === "/v1/replicas") {
     const body = registerSyncReplicaRequestSchema.parse(await readJson(request, Math.min(bodyLimit, 16_384)));
+    // The last gate before a checkout is a synced checkout. The three routes in front of
+    // this one can all be reached without registering, but nothing syncs without a replica,
+    // so an account with no acceptance row cannot reach a synced state through any path.
+    await requireAcceptedTerms(options, caller.userId);
     await options.store.requireMembership(body.projectId, caller.userId);
     const replica = await options.store.registerReplica({
       projectId: body.projectId, userId: caller.userId, branch: body.branch
@@ -478,6 +567,21 @@ function cloneCommandFor(repo: string): string {
 
 function joinUrl(appUrl: string | undefined, code: string): string {
   return new URL(`/join/${code}`, appUrl ?? DEFAULT_APP_URL).toString();
+}
+
+/**
+ * Refuses a caller who has not accepted the current terms and privacy policy.
+ *
+ * 403 rather than 402-style special-casing, and with the reason spelled out, because the
+ * fix is a page the person can go and read. This is the mechanical half of the warranty
+ * disclaimer and the liability cap: an account that never assented can create nothing, join
+ * nothing, sign a terminal in, or register a checkout to sync.
+ */
+async function requireAcceptedTerms(options: RequestOptions, userId: string): Promise<void> {
+  const accepted = await options.store.latestAcceptedVersions(userId);
+  const outstanding = outstandingDocuments(accepted);
+  if (outstanding.length === 0) return;
+  throw new HttpError(403, `Accept the current Crosscode ${outstanding.join(" and ")} at ${DEFAULT_APP_URL}/device to continue`);
 }
 
 async function upsertCaller(options: RequestOptions, caller: Caller): Promise<void> {
@@ -663,6 +767,9 @@ function rateLimitRoute(method: string, pathname: string): string {
   const route = `${method} ${pathname}`;
   return new Set([
     "GET /healthz",
+    "GET /v1/legal",
+    "GET /v1/legal/acceptances",
+    "POST /v1/legal/acceptances",
     "POST /v1/auth/github/device",
     "POST /v1/auth/github/device/token",
     "POST /v1/auth/github/device/bind",

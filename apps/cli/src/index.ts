@@ -43,8 +43,9 @@ export async function runCli(args: string[], directory = process.cwd(), environm
     .command("start")
     .description("set this checkout up end to end: sign in, pick the project, start the daemon, install the agent surface")
     .option("--no-browser", "print the sign-in URL instead of opening a browser, for remote shells and CI")
-    .action(async (options: { browser?: boolean }) => {
-      result = { value: await setup(directory, environment, { openBrowser: options.browser !== false, report }) };
+    .option("-y, --yes", "accept the Crosscode terms without a keypress, for CI and scripted installs")
+    .action(async (options: { browser?: boolean; yes?: boolean }) => {
+      result = { value: await setup(directory, environment, { openBrowser: options.browser !== false, assumeYes: options.yes === true, report }) };
     });
 
   program
@@ -59,8 +60,9 @@ export async function runCli(args: string[], directory = process.cwd(), environm
     .description("redeem an invite code in this checkout, then set it up exactly as `start` would")
     .argument("<code>", "invite code from the join page, e.g. CC-7F3A-9C2E")
     .option("--no-browser", "print the sign-in URL instead of opening a browser, for remote shells and CI")
-    .action(async (code: string, options: { browser?: boolean }) => {
-      result = { value: await setup(directory, environment, { code, openBrowser: options.browser !== false, report }) };
+    .option("-y, --yes", "accept the Crosscode terms without a keypress, for CI and scripted installs")
+    .action(async (code: string, options: { browser?: boolean; yes?: boolean }) => {
+      result = { value: await setup(directory, environment, { code, openBrowser: options.browser !== false, assumeYes: options.yes === true, report }) };
     });
 
   program
