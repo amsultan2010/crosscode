@@ -9,7 +9,7 @@ import { syncDaemonConfigSchema } from "../../../packages/protocol/src/sync.js";
 // two sides agree, so asserting it with the CLI's helper alone would prove nothing.
 import { readSyncConfig, syncConfigPath } from "../../daemon/src/sync-config.js";
 import { installAgentSurface } from "./agent-surface.js";
-import { configPath, readConfig } from "./config.js";
+import { configPath, readConfig, writeConfig } from "./config.js";
 import type { DaemonControl } from "./daemon.js";
 import { httpSyncService, type SyncService } from "./service.js";
 import { setup, type Environment } from "./setup.js";
@@ -37,8 +37,8 @@ const SESSION = { accessToken: "token", refreshToken: "refresh", expiresAt: "203
  * the daemon -- each counting its calls, because "idempotent" here means exactly "called
  * once no matter how many times start runs".
  */
-function stubEnvironment(overrides: { service?: Partial<SyncService> } = {}) {
-  const calls = { createProject: 0, redeemInvite: 0, signIn: 0, daemonStart: 0 };
+function stubEnvironment(overrides: { service?: Partial<SyncService>; refreshSession?: Environment["refreshSession"] } = {}) {
+  const calls = { createProject: 0, redeemInvite: 0, signIn: 0, daemonStart: 0, refreshSession: 0 };
   let daemonRunning = false;
 
   const service: SyncService = {
@@ -74,6 +74,10 @@ function stubEnvironment(overrides: { service?: Partial<SyncService> } = {}) {
       calls.signIn += 1;
       return { session: SESSION, githubToken: "gho_test" };
     },
+    refreshSession: async (session) => {
+      calls.refreshSession += 1;
+      return overrides.refreshSession ? overrides.refreshSession(session) : session;
+    },
     createDaemon: () => daemon,
     // The real installer, not a stub: whether installing twice duplicates anything is the
     // question, so it has to be the code that writes the files.
@@ -90,7 +94,7 @@ describe("crosscode start", () => {
     const result = await setup(root, environment);
 
     expect(result).toMatchObject({ repoRoot: root, repo: "acme/app", projectId: "project-1", signedIn: "just-now", project: "created" });
-    expect(calls).toEqual({ createProject: 1, redeemInvite: 0, signIn: 1, daemonStart: 1 });
+    expect(calls).toEqual({ createProject: 1, redeemInvite: 0, signIn: 1, daemonStart: 1, refreshSession: 0 });
     // What it wrote is the contract's own shape, not a CLI-private one.
     expect(syncDaemonConfigSchema.parse(JSON.parse(await readFile(await configPath(root), "utf8")))).toMatchObject({
       projectId: "project-1",
@@ -117,6 +121,41 @@ describe("crosscode start", () => {
     expect(await readSyncConfig(root)).toMatchObject({ projectId: "project-1", repo: "acme/app" });
   });
 
+  /**
+   * The dead end this closes. Supabase access tokens last an hour and refresh tokens are
+   * spent on first use, so a checkout comes back to a session that is on disk and useless.
+   * The daemon died on it saying "run `crosscode start`"; `start` saw a session, said
+   * "Already signed in for this checkout", and started the same doomed daemon again. There
+   * was no way out of that loop from inside the CLI.
+   */
+  it("signs in again when the stored session cannot be refreshed", async () => {
+    const root = await checkout();
+    const { environment, calls } = stubEnvironment({ refreshSession: async () => undefined });
+    await setup(root, environment);
+    await writeConfig(root, { ...(await readSyncConfig(root)), service: { url: environment.serviceUrl, session: { ...SESSION, expiresAt: "2020-01-01T00:00:00.000Z" } } });
+
+    const second = await setup(root, environment);
+
+    expect(calls.refreshSession).toBe(1);
+    expect(second.signedIn).toBe("just-now");
+    expect(calls.signIn).toBe(2);
+  });
+
+  it("reuses a session it can still refresh, without a second sign-in", async () => {
+    const root = await checkout();
+    const refreshed = { ...SESSION, accessToken: "refreshed", expiresAt: "2031-01-01T00:00:00.000Z" };
+    const { environment, calls } = stubEnvironment({ refreshSession: async () => refreshed });
+    await setup(root, environment);
+    await writeConfig(root, { ...(await readSyncConfig(root)), service: { url: environment.serviceUrl, session: { ...SESSION, expiresAt: "2020-01-01T00:00:00.000Z" } } });
+
+    const second = await setup(root, environment);
+
+    expect(second.signedIn).toBe("already");
+    expect(calls.signIn).toBe(1);
+    // The refreshed token is what the daemon will be started with, so it has to be stored.
+    expect((await readSyncConfig(root)).service.session?.accessToken).toBe("refreshed");
+  });
+
   // The property the invite flow depends on: the person sending the link has already run
   // start, and the person receiving it is told to run the same command.
   it("is idempotent -- one project, one daemon, no duplicated MCP, skill, or hook install", async () => {
@@ -126,7 +165,7 @@ describe("crosscode start", () => {
     const first = await setup(root, environment);
     const second = await setup(root, environment);
 
-    expect(calls).toEqual({ createProject: 1, redeemInvite: 0, signIn: 1, daemonStart: 1 });
+    expect(calls).toEqual({ createProject: 1, redeemInvite: 0, signIn: 1, daemonStart: 1, refreshSession: 0 });
     expect(second.projectId).toBe(first.projectId);
     expect(second).toMatchObject({ signedIn: "already", project: "existing", daemon: { alreadyRunning: true } });
     expect(second.agent).toMatchObject({ mcp: { changed: false }, skill: { changed: false }, hooks: { changed: false } });
@@ -191,7 +230,7 @@ describe("crosscode join <code>", () => {
 
     const result = await setup(root, environment, { code: "CC-7F3A-9C2E" });
 
-    expect(calls).toEqual({ createProject: 0, redeemInvite: 1, signIn: 1, daemonStart: 1 });
+    expect(calls).toEqual({ createProject: 0, redeemInvite: 1, signIn: 1, daemonStart: 1, refreshSession: 0 });
     expect(result).toMatchObject({ projectId: "project-from-invite", repo: "acme/app", project: "joined", daemon: { alreadyRunning: false } });
     expect(await readConfig(root)).toMatchObject({ projectId: "project-from-invite", repo: "acme/app", service: { session: SESSION } });
     expect(result.agent).toMatchObject({ mcp: { changed: true }, skill: { changed: true }, hooks: { changed: true } });

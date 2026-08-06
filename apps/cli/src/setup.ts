@@ -7,6 +7,7 @@ import { readConfig, writeConfig } from "./config.js";
 import { localDaemon, type DaemonControl } from "./daemon.js";
 import { CliError } from "./errors.js";
 import { httpSyncService, type SyncService } from "./service.js";
+import { refreshStoredSession, type StoredSession } from "../../daemon/src/supabase-client.js";
 import { SERVICE_URL } from "./version.js";
 
 /**
@@ -26,6 +27,8 @@ export type Environment = {
   serviceUrl: string;
   createService(accessToken: string): SyncService;
   signIn: SignIn;
+  /** Trades a refresh token for a live one, or resolves undefined if it cannot. */
+  refreshSession(session: StoredSession): Promise<StoredSession | undefined>;
   createDaemon(repoRoot: string): DaemonControl;
   installAgentSurface(repoRoot: string): Promise<AgentSurface>;
 };
@@ -35,6 +38,7 @@ export function defaultEnvironment(): Environment {
     serviceUrl: SERVICE_URL,
     createService: (accessToken) => httpSyncService(SERVICE_URL, accessToken),
     signIn: githubSignIn(),
+    refreshSession: (session) => refreshStoredSession(session).catch(() => undefined),
     createDaemon: (repoRoot) => localDaemon(repoRoot),
     installAgentSurface: (repoRoot) => installAgentSurface(repoRoot)
   };
@@ -79,12 +83,20 @@ export async function setup(directory: string, environment: Environment, options
   // so it exists for exactly as long as the handshake that produced it. `join` therefore
   // signs in even in a checkout that is already signed in, rather than failing at the
   // redeem call with nothing to offer.
-  const reuseSession = session && !options.code;
-  if (reuseSession) report("Already signed in for this checkout.");
-  const signedIn = reuseSession
+  //
+  // A stored session is only worth reusing if it still works. Supabase access tokens last
+  // an hour and refresh tokens are spent on first use, so "there is a session on disk" and
+  // "this checkout can talk to the service" are different questions. Answering the first
+  // one left the user with no way out: the daemon died on the dead session telling them to
+  // run `crosscode start`, and `start` said "Already signed in for this checkout" and
+  // started the same doomed daemon again.
+  const usable = session && !options.code ? await usableSession(session, environment) : undefined;
+  if (usable) report("Already signed in for this checkout.");
+  else if (session && !options.code) report("This checkout's sign-in has expired; signing in again.");
+  const signedIn = usable
     ? undefined
     : await environment.signIn({ serviceUrl: environment.serviceUrl, openBrowser: options.openBrowser !== false, report });
-  const activeSession = signedIn?.session ?? session!;
+  const activeSession = signedIn?.session ?? usable!;
 
   const service = environment.createService(activeSession.accessToken);
   const { projectId, repo, origin } = await resolveProject(service, existing, localRepo, repository.root, options.code, signedIn?.githubToken, report);
@@ -105,12 +117,25 @@ export async function setup(directory: string, environment: Environment, options
     repo,
     projectId,
     branch: repository.branch,
-    signedIn: reuseSession ? "already" : "just-now",
+    signedIn: usable ? "already" : "just-now",
     project: origin,
     daemon,
     agent
   };
 }
+
+/**
+ * The stored session if it can still be used, refreshed first if it is close to expiring,
+ * and undefined if the refresh token is spent or revoked -- in which case the only way
+ * forward is signing in again, which is what the caller does.
+ */
+async function usableSession(session: StoredSession, environment: Environment): Promise<StoredSession | undefined> {
+  if (Date.parse(session.expiresAt) - Date.now() > EXPIRY_MARGIN_MS) return session;
+  return environment.refreshSession(session);
+}
+
+/** Refresh this far ahead of expiry, so setup never hands the daemon a token about to die. */
+const EXPIRY_MARGIN_MS = 60_000;
 
 /**
  * Which project this checkout syncs, in the one order that keeps `start` idempotent:

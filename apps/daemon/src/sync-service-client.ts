@@ -1,4 +1,5 @@
 import { WebSocket } from "ws";
+import { refreshStoredSession, type StoredSession } from "./supabase-client.js";
 import {
   changesResponseSchema,
   presenceSchema,
@@ -41,6 +42,8 @@ export type SyncStreamHandlers = {
 const INITIAL_BACKOFF_MS = 500;
 const MAX_BACKOFF_MS = 15_000;
 const POLL_INTERVAL_MS = 3_000;
+/** Refresh this far ahead of expiry, so a request in flight never crosses the boundary. */
+const EXPIRY_MARGIN_MS = 60_000;
 
 export class SyncServiceClient {
   private socket?: WebSocket;
@@ -53,11 +56,19 @@ export class SyncServiceClient {
   private handlers?: SyncStreamHandlers;
   private cursorProvider: () => number = () => 0;
 
+  private session?: StoredSession;
+  private refreshing?: Promise<StoredSession>;
+
   constructor(
     private readonly config: SyncDaemonConfig,
     readonly branch: string,
-    private replicaId?: string
-  ) {}
+    private replicaId?: string,
+    /** Called with a refreshed session so the caller can persist it for the next start-up. */
+    private readonly onSession?: (session: StoredSession) => Promise<void>,
+    private readonly pollIntervalMs = POLL_INTERVAL_MS
+  ) {
+    this.session = config.service.session;
+  }
 
   /** In touch with the service, by either transport -- what `crosscode status` reports. */
   get connected(): boolean {
@@ -111,7 +122,7 @@ export class SyncServiceClient {
     this.handlers = handlers;
     this.cursorProvider = cursor;
     this.stopped = false;
-    this.connect();
+    void this.connect();
   }
 
   stop(): void {
@@ -124,9 +135,14 @@ export class SyncServiceClient {
     socket?.close();
   }
 
-  private connect(): void {
+  private async connect(): Promise<void> {
     if (this.stopped || !this.replicaId) return;
-    const socket = new WebSocket(`${streamUrl(this.config.service.url)}/v1/stream`, this.authorization() ? { headers: { authorization: this.authorization()! } } : {});
+    // A refresh can fail -- a revoked or rotated-away refresh token -- and that must not
+    // take the daemon down from a reconnect timer. Falling through to polling is the
+    // honest outcome: it fails the same way, and reports `connected: false`.
+    const authorization = await this.authorization().catch(() => undefined);
+    if (this.stopped) return;
+    const socket = new WebSocket(`${streamUrl(this.config.service.url)}/v1/stream`, authorization ? { headers: { authorization } } : {});
     this.socket = socket;
     socket.on("open", () => {
       socket.send(JSON.stringify({
@@ -164,7 +180,7 @@ export class SyncServiceClient {
     if (this.stopped) return;
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 2, MAX_BACKOFF_MS);
-    this.reconnectTimer = setTimeout(() => this.connect(), delay);
+    this.reconnectTimer = setTimeout(() => void this.connect(), delay);
     this.reconnectTimer.unref();
   }
 
@@ -188,7 +204,7 @@ export class SyncServiceClient {
         this.polling = false;
       }
       if (this.stopped || this.streaming) { this.stopPolling(); return; }
-      this.pollTimer = setTimeout(() => void tick(), POLL_INTERVAL_MS);
+      this.pollTimer = setTimeout(() => void tick(), this.pollIntervalMs);
       this.pollTimer.unref();
     };
     void tick();
@@ -206,13 +222,31 @@ export class SyncServiceClient {
     return this.replicaId;
   }
 
-  private authorization(): string | undefined {
-    const token = this.config.service.session?.accessToken;
-    return token ? `Bearer ${token}` : undefined;
+  /**
+   * The bearer header, refreshed if it is about to expire. Supabase access tokens last an
+   * hour; a daemon is expected to outlive that, so every authenticated call goes through
+   * here rather than reading the token that was written at sign-in.
+   *
+   * Concurrent callers share one refresh via `refreshing`: the socket reconnecting and a
+   * publish landing at the same moment would otherwise each spend the refresh token, and
+   * Supabase rotates it, so the second would be spending one that no longer exists.
+   */
+  private async authorization(): Promise<string | undefined> {
+    const session = this.session;
+    if (!session) return undefined;
+    if (Date.parse(session.expiresAt) - Date.now() > EXPIRY_MARGIN_MS) return `Bearer ${session.accessToken}`;
+    this.refreshing ??= refreshStoredSession(session)
+      .then(async (refreshed) => {
+        this.session = refreshed;
+        await this.onSession?.(refreshed);
+        return refreshed;
+      })
+      .finally(() => { this.refreshing = undefined; });
+    return `Bearer ${(await this.refreshing).accessToken}`;
   }
 
   private async request(method: "GET" | "POST", path: string, body?: unknown): Promise<unknown> {
-    const authorization = this.authorization();
+    const authorization = await this.authorization();
     const response = await fetch(new URL(path, this.config.service.url), {
       method,
       headers: {

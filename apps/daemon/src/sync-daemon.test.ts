@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createServer } from "node:http";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -36,6 +37,7 @@ const FAST: SyncDaemonOptions = {
   flushMs: 100,
   deferralMs: 60,
   gitPollMs: 100,
+  streamPollMs: 100,
   // The 10s hot window is real behaviour, not a constant worth waiting out in a test.
   engine: { hotWindowMs: 150, maxDeferrals: 3 }
 };
@@ -241,6 +243,41 @@ describe("the daemon around the engine", () => {
     // And the other way, so it is a two-way sync rather than one lucky direction.
     await type(roots[1]!, "a.txt", "and back again\n");
     await waitFor("alice to receive it", () => allEqual(roots, "a.txt", "and back again\n"));
+  }, 60_000);
+
+  /**
+   * `crosscode start` polls for the descriptor every 100ms and reports success the moment
+   * it appears. Written when the loopback server bound, it appeared before the stream was
+   * up -- so a daemon that then died on an expired session still had `start` announcing
+   * "Daemon started; this checkout is syncing" about a process that was already gone.
+   */
+  it("does not advertise itself as ready while start-up is still in flight", async () => {
+    // Accepts the connection and never answers, so the daemon is unambiguously still
+    // starting up while the assertions below run.
+    const hanging = createServer(() => {});
+    await new Promise<void>((ready) => hanging.listen(0, "127.0.0.1", ready));
+    const service = await startSyncServiceStub();
+    services.push(service);
+    const origin = await seedOrigin({ "a.txt": "0\n" });
+    const root = await checkout(origin, "alice", service);
+    await writeSyncConfig(root, {
+      projectId: "project-1", repo: "acme/app",
+      service: { url: `http://127.0.0.1:${(hanging.address() as { port: number }).port}` }
+    });
+
+    const starting = start(root).catch(() => undefined);
+    // Comfortably past the point the loopback server has bound and the old code would have
+    // published the descriptor, and well inside the request that never returns.
+    await new Promise((settle) => setTimeout(settle, 2_000));
+    const descriptor = await read(root, ".git/crosscode/daemon.json");
+
+    // Dropping the connection fails the pending request now rather than at its 10s timeout,
+    // which is 8s this suite does not need to spend.
+    hanging.closeAllConnections();
+    await new Promise<void>((closed) => hanging.close(() => closed()));
+    await starting;
+
+    expect(descriptor).toBeNull();
   }, 60_000);
 
   it("resyncs from full content when the service says the cursor is too old", async () => {

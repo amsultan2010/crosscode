@@ -35,6 +35,7 @@ function environmentWithDaemon(daemon: Partial<DaemonControl>): Environment {
     serviceUrl: "https://www.getcrosscode.dev",
     createService: unused,
     signIn: unused,
+    refreshSession: unused,
     createDaemon: () => ({
       start: async () => ({ alreadyRunning: false, pid: 1 }),
       stop: async () => ({ wasRunning: false }),
