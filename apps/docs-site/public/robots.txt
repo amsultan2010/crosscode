@@ -1,0 +1,38 @@
+User-agent: *
+Allow: /
+Disallow: /auth/
+Disallow: /join/
+Disallow: /device
+Disallow: /api/
+
+# Answer engines and training crawlers are welcome on the docs; the docs exist to be
+# read by agents as much as by people. The per-user paths above stay off-limits.
+User-agent: GPTBot
+Allow: /
+Disallow: /auth/
+Disallow: /join/
+Disallow: /device
+Disallow: /api/
+
+User-agent: ClaudeBot
+Allow: /
+Disallow: /auth/
+Disallow: /join/
+Disallow: /device
+Disallow: /api/
+
+User-agent: PerplexityBot
+Allow: /
+Disallow: /auth/
+Disallow: /join/
+Disallow: /device
+Disallow: /api/
+
+User-agent: Google-Extended
+Allow: /
+Disallow: /auth/
+Disallow: /join/
+Disallow: /device
+Disallow: /api/
+
+Sitemap: https://www.getcrosscode.dev/sitemap.xml
