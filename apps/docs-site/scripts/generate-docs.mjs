@@ -98,6 +98,8 @@ const NAV_GROUPS = [
     links: [
       { href: "/docs/support.html", label: "Support", key: "support" },
       { href: "/docs/terms.html", label: "Terms of Service", key: "terms" },
+      { href: "/docs/dmca.html", label: "Copyright and DMCA", key: "dmca" },
+      { href: "/docs/dsa-contact.html", label: "EU DSA contact", key: "dsa-contact" },
       { href: "/docs/privacy-policy.html", label: "Privacy Policy", key: "privacy-policy" },
       { href: "/docs/cookies.html", label: "Cookies", key: "cookies" },
       { href: "/docs/subprocessors.html", label: "Subprocessors", key: "subprocessors" },
@@ -163,6 +165,22 @@ const GENERATED_PAGES = [
     title: "Terms of Service",
     mdFile: "terms.md",
     htmlOut: "terms.html",
+    nextHref: "/docs/dmca.html",
+    nextLabel: "Copyright and DMCA"
+  },
+  {
+    key: "dmca",
+    title: "Copyright and DMCA",
+    mdFile: "dmca.md",
+    htmlOut: "dmca.html",
+    nextHref: "/docs/dsa-contact.html",
+    nextLabel: "EU DSA contact"
+  },
+  {
+    key: "dsa-contact",
+    title: "EU DSA contact",
+    mdFile: "dsa-contact.md",
+    htmlOut: "dsa-contact.html",
     nextHref: "/docs/privacy-policy.html",
     nextLabel: "Privacy Policy"
   },
