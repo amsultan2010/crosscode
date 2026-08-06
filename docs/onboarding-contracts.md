@@ -13,7 +13,7 @@ The whole budget is **two pasted lines**. Anything that adds a third is wrong.
 ```
 Alice:  crosscode start           → device-code sign-in, project created, daemon up,
                                     agent wired
-        crosscode invite          → https://getcrosscode.dev/join/7f3a9c2e
+        crosscode invite          → https://www.getcrosscode.dev/join/7f3a9c2e
 
 Bob:    opens the link, signs in with GitHub
         the page verifies he has access to the repo, then shows him:
@@ -89,7 +89,7 @@ without stopping anything.
 
 ```jsonc
 { "code": "CC-7F3A-9C2E",                          // the human-typed form
-  "url": "https://getcrosscode.dev/join/7f3a9c2e", // what Alice sends
+  "url": "https://www.getcrosscode.dev/join/7f3a9c2e", // what Alice sends
   "projectId": "…", "repo": "acme/app", "expiresAt": "…" }
 ```
 

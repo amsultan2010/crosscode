@@ -1,5 +1,5 @@
 <h1 align="center">
-  <a href="https://getcrosscode.dev"><img src="assets/LOGO-square.png" alt="Crosscode" width="64" valign="middle" /></a> Crosscode
+  <a href="https://www.getcrosscode.dev"><img src="assets/LOGO-square.png" alt="Crosscode" width="64" valign="middle" /></a> Crosscode
 </h1>
 
 <p align="center">
@@ -166,7 +166,7 @@ instead of opening one.
 To bring a teammate in:
 
 ```bash
-crosscode invite          # prints https://getcrosscode.dev/join/7f3a9c2e
+crosscode invite          # prints https://www.getcrosscode.dev/join/7f3a9c2e
 ```
 
 They open the link, sign in with GitHub, and the page gives them two lines to paste:

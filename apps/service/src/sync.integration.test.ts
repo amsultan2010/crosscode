@@ -34,7 +34,7 @@ describe.skipIf(!databaseUrl)("sync service on PostgreSQL", () => {
       store,
       jwks: await testSupabaseJwks(),
       supabaseUrl,
-      appUrl: "https://getcrosscode.dev",
+      appUrl: "https://www.getcrosscode.dev",
       // The real checker calls GitHub. Access is denied-by-default in the route itself and
       // the denial paths are covered in http.test.ts; here it stands in for a yes.
       checkRepoAccess: async () => true
@@ -164,7 +164,7 @@ describe.skipIf(!databaseUrl)("sync service on PostgreSQL", () => {
     expect(invited.status).toBe(201);
     const invite = (await invited.json() as Envelope<{ code: string; url: string; repo: string }>).data;
     expect(invite.code).toMatch(/^CC-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
-    expect(invite.url).toBe(`https://getcrosscode.dev/join/${invite.code}`);
+    expect(invite.url).toBe(`https://www.getcrosscode.dev/join/${invite.code}`);
 
     // Before redeeming, the teammate is not in the project at all.
     expect((await post(teammate, "/v1/replicas", { projectId: project.id, branch: "main" })).status).toBe(403);

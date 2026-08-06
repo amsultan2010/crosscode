@@ -1,6 +1,6 @@
 // The receiving half of onboarding: /join/:code.
 //
-// `crosscode invite` prints https://getcrosscode.dev/join/7f3a9c2e. Whoever opens that link
+// `crosscode invite` prints https://www.getcrosscode.dev/join/7f3a9c2e. Whoever opens that link
 // signs in with GitHub, and this page then verifies they actually have access to the repo
 // before it shows them anything. If they do, they get one copy-paste block of two lines and
 // nothing else -- two pasted lines is the entire onboarding budget.
