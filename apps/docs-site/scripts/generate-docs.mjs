@@ -97,7 +97,11 @@ const NAV_GROUPS = [
     label: "Support & legal",
     links: [
       { href: "/docs/support.html", label: "Support", key: "support" },
-      { href: "/docs/terms.html", label: "Terms of Service", key: "terms" }
+      { href: "/docs/terms.html", label: "Terms of Service", key: "terms" },
+      { href: "/docs/privacy-policy.html", label: "Privacy Policy", key: "privacy-policy" },
+      { href: "/docs/cookies.html", label: "Cookies", key: "cookies" },
+      { href: "/docs/subprocessors.html", label: "Subprocessors", key: "subprocessors" },
+      { href: "/docs/dpa.html", label: "Data Processing Agreement", key: "dpa" }
     ]
   }
 ];
@@ -159,6 +163,38 @@ const GENERATED_PAGES = [
     title: "Terms of Service",
     mdFile: "terms.md",
     htmlOut: "terms.html",
+    nextHref: "/docs/privacy-policy.html",
+    nextLabel: "Privacy Policy"
+  },
+  {
+    key: "privacy-policy",
+    title: "Privacy Policy",
+    mdFile: "privacy-policy.md",
+    htmlOut: "privacy-policy.html",
+    nextHref: "/docs/cookies.html",
+    nextLabel: "Cookies and local storage"
+  },
+  {
+    key: "cookies",
+    title: "Cookies and local storage",
+    mdFile: "cookies.md",
+    htmlOut: "cookies.html",
+    nextHref: "/docs/subprocessors.html",
+    nextLabel: "Subprocessors"
+  },
+  {
+    key: "subprocessors",
+    title: "Subprocessors",
+    mdFile: "subprocessors.md",
+    htmlOut: "subprocessors.html",
+    nextHref: "/docs/dpa.html",
+    nextLabel: "Data Processing Agreement"
+  },
+  {
+    key: "dpa",
+    title: "Data Processing Agreement",
+    mdFile: "dpa.md",
+    htmlOut: "dpa.html",
     nextHref: "/docs/index.html",
     nextLabel: "Docs overview"
   }
@@ -241,10 +277,25 @@ ${bodyHtml}
   <footer class="site-footer">
     <p>Crosscode: local-first Git coordination.</p>
     <p><a href="/">Home</a> &middot; <a href="${GITHUB_REPO}" rel="noopener">View on GitHub</a></p>
+    <p>
+      <a href="/docs/privacy.html">Privacy</a> &middot;
+      <a href="/docs/privacy-policy.html">Privacy Policy</a> &middot;
+      <a href="/docs/cookies.html">Cookies</a> &middot;
+      <a href="/docs/subprocessors.html">Subprocessors</a> &middot;
+      <a href="/docs/dpa.html">DPA</a>
+    </p>
   </footer>
 </body>
 </html>
 `;
+}
+
+// Legal docs carry `<!-- LAWYER: ... -->` notes flagging choices that need review. The
+// renderer runs with html:false, so a comment left in would be escaped and printed on the
+// page as visible text. Strip them from everything published; the repo's docs/*.md keeps
+// them, which is where they are meant to be read.
+function stripHtmlComments(markdown) {
+  return markdown.replace(/^[ \t]*<!--[\s\S]*?-->[ \t]*\r?\n?/gm, "");
 }
 
 function generateDocPages() {
@@ -253,7 +304,7 @@ function generateDocPages() {
 
   for (const p of GENERATED_PAGES) {
     const mdPath = path.join(rootDocsDir, p.mdFile);
-    const mdContent = readFileSync(mdPath, "utf8");
+    const mdContent = stripHtmlComments(readFileSync(mdPath, "utf8"));
     const bodyHtml = md.render(mdContent);
     const mdOutName = p.mdOutName ?? p.mdFile;
     const mdHref = `/docs/${mdOutName}`;
@@ -360,7 +411,7 @@ function generateLlmsFullTxt() {
   ];
 
   for (const s of sections) {
-    const content = readFileSync(path.join(rootDocsDir, s.file), "utf8");
+    const content = stripHtmlComments(readFileSync(path.join(rootDocsDir, s.file), "utf8"));
     parts.push("---", "", `<!-- source: docs/${s.file} -->`, "", content.trimEnd(), "");
   }
 
