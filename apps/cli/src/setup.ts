@@ -6,6 +6,7 @@ import { installAgentSurface, type AgentSurface } from "./agent-surface.js";
 import { readConfig, writeConfig } from "./config.js";
 import { localDaemon, type DaemonControl } from "./daemon.js";
 import { CliError } from "./errors.js";
+import { confirmTerms, type ConfirmKind } from "./notice.js";
 import { httpSyncService, type SyncService } from "./service.js";
 import { refreshStoredSession, type StoredSession } from "../../daemon/src/supabase-client.js";
 import { SERVICE_URL } from "./version.js";
@@ -31,6 +32,11 @@ export type Environment = {
   refreshSession(session: StoredSession): Promise<StoredSession | undefined>;
   createDaemon(repoRoot: string): DaemonControl;
   installAgentSurface(repoRoot: string): Promise<AgentSurface>;
+  /**
+   * Shows the terms notice and waits for a keypress. Returns whether it prompted -- see
+   * notice.ts, and see acceptTerms below for why the difference matters.
+   */
+  confirmTerms(options: { kind: ConfirmKind; assumeYes: boolean; report: (line: string) => void }): Promise<boolean>;
 };
 
 export function defaultEnvironment(): Environment {
@@ -40,7 +46,8 @@ export function defaultEnvironment(): Environment {
     signIn: githubSignIn(),
     refreshSession: (session) => refreshStoredSession(session).catch(() => undefined),
     createDaemon: (repoRoot) => localDaemon(repoRoot),
-    installAgentSurface: (repoRoot) => installAgentSurface(repoRoot)
+    installAgentSurface: (repoRoot) => installAgentSurface(repoRoot),
+    confirmTerms: (options) => confirmTerms(options)
   };
 }
 
@@ -51,6 +58,8 @@ export type SetupOptions = {
   openBrowser?: boolean;
   /** Progress for a human, on stderr, so `--json` stays a single parseable line. */
   report?: (line: string) => void;
+  /** `--yes`: accept the terms from the command line, for CI and scripted installs. */
+  assumeYes?: boolean;
 };
 
 export type SetupResult = {
@@ -66,6 +75,10 @@ export type SetupResult = {
 
 export async function setup(directory: string, environment: Environment, options: SetupOptions = {}): Promise<SetupResult> {
   const report = options.report ?? (() => {});
+  const assumeYes = options.assumeYes === true;
+  // Before anything else, including before finding out whether this is even a repository:
+  // what the notice describes is what the rest of this function sets in motion.
+  const noticeShown = await environment.confirmTerms({ kind: "first-run", assumeYes, report });
   const repository = await discoverRepository(directory).catch(() => undefined);
   if (!repository) {
     throw new CliError(
@@ -99,6 +112,7 @@ export async function setup(directory: string, environment: Environment, options
   const activeSession = signedIn?.session ?? usable!;
 
   const service = environment.createService(activeSession.accessToken);
+  await acceptTerms(service, environment, { assumeYes, noticeShown, report });
   const { projectId, repo, origin } = await resolveProject(service, existing, localRepo, repository.root, options.code, signedIn?.githubToken, report);
 
   const config: SyncDaemonConfig = { projectId, repo, service: { url: environment.serviceUrl, session: activeSession } };
@@ -136,6 +150,34 @@ async function usableSession(session: StoredSession, environment: Environment): 
 
 /** Refresh this far ahead of expiry, so setup never hands the daemon a token about to die. */
 const EXPIRY_MARGIN_MS = 60_000;
+
+/**
+ * Records this person's acceptance, but only of something they were actually shown.
+ *
+ * The service is asked what is outstanding rather than the CLI deciding: a fresh account
+ * owes everything, an account whose stored version predates a change owes the changed
+ * documents, and an account that is up to date owes nothing and is not asked. That last case
+ * is what keeps `crosscode start` from re-recording an acceptance on every run.
+ *
+ * The notice is shown again when something is outstanding and this run did not already show
+ * it -- which is exactly the "the terms changed since you last accepted" case. Recording
+ * without showing anything would be the CLI agreeing on the user's behalf.
+ */
+async function acceptTerms(
+  service: SyncService,
+  environment: Environment,
+  options: { assumeYes: boolean; noticeShown: boolean; report: (line: string) => void }
+): Promise<void> {
+  const status = await service.legalStatus();
+  if (status.outstanding.length === 0) return;
+  if (!options.noticeShown) {
+    await environment.confirmTerms({ kind: "changed", assumeYes: options.assumeYes, report: options.report });
+  }
+  // Straight from the answer above: the version recorded is the version the service says is
+  // current, and the service refuses anything else.
+  await service.acceptTerms(Object.fromEntries(status.documents.map((document) => [document.document, document.version])));
+  options.report("Recorded your acceptance of the Crosscode terms and privacy policy.");
+}
 
 /**
  * Which project this checkout syncs, in the one order that keeps `start` idempotent:

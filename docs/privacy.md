@@ -3,6 +3,12 @@
 Crosscode syncs your uncommitted edits between checkouts, so those files pass through our
 coordination service. This page says exactly what that service holds.
 
+This is the honest summary. The complete, formal notice — legal bases, retention per
+category, your rights and how to exercise them — is the
+[Privacy Policy](./privacy-policy.md). Alongside it: [Cookies and local
+storage](./cookies.md), [Subprocessors](./subprocessors.md), and the [Data Processing
+Agreement](./dpa.md) for personal data that sits inside the files you sync.
+
 **We hold your file contents.** There is no end-to-end encryption. Files are encrypted in
 transit (TLS) and at rest, under keys we manage, which means a Crosscode engineer with
 production access could read them. We would rather say that plainly than imply otherwise.
@@ -64,3 +70,7 @@ tell you that than let you believe otherwise.
 
 Ask us and we delete your account, your projects, and the change history attached to them.
 See [support](./support.md). Your repositories are unaffected, because they were never ours.
+
+Your other rights — access, rectification, restriction, portability, objection — and the
+one-month response time are in §9 of the [Privacy Policy](./privacy-policy.md). Write to
+privacy@getcrosscode.dev for any of them.

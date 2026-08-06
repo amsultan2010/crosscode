@@ -15,6 +15,14 @@
 //     then forgets. `crosscode join` needs it to prove to GitHub that the person joining
 //     can actually read the repository, and this handshake is the only moment it exists.
 
+//   * it asks for the terms to be accepted before it hands anything over. This is the
+//     surface most people actually arrive through, and what it authorizes is a daemon that
+//     writes into their working tree -- so the disclaimer of that belongs in front of it,
+//     not in a footer. The service refuses to bind a code for an account with no current
+//     acceptance recorded, so the checkbox is a gate rather than a decoration.
+
+import { consentFieldHtml, consentGiven, CONSENT_MESSAGES, fetchLegal, fetchOutstanding, recordAcceptance, showConsentError } from "./legal.js";
+
 const SERVICE_URL = import.meta.env?.VITE_SERVICE_URL ?? "";
 
 /** One spelling of the code, so "wdjb mjht" and "WDJB-MJHT" are the same thing typed twice. */
@@ -94,10 +102,10 @@ export function renderDevice(root, state) {
     <p>It's the code <code>crosscode start</code> printed in your terminal.</p>
     ${title ? `<p class="error" role="alert"><strong>${title}.</strong> ${detail}</p>` : ""}
     <form data-device-form class="stack">
-      <label>Confirmation code
-        <input name="userCode" autocomplete="off" autocapitalize="characters" spellcheck="false"
-               placeholder="WDJB-MJHT" value="${escapeHtml(state.userCode ?? "")}" required />
-      </label>
+      <label for="device-user-code">Confirmation code</label>
+      <input id="device-user-code" name="userCode" autocomplete="off" autocapitalize="characters" spellcheck="false"
+             placeholder="WDJB-MJHT" value="${escapeHtml(state.userCode ?? "")}" required />
+      ${state.needsConsent ? consentFieldHtml({ legal: state.legal }) : ""}
       <button type="submit">Sign in this terminal</button>
     </form>`;
 }
@@ -118,8 +126,15 @@ export async function mountDevicePage(root, { location = window.location } = {})
   // to retype and is no less safe -- the code does nothing without the sign-in beside it.
   const fromLink = new URL(location.href).searchParams.get("code") ?? "";
 
+  // What the service says is current, and whether this account still owes an acceptance.
+  // Both are asked once, here: a page that decided for itself which version to show would be
+  // the drift the whole mechanism exists to prevent.
+  const legal = await fetchLegal();
+  const outstanding = await fetchOutstanding({ accessToken: data.session?.access_token });
+  let needsConsent = Boolean(legal) && (outstanding?.outstanding?.length ?? 1) > 0;
+
   const show = (state) => {
-    renderDevice(root, state);
+    renderDevice(root, { ...state, needsConsent: needsConsent && state.status !== "bound" && state.status !== "signed-out", legal });
     root.querySelector("[data-github-signin]")?.addEventListener("click", () => {
       // Back to this same URL, so a code carried in the query survives the round trip
       // through GitHub.
@@ -135,9 +150,34 @@ export async function mountDevicePage(root, { location = window.location } = {})
     root.querySelector("[data-device-form]")?.addEventListener("submit", (event) => {
       event.preventDefault();
       const userCode = new FormData(event.currentTarget).get("userCode");
-      void bindDeviceCode({ userCode, session }).then((next) => { show({ ...next, userCode }); });
+      void submit(userCode);
     });
   };
+
+  /**
+   * Acceptance first, and only then the handshake.
+   *
+   * In this order because the service enforces the same order: it refuses to bind a code for
+   * an account with nothing recorded, so recording after binding would fail every time and
+   * recording nothing would fail the bind. Either way the terminal is not signed in until
+   * somebody has ticked the box.
+   */
+  async function submit(userCode) {
+    if (needsConsent) {
+      if (!consentGiven(root)) {
+        showConsentError(root, CONSENT_MESSAGES.unticked);
+        return;
+      }
+      const recorded = await recordAcceptance({ surface: "device", legal, accessToken: session?.access_token });
+      if (recorded.status !== "recorded") {
+        showConsentError(root, CONSENT_MESSAGES[recorded.status] ?? CONSENT_MESSAGES.unreachable);
+        return;
+      }
+      needsConsent = false;
+    }
+    const next = await bindDeviceCode({ userCode, session });
+    show({ ...next, userCode });
+  }
 
   // A session with no `provider_token` is a session Supabase restored from storage rather
   // than one it just minted: the GitHub token is returned once, at sign-in, and never

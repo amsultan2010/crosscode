@@ -37,11 +37,29 @@ const SESSION = { accessToken: "token", refreshToken: "refresh", expiresAt: "203
  * the daemon -- each counting its calls, because "idempotent" here means exactly "called
  * once no matter how many times start runs".
  */
+/** What the service says is published, and what a fresh account therefore owes. */
+const LEGAL_DOCUMENTS = [
+  { document: "terms", version: "2026-08-01", url: "/docs/terms.html" },
+  { document: "privacy", version: "2026-08-01", url: "/docs/privacy-policy.html" }
+];
+
 function stubEnvironment(overrides: { service?: Partial<SyncService>; refreshSession?: Environment["refreshSession"] } = {}) {
   const calls = { createProject: 0, redeemInvite: 0, signIn: 0, daemonStart: 0, refreshSession: 0 };
+  /**
+   * The terms half, counted separately so the assertions above keep saying exactly what they
+   * said: `calls` is the "did start do this twice" ledger.
+   */
+  const legal = { prompts: [] as string[], accepted: [] as Record<string, string>[] };
+  let outstanding = ["terms", "privacy"];
+  let noticeSeen = false;
   let daemonRunning = false;
 
   const service: SyncService = {
+    legalStatus: async () => ({ accepted: {}, outstanding, documents: LEGAL_DOCUMENTS }),
+    acceptTerms: async (documents) => {
+      legal.accepted.push(documents);
+      outstanding = [];
+    },
     createProject: async (request) => {
       calls.createProject += 1;
       return { id: `project-${calls.createProject}`, name: request.name, repo: request.repo, plan: "free", createdAt: "2026-01-01T00:00:00.000Z" };
@@ -81,9 +99,17 @@ function stubEnvironment(overrides: { service?: Partial<SyncService>; refreshSes
     createDaemon: () => daemon,
     // The real installer, not a stub: whether installing twice duplicates anything is the
     // question, so it has to be the code that writes the files.
-    installAgentSurface: (repoRoot) => installAgentSurface(repoRoot)
+    installAgentSurface: (repoRoot) => installAgentSurface(repoRoot),
+    // Stands in for notice.ts's flag file: the first-run notice is shown once per machine,
+    // and "the terms changed" is shown whenever the service says something is outstanding.
+    confirmTerms: async ({ kind }) => {
+      if (kind === "first-run" && noticeSeen) return false;
+      legal.prompts.push(kind);
+      noticeSeen = true;
+      return true;
+    }
   };
-  return { environment, calls };
+  return { environment, calls, legal };
 }
 
 describe("crosscode start", () => {
@@ -214,6 +240,50 @@ describe("crosscode start", () => {
     ]);
   });
 
+  /**
+   * The CLI's half of the acceptance record. The notice is shown, the person presses a key,
+   * and *that* is what gets written down -- at the versions the service says are current,
+   * because the CLI never composes a version of its own.
+   */
+  it("records the acceptance the notice asked for, once, at the version the service published", async () => {
+    const root = await checkout();
+    const { environment, legal } = stubEnvironment();
+
+    await setup(root, environment);
+    await setup(root, environment);
+
+    expect(legal.prompts).toEqual(["first-run"]);
+    expect(legal.accepted).toEqual([{ terms: "2026-08-01", privacy: "2026-08-01" }]);
+  });
+
+  // Terms §11: a material change means accepting again. The notice is per machine, so a
+  // machine that has already seen it still has to be shown the change before it is recorded.
+  it("shows the notice again when the service says something is outstanding, before recording it", async () => {
+    const root = await checkout();
+    const { environment, legal } = stubEnvironment();
+    await setup(root, environment);
+
+    let outstanding = ["terms"];
+    const existing = environment.createService;
+    environment.createService = (accessToken) => ({
+      ...existing(accessToken),
+      legalStatus: async () => ({
+        accepted: { terms: "2025-01-01", privacy: "2026-08-01" },
+        outstanding,
+        documents: LEGAL_DOCUMENTS
+      }),
+      acceptTerms: async (documents) => {
+        legal.accepted.push(documents);
+        outstanding = [];
+      }
+    });
+
+    await setup(root, environment);
+
+    expect(legal.prompts).toEqual(["first-run", "changed"]);
+    expect(legal.accepted).toHaveLength(2);
+  });
+
   it("refuses a checkout that is not a git repository", async () => {
     const bare = await mkdtemp(join(tmpdir(), "crosscode-setup-"));
     directories.push(bare);
@@ -247,9 +317,12 @@ describe("crosscode join <code>", () => {
     const root = await checkout();
     const { environment, calls } = stubEnvironment();
     const redeemedWith: (string | undefined)[] = [];
+    let outstanding = ["terms", "privacy"];
     environment.createService = () => ({
       createProject: async () => { throw new Error("not used"); },
       createInvite: async () => { throw new Error("not used"); },
+      legalStatus: async () => ({ accepted: {}, outstanding, documents: LEGAL_DOCUMENTS }),
+      acceptTerms: async () => { outstanding = []; },
       redeemInvite: async (_code: string, githubToken: string) => {
         calls.redeemInvite += 1;
         redeemedWith.push(githubToken);

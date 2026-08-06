@@ -14,8 +14,10 @@
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
   <header class="site-header">
-    <nav>
+    <nav aria-label="Primary">
       <a class="brand" href="/">Crosscode</a>
       <a href="/docs/index.html">Docs</a>
       <a href="/docs/install.html">Install &amp; quickstart</a>
@@ -28,7 +30,7 @@
     </nav>
   </header>
 
-  <main class="docs-layout wide">
+  <main id="main" class="docs-layout wide">
     <nav class="docs-sidebar" aria-label="Docs navigation">
       <div>
         <div class="docs-sidebar-label">Start here</div>
@@ -99,7 +101,7 @@
         attaches the checkout to a project, starts the daemon, and installs the MCP server,
         the skill, and the pre-edit hooks for your coding agent.
       </p>
-      <pre><code>crosscode start
+      <pre tabindex="0"><code>crosscode start
 crosscode start --no-browser   # print the sign-in URL instead of opening a browser</code></pre>
       <p>
         Use <code>--no-browser</code> on a remote shell or in CI. Restart your agent afterwards
@@ -108,7 +110,7 @@ crosscode start --no-browser   # print the sign-in URL instead of opening a brow
 
       <h2>crosscode invite</h2>
       <p>Prints a link that invites a teammate to this project. The link is the whole output.</p>
-      <pre><code>crosscode invite
+      <pre tabindex="0"><code>crosscode invite
 # https://www.getcrosscode.dev/join/7f3a9c2e</code></pre>
       <p>
         The join page checks the invitee actually has access to the repository before it hands
@@ -120,13 +122,13 @@ crosscode start --no-browser   # print the sign-in URL instead of opening a brow
         Redeems an invite code in this checkout, then sets it up exactly as <code>start</code>
         would. The code is a positional argument in the form printed by the join page.
       </p>
-      <pre><code>crosscode join CC-7F3A-9C2E
+      <pre tabindex="0"><code>crosscode join CC-7F3A-9C2E
 crosscode join CC-7F3A-9C2E --no-browser</code></pre>
 
       <h2>crosscode status</h2>
       <p>Shows what this checkout's daemon is doing.</p>
-      <pre><code>crosscode status --json</code></pre>
-      <pre><code>{
+      <pre tabindex="0"><code>crosscode status --json</code></pre>
+      <pre tabindex="0"><code>{
   "value": {
     "branch": "main",
     "connected": true,
@@ -147,7 +149,7 @@ crosscode join CC-7F3A-9C2E --no-browser</code></pre>
         Stops the daemon for this checkout. Syncing stops; nothing is uninstalled and nothing
         in your repository changes.
       </p>
-      <pre><code>crosscode stop</code></pre>
+      <pre tabindex="0"><code>crosscode stop</code></pre>
 
       <h2>Output envelope</h2>
       <p>
@@ -155,7 +157,7 @@ crosscode join CC-7F3A-9C2E --no-browser</code></pre>
         with the failure shape, and an agent can branch on which key is present. Progress goes
         to stderr, so stdout stays a single parseable object.
       </p>
-      <pre><code>{"value": {"branch": "main", "connected": true, ...}}
+      <pre tabindex="0"><code>{"value": {"branch": "main", "connected": true, ...}}
 {"error": {"code": "NOT_A_GIT_REPOSITORY", "message": "Crosscode runs inside a Git repository", "hint": "cd into your project first."}}</code></pre>
       <p>
         Without <code>--json</code> the value is printed bare, because the envelope is only

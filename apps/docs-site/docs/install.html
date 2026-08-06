@@ -14,8 +14,10 @@
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
   <header class="site-header">
-    <nav>
+    <nav aria-label="Primary">
       <a class="brand" href="/">Crosscode</a>
       <a href="/docs/index.html">Docs</a>
       <a href="/docs/install.html">Install &amp; quickstart</a>
@@ -28,7 +30,7 @@
     </nav>
   </header>
 
-  <main class="docs-layout wide">
+  <main id="main" class="docs-layout wide">
     <nav class="docs-sidebar" aria-label="Docs navigation">
       <div>
         <div class="docs-sidebar-label">Start here</div>
@@ -93,7 +95,7 @@
       </ul>
 
       <h2>Install and start</h2>
-      <pre><code>npm install -g crosscode-cli
+      <pre tabindex="0"><code>npm install -g crosscode-cli
 cd your-repo
 crosscode start</code></pre>
 
@@ -116,12 +118,12 @@ crosscode start</code></pre>
       </p>
 
       <h2>Bring in a teammate</h2>
-      <pre><code>crosscode invite</code></pre>
+      <pre tabindex="0"><code>crosscode invite</code></pre>
       <p>
         That prints a link. They open it, sign in with GitHub, and the page checks they
         actually have access to the repository before giving them two lines to paste:
       </p>
-      <pre><code>git clone git@github.com:acme/app.git &amp;&amp; cd app
+      <pre tabindex="0"><code>git clone git@github.com:acme/app.git &amp;&amp; cd app
 crosscode join CC-7F3A-9C2E</code></pre>
       <p>
         <code>join</code> redeems the code and then sets the checkout up exactly as
@@ -135,7 +137,7 @@ crosscode join CC-7F3A-9C2E</code></pre>
         and a conflict goes to your coding agent rather than to you. The two remaining commands
         exist for when you want to look:
       </p>
-      <pre><code>crosscode status     # branch, connected, paused, who else is on this branch
+      <pre tabindex="0"><code>crosscode status     # branch, connected, paused, who else is on this branch
 crosscode stop       # stop syncing this checkout</code></pre>
 
       <h2>What syncs</h2>
@@ -149,7 +151,7 @@ crosscode stop       # stop syncing this checkout</code></pre>
         Your commits, branches, index, stash, and remotes are never touched, and nothing here
         pushes. To undo anything Crosscode wrote:
       </p>
-      <pre><code>git checkout refs/crosscode/shadow -- &lt;path&gt;</code></pre>
+      <pre tabindex="0"><code>git checkout refs/crosscode/shadow -- &lt;path&gt;</code></pre>
 
       <h2>Hand the setup to your agent</h2>
       <p>
@@ -163,7 +165,7 @@ crosscode stop       # stop syncing this checkout</code></pre>
 
       <h2>Running from a clone</h2>
       <p>For working on Crosscode itself, or for running the CLI before it is on npm:</p>
-      <pre><code>pnpm install
+      <pre tabindex="0"><code>pnpm install
 pnpm build          # typecheck + bundle
 pnpm test           # vitest
 pnpm crosscode -- status --json</code></pre>

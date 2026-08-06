@@ -2,6 +2,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { verifySupabaseAccessToken } from "./auth.js";
 import { createServiceServer, type ServiceServerOptions } from "./http.js";
+import { LEGAL_VERSIONS, type LegalDocument } from "./legal.js";
 import { hashDeviceCode, normalizeUserCode, type DeviceBindResult, type DeviceClaimResult, type DeviceSession, type PgStore, type StartedDeviceCode } from "./store.js";
 import { signTestSupabaseToken, testSupabaseJwks } from "./test-jwks.js";
 
@@ -28,6 +29,11 @@ function inMemoryDeviceStore(seed: Partial<DeviceRow> = {}) {
   let minted = 0;
   return {
     rows,
+    // The bind route refuses a caller who has accepted nothing, so this handshake's tests
+    // are run as somebody who has. The gate itself is tested in terms-acceptance.test.ts.
+    async latestAcceptedVersions(): Promise<Partial<Record<LegalDocument, string>>> {
+      return { terms: LEGAL_VERSIONS.terms!, privacy: LEGAL_VERSIONS.privacy! };
+    },
     async startDeviceCode({ expiresInSeconds }: { expiresInSeconds: number }): Promise<StartedDeviceCode> {
       minted += 1;
       const row: DeviceRow = {

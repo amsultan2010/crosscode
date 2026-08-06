@@ -11,6 +11,11 @@
 // With no VITE_POSTHOG_KEY this file installs no listeners, sets no storage and sends no
 // request. That is the state a fork or a local `pnpm docs:dev` runs in.
 //
+// Nothing persistent is written to the visitor's device: no cookie, and no storage that
+// outlives the tab. The id that groups one visit's events lives in `sessionStorage`, so it
+// dies with the tab and cannot link today's visit to next week's. Counting a funnel does
+// not need to know who you are twice.
+//
 // It posts to PostHog's capture endpoint directly rather than loading posthog-js. Four
 // events do not need 60 kB of autocapture and session recording on a page whose pitch is
 // that we cannot read your code, and every field that leaves the browser is listed below.
@@ -18,7 +23,7 @@
 const KEY = import.meta.env.VITE_POSTHOG_KEY;
 const HOST = (import.meta.env.VITE_POSTHOG_HOST ?? "https://us.i.posthog.com").replace(/\/$/, "");
 
-const DISTINCT_ID_STORAGE_KEY = "crosscode_distinct_id";
+const VISIT_ID_STORAGE_KEY = "crosscode_visit_id";
 const ONCE_PREFIX = "crosscode_analytics_once:";
 
 if (KEY) install();
@@ -103,15 +108,22 @@ export function capture(event, properties = {}) {
     .catch(() => undefined);
 }
 
-/** A random id in localStorage. No email, no account id, nothing derived from the visitor. */
+/**
+ * A random id for this visit, held in sessionStorage so that the two pages of the funnel
+ * (landing, then sign-up) count as one visit. It is gone when the tab closes, so it cannot
+ * be used to recognise a returning visitor. No email, no account id, nothing derived from
+ * the visitor. If storage is denied, each page load gets its own in-memory id instead.
+ */
+let inMemoryVisitId;
 function distinctId() {
   try {
-    const existing = localStorage.getItem(DISTINCT_ID_STORAGE_KEY);
+    const existing = sessionStorage.getItem(VISIT_ID_STORAGE_KEY);
     if (existing) return existing;
     const created = crypto.randomUUID();
-    localStorage.setItem(DISTINCT_ID_STORAGE_KEY, created);
+    sessionStorage.setItem(VISIT_ID_STORAGE_KEY, created);
     return created;
   } catch {
-    return crypto.randomUUID();
+    inMemoryVisitId ??= crypto.randomUUID();
+    return inMemoryVisitId;
   }
 }
