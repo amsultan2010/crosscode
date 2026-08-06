@@ -1,6 +1,6 @@
 {
   "name": "crosscode-cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Real-time codebase sync between teammates. You edit a file, their checkout updates within seconds; same-line conflicts go to your own coding agent over MCP",
   "license": "MIT",
   "publishConfig": {
