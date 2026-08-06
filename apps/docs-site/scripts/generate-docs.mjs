@@ -99,7 +99,11 @@ const NAV_GROUPS = [
       { href: "/docs/support.html", label: "Support", key: "support" },
       { href: "/docs/terms.html", label: "Terms of Service", key: "terms" },
       { href: "/docs/dmca.html", label: "Copyright and DMCA", key: "dmca" },
-      { href: "/docs/dsa-contact.html", label: "EU DSA contact", key: "dsa-contact" }
+      { href: "/docs/dsa-contact.html", label: "EU DSA contact", key: "dsa-contact" },
+      { href: "/docs/privacy-policy.html", label: "Privacy Policy", key: "privacy-policy" },
+      { href: "/docs/cookies.html", label: "Cookies", key: "cookies" },
+      { href: "/docs/subprocessors.html", label: "Subprocessors", key: "subprocessors" },
+      { href: "/docs/dpa.html", label: "Data Processing Agreement", key: "dpa" }
     ]
   }
 ];
@@ -177,6 +181,38 @@ const GENERATED_PAGES = [
     title: "EU DSA contact",
     mdFile: "dsa-contact.md",
     htmlOut: "dsa-contact.html",
+    nextHref: "/docs/privacy-policy.html",
+    nextLabel: "Privacy Policy"
+  },
+  {
+    key: "privacy-policy",
+    title: "Privacy Policy",
+    mdFile: "privacy-policy.md",
+    htmlOut: "privacy-policy.html",
+    nextHref: "/docs/cookies.html",
+    nextLabel: "Cookies and local storage"
+  },
+  {
+    key: "cookies",
+    title: "Cookies and local storage",
+    mdFile: "cookies.md",
+    htmlOut: "cookies.html",
+    nextHref: "/docs/subprocessors.html",
+    nextLabel: "Subprocessors"
+  },
+  {
+    key: "subprocessors",
+    title: "Subprocessors",
+    mdFile: "subprocessors.md",
+    htmlOut: "subprocessors.html",
+    nextHref: "/docs/dpa.html",
+    nextLabel: "Data Processing Agreement"
+  },
+  {
+    key: "dpa",
+    title: "Data Processing Agreement",
+    mdFile: "dpa.md",
+    htmlOut: "dpa.html",
     nextHref: "/docs/index.html",
     nextLabel: "Docs overview"
   }
@@ -259,6 +295,13 @@ ${bodyHtml}
   <footer class="site-footer">
     <p>Crosscode: local-first Git coordination.</p>
     <p><a href="/">Home</a> &middot; <a href="${GITHUB_REPO}" rel="noopener">View on GitHub</a></p>
+    <p>
+      <a href="/docs/privacy.html">Privacy</a> &middot;
+      <a href="/docs/privacy-policy.html">Privacy Policy</a> &middot;
+      <a href="/docs/cookies.html">Cookies</a> &middot;
+      <a href="/docs/subprocessors.html">Subprocessors</a> &middot;
+      <a href="/docs/dpa.html">DPA</a>
+    </p>
   </footer>
 </body>
 </html>
