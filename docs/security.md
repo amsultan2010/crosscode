@@ -73,9 +73,15 @@ it manages, with no sandbox between the two.
 Enforced before a change is captured, not filtered afterwards:
 
 - **Untracked files.** Only files Git tracks are eligible.
-- **A hard secret denylist**: `.env*`, `*.pem`, `*.key`, and credential-shaped paths, even
-  when tracked. Real-time syncing an `.env` would be a serious incident, so this check is
-  the earliest one in the pipeline.
+- **A hard secret denylist**, even when tracked: environment files (`.env*`, `.envrc`,
+  `.npmrc`, `.netrc`, `.pgpass`, `.htpasswd`); the `.aws/`, `.ssh/`, `.kube/` and `.gnupg/`
+  directories; SSH keys (`id_rsa` and friends); keys and keystores by extension (`.pem`,
+  `.key`, `.p8`, `.p12`, `.pfx`, `.jks`, `.keystore`, `.ovpn`, `.gpg`, `.asc`);
+  credentials by name (`credentials`, `secrets`, `*-credentials.*`,
+  `*service-account*.json`, `kubeconfig`); and Terraform `*.tfvars`/`*.tfstate`. The list
+  is one array of patterns in `packages/core/src/index.ts` and nowhere else. Real-time
+  syncing an `.env` would be a serious incident, so this check is the earliest one in the
+  pipeline.
 - **Anything outside the working tree.** Symlinks that leave the checkout are refused.
 
 ## Integrity on receive
@@ -90,8 +96,9 @@ garbage-in filter and nothing more.
 
 ## Encryption
 
-TLS in transit, encryption at rest under keys the service manages. **There is no end-to-end
-encryption**, no device pairing, and no key exchange. The service can read the file contents
+TLS in transit. At rest, the data sits in Supabase Postgres and on Vercel, encrypted by
+those providers under keys they hold; Crosscode adds no encryption layer of its own.
+**There is no end-to-end encryption**, no device pairing, and no key exchange. The service can read the file contents
 it stores; [privacy.md](./privacy.md) says so in the same words.
 
 We built E2E once and removed it. It bought a real property and cost a device-pairing
@@ -102,9 +109,10 @@ fewer moving parts and a plain statement of what we hold.
 ## Service ↔ database
 
 Row Level Security is on from the first migration. The service connects with a
-least-privilege role that cannot rewrite history; the retention sweep that deletes aged
-changes runs on a separate connection, so no request-handling path can reach a connection
-able to erase history.
+least-privilege role that cannot rewrite history: `file_versions` has no UPDATE or DELETE
+policy at all, so no request-handling path can erase or alter a change. The retention sweep
+that is meant to delete aged changes is not built yet; when it is, it runs as the owner on a
+separate connection.
 
 ## What a malicious member can do
 

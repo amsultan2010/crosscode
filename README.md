@@ -114,8 +114,12 @@ Codex also get a pre-edit hook.
 
 ### Secrets never move
 
-`.env*`, `*.pem`, `*.key`, and anything credential-shaped are dropped before capture, even
-when Git tracks them. Untracked files are never sent.
+Dropped before capture, even when Git tracks them: `.env*` and `.envrc`/`.npmrc`/`.netrc`/
+`.pgpass`/`.htpasswd`; `.aws/`, `.ssh/`, `.kube/`, `.gnupg/`; `id_rsa` and friends;
+`*.pem`/`*.key`/`*.p12`/`*.pfx`/`*.jks`/`*.gpg`/`*.asc`; `*credentials*`,
+`*service-account*.json`, `kubeconfig`; `*.tfvars` and `*.tfstate`. The full list is one
+regex in [`packages/core/src/index.ts`](./packages/core/src/index.ts). Untracked files are
+never sent.
 
 [Docs →](./docs/privacy.md)
 
