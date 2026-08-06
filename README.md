@@ -23,21 +23,20 @@
 > [!IMPORTANT]
 > **Pre-1.0, and specific about it.** `crosscode-cli` installs from npm, and the sync
 > engine underneath it — the shadow ref, the three-way merge, hot-file deferral, offline
-> catch-up — is built and tested. Two things in front of it are not finished, and both are
-> visible from the quickstart below:
+> catch-up — is built and tested. The pre-edit hook now registers the command that actually
+> runs, and the daemon now notices a commit or a pull on the branch you are already on.
 >
-> - **Sign-in.** `crosscode start` opens with a GitHub device-code handshake, and the
->   service routes it calls are still landing. Until they do, `start`, `invite`, and `join`
->   all stop at the sign-in step, because all three need a session first.
-> - **The pre-edit hook.** The hook is written and tested, but `start` currently registers
->   the wrong command for it, so it does not fire. Conflicts still reach your agent — they
->   ride on every MCP tool response — just on its next call rather than before it writes.
+> One thing between you and a working `crosscode start` is not finished. The device
+> handshake itself is live: `start` gets a URL and a confirmation code from the service, and
+> polls for the session. But the GitHub OAuth application behind our Supabase project is
+> misconfigured, so the browser half of the sign-in ends on a GitHub 404. Until that is
+> corrected, `start`, `invite`, and `join` all stop at sign-in, because all three need a
+> session first.
 >
-> Nothing here has been run end to end on a clean machine, so treat the quickstart as the
-> intended path rather than a measured one. There is also no end-to-end encryption: the
-> coordination service can read the files you sync, which
-> [docs/privacy.md](./docs/privacy.md) spells out in full. [PLAN.md](./PLAN.md) is the
-> single source of truth for what is done.
+> Nobody has yet completed the quickstart on a clean machine, so treat it as the intended
+> path rather than a measured one. There is also no end-to-end encryption: the coordination
+> service can read the files you sync, which [docs/privacy.md](./docs/privacy.md) spells out
+> in full. [PLAN.md](./PLAN.md) is the single source of truth for what is done.
 
 ## How it works
 
@@ -219,7 +218,7 @@ conflict that arrives while it is idle would otherwise sit unseen. This way it t
 one the next time it does anything at all. Claude Code and Codex additionally get a hook
 that runs before a file edit, which moves that moment earlier still — a conflict on a file
 is known before the agent writes over it rather than after. The hook is a bonus on top of
-MCP, not a requirement: see the note at the top for where its wiring currently stands.
+MCP, not a requirement — every other client relies on the piggybacked conflicts alone.
 
 The bar this is built to: **neither side's agent mentions Crosscode until a real conflict**,
 which the receiving agent then resolves without being asked. See

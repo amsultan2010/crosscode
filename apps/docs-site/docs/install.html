@@ -77,10 +77,12 @@
 
       <div class="callout">
         <strong>Pre-1.0.</strong> <code>crosscode-cli</code> installs from npm and the
-        command below runs, but GitHub sign-in is still landing, so <code>start</code>,
-        <code>invite</code>, and <code>join</code> all stop at that step for now — each one
-        needs a session first. Nothing on this page has been run end to end on a clean
-        machine. See <a href="/docs/limitations.html">current limitations</a>.
+        command below runs. <code>start</code> reaches sign-in and prints a real URL and
+        confirmation code, then stops there: the GitHub OAuth application behind the
+        sign-in is misconfigured, so no browser can finish it. <code>start</code>,
+        <code>invite</code>, and <code>join</code> all need a session first. Nothing on this
+        page has been run end to end on a clean machine. See
+        <a href="/docs/limitations.html">current limitations</a>.
       </div>
 
       <h2>Prerequisites</h2>
