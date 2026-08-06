@@ -43,7 +43,8 @@ describe("site analytics without a PostHog key", () => {
     analytics.capture("landing_page_view");
 
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(localStorage.getItem("crosscode_distinct_id")).toBeNull();
+    expect(localStorage.length).toBe(0);
+    expect(sessionStorage.length).toBe(0);
   });
 });
 
@@ -60,6 +61,35 @@ describe("site analytics with a PostHog key", () => {
     expect(events[0].api_key).toBe("phc_test_key");
     expect(events[0].distinct_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://us.i.posthog.com/i/v0/e/");
+  });
+
+  it("writes nothing to localStorage, and its visit id dies with the tab", async () => {
+    stubFetch();
+    const button = landingPageWithCopyButton();
+
+    await loadAnalytics("phc_test_key");
+    button.click();
+
+    // Nothing at all, not just nothing under the old key: a persistent id is what needs
+    // consent under ePrivacy Art. 5(3), whatever it is called.
+    expect(localStorage.length).toBe(0);
+    expect(Object.keys(localStorage)).toEqual([]);
+    // The visit id exists, but only in tab-scoped storage.
+    expect(sessionStorage.getItem("crosscode_visit_id")).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("keeps one visit id across the pages of a visit so the funnel joins up", async () => {
+    const fetchSpy = stubFetch();
+    landingPageWithCopyButton().click();
+
+    await loadAnalytics("phc_test_key");
+    window.history.replaceState({}, "", "/auth/signup.html");
+    document.body.innerHTML = `<a href="/auth/signup.html">Create an account</a>`;
+    document.querySelector("a")?.click();
+
+    const ids = fetchSpy.mock.calls.map(([, init]) => JSON.parse(String(init.body)).distinct_id);
+    expect(ids.length).toBeGreaterThan(1);
+    expect(new Set(ids).size).toBe(1);
   });
 
   it("counts sign_up_started once even when a link click and a form submit both fire", async () => {
