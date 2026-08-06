@@ -51,6 +51,7 @@ export class SyncServiceClient {
   private pollTimer?: NodeJS.Timeout;
   private pollActive = false;
   private polling = false;
+  private reportedPollFailure = false;
   private backoffMs = INITIAL_BACKOFF_MS;
   private stopped = false;
   private handlers?: SyncStreamHandlers;
@@ -199,8 +200,16 @@ export class SyncServiceClient {
       try {
         await this.handlers?.onPoll?.();
         this.polling = true;
-      } catch {
+        this.reportedPollFailure = false;
+      } catch (error) {
         // Unreachable by either transport, which is what `connected: false` should mean.
+        // Reported once per run of failures rather than every 3s: a cursor that stops
+        // advancing is otherwise completely silent, and `connected: false` on its own does
+        // not say whether the service is down or a change cannot be applied.
+        if (!this.reportedPollFailure) {
+          this.reportedPollFailure = true;
+          process.stderr.write(`Crosscode: sync poll failed: ${error instanceof Error ? error.message : String(error)}\n`);
+        }
         this.polling = false;
       }
       if (this.stopped || this.streaming) { this.stopPolling(); return; }
