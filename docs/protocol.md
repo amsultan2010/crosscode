@@ -92,6 +92,12 @@ The client sends `subscribe` (`projectId`, `branch`, `replicaId`, `since`) and t
 `replicaId`, `actor`, `branch`, and up to 50 recently touched `paths`, which is how an
 agent can answer "who is working on what" without any ambient UI.
 
+The stream is the fast path, not the only one. A host that cannot serve a WebSocket upgrade
+— a serverless function, for one — leaves a daemon publishing happily and receiving
+nothing, so a daemon that cannot open the stream falls back to polling `GET /v1/changes?since=`
+every few seconds. Edits still arrive, a few seconds later than they would have. Presence
+does not: it exists only on the socket, so a polling room goes quiet about who is where.
+
 ## Daemon config and local API
 
 `syncDaemonConfig` is what the daemon stores per checkout: `projectId`, `repo`, and the

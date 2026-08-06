@@ -231,7 +231,11 @@ export class SyncDaemon {
       // Announce on every (re)subscribe: a peer that joins after we committed would
       // otherwise never learn our HEAD, since presence is only sent when something happens.
       onConnected: () => { void this.enqueue(async () => { await this.catchUp(); await this.announce(); }); },
-      onDisconnected: () => {}
+      onDisconnected: () => {},
+      // The stream's fallback. Same catch-up, on a timer instead of on a subscribe, so a
+      // checkout that can never open a socket still receives its peers' edits. Presence is
+      // not sent here: it lives only on the socket, so the room goes quiet but not blind.
+      onPoll: () => this.enqueue(() => this.catchUp())
     }, () => this.cursor);
   }
 
@@ -371,7 +375,7 @@ export class SyncDaemon {
 
   /** Tells the room where this checkout is. Silent when there is no stream to say it on. */
   private async announce(paths: string[] = []): Promise<void> {
-    if (!this.client.id || !this.client.connected) return;
+    if (!this.client.id || !this.client.streaming) return;
     await this.client.presence(paths, this.options.actor ?? "you", this.head ?? undefined).catch(() => {});
   }
 

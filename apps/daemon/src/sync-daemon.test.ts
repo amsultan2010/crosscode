@@ -219,6 +219,30 @@ describe("the daemon around the engine", () => {
     await waitFor("bob's cursor to advance", async () => bob.status().cursor > 0);
   }, 60_000);
 
+  /**
+   * The production outage this covers: the service runs as a serverless function, which
+   * cannot answer a WebSocket upgrade, so `/v1/stream` 404s forever. Publishing worked and
+   * receiving did not -- an uploader, not a sync -- and `crosscode status` said
+   * `connected: false` with no way for it to ever become true.
+   */
+  it("still receives a peer's edits when the host cannot serve a stream at all", async () => {
+    const service = await startSyncServiceStub({ streams: false });
+    services.push(service);
+    const origin = await seedOrigin({ "a.txt": "0\n" });
+    const roots = await Promise.all(["alice", "bob"].map((name) => checkout(origin, name, service)));
+    const [alice, bob] = [await start(roots[0]!), await start(roots[1]!)];
+
+    // Reachable by the only transport there is, and honest about saying so.
+    await waitFor("both daemons to report themselves connected", async () => alice.status().connected && bob.status().connected);
+
+    await type(roots[0]!, "a.txt", "arrived without a socket\n");
+    await waitFor("bob to receive it", () => allEqual(roots, "a.txt", "arrived without a socket\n"));
+
+    // And the other way, so it is a two-way sync rather than one lucky direction.
+    await type(roots[1]!, "a.txt", "and back again\n");
+    await waitFor("alice to receive it", () => allEqual(roots, "a.txt", "and back again\n"));
+  }, 60_000);
+
   it("resyncs from full content when the service says the cursor is too old", async () => {
     const service = await startSyncServiceStub();
     services.push(service);
