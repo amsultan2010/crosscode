@@ -905,6 +905,20 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 .chips li:hover { border-color: var(--line-2); color: var(--text); }
 .chips .chip-more { color: var(--text-3); border-style: dashed; }
 
+/* Inside the hero the agent wall has to share the first screen with the install
+   command, so it drops the section padding and the divider and runs tighter. */
+.agents-hero {
+  padding: 2.2rem 0 0;
+  border-bottom: 0;
+  position: relative;
+}
+
+.agents-hero .kicker { font-size: 0.68rem; margin-bottom: 0.7rem; }
+
+.agents-hero .chips { gap: 0.4rem; }
+
+.agents-hero .chips li { padding: 0.28rem 0.7rem; font-size: 0.8rem; }
+
 /* --- features ------------------------------------------------------------ */
 
 .feature-list {
@@ -930,6 +944,20 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 .feature-list b { color: var(--text); font-weight: 640; }
 
 @media (max-width: 48rem) {
+  /* The install command and the agent wall both have to clear the fold on a
+     phone, so the hero runs on a tighter rhythm here than anywhere else. */
+  .hero { padding-top: 2rem; }
+  .pill { margin-bottom: 1rem; }
+  .hero h1 { font-size: 2.15rem; margin-bottom: 0.8rem; }
+  .hero-lede { font-size: 0.95rem; line-height: 1.5; margin-bottom: 1.1rem; }
+  .hero-actions { margin-bottom: 1.1rem; }
+  .hero-actions .btn-lg { font-size: 0.95rem; padding: 0.62rem 1.4rem; }
+  .hero-foot { margin-top: 0.7rem; font-size: 0.79rem; }
+  .agents-hero { padding-top: 1.2rem; }
+  .agents-hero .kicker { margin-bottom: 0.5rem; }
+  .agents-hero .chips { gap: 0.32rem; }
+  .agents-hero .chips li { padding: 0.2rem 0.58rem; font-size: 0.75rem; }
+
   .feature-list { grid-template-columns: 1fr; }
   .feature-list li,
   .feature-list li:nth-child(odd),
