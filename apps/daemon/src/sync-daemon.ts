@@ -209,7 +209,17 @@ export class SyncDaemon {
   private async send(versions: FileVersion[]): Promise<void> {
     if (!versions.length) return;
     try {
-      this.cursor = Math.max(this.cursor, await this.client.publish(versions));
+      // Deliberately not `this.cursor = the sequence publish returns`. That sequence is the
+      // service's global watermark, and the cursor means "everything up to here has been
+      // applied here" -- so adopting it claims credit for every change any peer published
+      // in between, and those are then never fetched. Silently: no conflict, no error, and
+      // both sides report the same cursor while their files differ.
+      //
+      // Two people editing at the same moment is the ordinary case, not a rare one, so this
+      // lost a change most times a pair worked at once. Our own changes come back through
+      // the stream or the next poll and advance the cursor from receive(), which skips them
+      // by replicaId. A cursor that lags is re-read; a cursor that skips is gone.
+      await this.client.publish(versions);
       await this.persist();
       await this.announce(versions.map((version) => version.path));
     } catch (error) {

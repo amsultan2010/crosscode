@@ -317,6 +317,38 @@ describe("the daemon around the engine", () => {
     expect(service.listCalls - afterSettling).toBeLessThan(20);
   }, 60_000);
 
+  /**
+   * Two people typing at the same moment, which is the ordinary case for a pair.
+   *
+   * `POST /v1/changes` answers with the service's *global* sequence, and the daemon used to
+   * adopt it as its own cursor. The cursor means "everything up to here has been applied
+   * here", so adopting it claimed credit for whatever the other person had published in
+   * between -- and that change was then never fetched. No conflict, no error: both sides
+   * reported the same cursor while their working trees differed.
+   *
+   * Only reproducible without the stream, because a pushed change never goes through the
+   * cursor at all. It is the polling path that reads it, and the hosted service is
+   * serverless, so polling is the path every real user is on.
+   */
+  it("does not skip a peer's change by adopting the cursor its own publish returned", async () => {
+    const service = await startSyncServiceStub({ streams: false });
+    services.push(service);
+    const origin = await seedOrigin({ "a.txt": "0\n", "b.txt": "0\n" });
+    const roots = await Promise.all(["alice", "bob"].map((name) => checkout(origin, name, service)));
+    const [alice, bob] = [await start(roots[0]!), await start(roots[1]!)];
+    await waitFor("both connected", async () => alice.status().connected && bob.status().connected);
+
+    // At the same instant, each into their own file, so nothing here is a merge question.
+    await Promise.all([
+      type(roots[0]!, "a.txt", "from alice\n"),
+      type(roots[1]!, "b.txt", "from bob\n")
+    ]);
+
+    await waitFor("bob to have alice's file", () => allEqual(roots, "a.txt", "from alice\n"));
+    await waitFor("alice to have bob's file", () => allEqual(roots, "b.txt", "from bob\n"));
+    expect([...alice.conflicts(), ...bob.conflicts()]).toHaveLength(0);
+  }, 60_000);
+
   it("resyncs from full content when the service says the cursor is too old", async () => {
     const service = await startSyncServiceStub();
     services.push(service);
