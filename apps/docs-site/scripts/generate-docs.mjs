@@ -329,7 +329,8 @@ function renderPage({ title, activeKey, description, canonicalPath, bodyHtml, md
   <meta name="description" content="${escapeAttr(description)}" />
   <link rel="canonical" href="${canonical}" />
   <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml" />
-  <link rel="alternate icon" href="/brand/favicon-32.png" sizes="32x32" />
+  <link rel="alternate icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/brand/favicon-192.png" />
   <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png" />
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Crosscode" />
