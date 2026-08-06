@@ -30,7 +30,11 @@ jobs:
         env:
           # Repository variable, so the URL can be changed without a commit. Settings ->
           # Secrets and variables -> Actions -> Variables -> CROSSCODE_HEALTH_URL.
-          HEALTH_URL: ${{ vars.CROSSCODE_HEALTH_URL || 'https://www.getcrosscode.dev/api/v1/health' }}
+          # /api/healthz, not /api/v1/health: the service serves health at /health and
+          # /healthz, outside the versioned surface. The old default matched no route, fell
+          # to the bearer catch-all, and reported a 401 outage against a healthy service on
+          # every run.
+          HEALTH_URL: ${{ vars.CROSSCODE_HEALTH_URL || 'https://www.getcrosscode.dev/api/healthz' }}
         run: |
           set -u
           # Two attempts 20 seconds apart. One failed probe is as likely to be a cold

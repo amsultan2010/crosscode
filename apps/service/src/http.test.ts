@@ -165,7 +165,8 @@ describe("service HTTP boundary", () => {
 
   it("enforces authentication, membership, JSON bodies, body caps, and unknown routes", async () => {
     const store = {
-      requireMembership: async () => { throw new StoreUnauthorizedError("Project is not available"); }
+      requireMembership: async () => { throw new StoreUnauthorizedError("Project is not available"); },
+      checkHealth: async () => ({ unreadableTables: [] })
     } as unknown as PgStore;
     const base = await listen(store, { bodyLimitBytes: 128 });
     const token = await signToken();
@@ -186,6 +187,23 @@ describe("service HTTP boundary", () => {
 
     const health = await fetch(`${base}/healthz`);
     expect(await health.json()).toEqual({ ok: true, data: { status: "ok", service: "crosscode-service" } });
+  });
+
+  /**
+   * The outage this route exists to catch. `device_codes` shipped without a grant to the
+   * runtime role, every request touching it 500ed with `permission denied`, and health
+   * answered `ok` the whole time because it only ever proved the process was running.
+   */
+  it("reports a table the runtime role cannot read as an outage, not as healthy", async () => {
+    const store = {
+      checkHealth: async () => ({ unreadableTables: ["device_codes"] })
+    } as unknown as PgStore;
+    const base = await listen(store);
+
+    const health = await fetch(`${base}/healthz`);
+
+    expect(health.status).toBe(503);
+    expect((await health.json() as Envelope).data).toMatchObject({ status: "degraded", unreadableTables: ["device_codes"] });
   });
 });
 

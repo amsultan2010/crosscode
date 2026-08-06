@@ -53,8 +53,29 @@ CREATE INDEX IF NOT EXISTS device_codes_expires_at_idx ON device_codes (expires_
 -- On, with no policies at all, which is not an oversight: RLS with no policy denies every
 -- row to every non-owner role. Nothing about a device handshake is a PostgREST operation
 -- -- the CLI is unauthenticated when it starts one, and the browser reaches it through the
--- service -- so the `authenticated` role has no business reading or writing this table,
--- and the service's own pool connects as the table owner.
+-- service -- so the `authenticated` role has no business reading or writing this table.
+--
+-- The service is unaffected because it connects as `crosscode_runtime`, which holds
+-- BYPASSRLS. That is what makes the grant below the only thing standing between this table
+-- and the service, and why its absence was not a permissions warning but a 500.
 ALTER TABLE device_codes ENABLE ROW LEVEL SECURITY;
+
+/* ------------------------------------------------------------------------- grants */
+
+-- The runtime role needs saying out loud, because nothing else says it. 001 never granted
+-- to `crosscode_runtime` -- the six tables it creates were granted out of band, once, by
+-- hand -- so a table added later starts with no grant at all and the service gets
+-- `permission denied` on its first write. That is exactly what shipping this table did.
+--
+-- Guarded on the role existing because the role is a property of the deployment, not of the
+-- schema: CI runs these migrations against a throwaway PostgreSQL that has no such role,
+-- and an unguarded GRANT would fail the whole suite.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'crosscode_runtime') THEN
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE device_codes TO crosscode_runtime;
+  END IF;
+END
+$$;
 
 COMMIT;

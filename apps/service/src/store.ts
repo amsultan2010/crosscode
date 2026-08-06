@@ -117,6 +117,31 @@ export class PgStore {
     if (Object.values(result.rows[0]!).some(Boolean)) throw new Error("DATABASE_URL must use a least-privilege runtime role");
   }
 
+  /**
+   * Is the database reachable, and can the runtime role actually use it?
+   *
+   * The second half is not padding. Migrations create tables but have never granted to
+   * `crosscode_runtime` -- the original six were granted once, by hand -- so a table added
+   * later arrives readable by nobody and the first request that touches it 500s with
+   * `permission denied`. That is how `device_codes` shipped, and it stayed invisible
+   * because every check we had asked whether the *service* was up, which it was.
+   *
+   * Returns the tables the runtime role cannot read, so the answer names the fault instead
+   * of reporting a boolean somebody has to go and diagnose.
+   */
+  async checkHealth(): Promise<{ unreadableTables: string[] }> {
+    const result = await this.pool.query<{ table: string }>(
+      `SELECT c.relname AS table
+         FROM pg_class c
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relkind = 'r'
+          AND NOT has_table_privilege(current_user, c.oid, 'SELECT')
+        ORDER BY c.relname`
+    );
+    return { unreadableTables: result.rows.map((row) => row.table) };
+  }
+
   /* --------------------------------------------------------------------------- users */
 
   /**
