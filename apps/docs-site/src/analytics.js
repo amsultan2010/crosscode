@@ -69,6 +69,11 @@ function isSignUpPage() {
  * replaces the form with the signed-in card (which carries #sign-out) or reveals the
  * "check your email to confirm" status line. Watching the auth container for both keeps
  * this module out of auth/src, which another workstream owns.
+ *
+ * The signed-in card is also what a visitor who already has a session sees the moment they
+ * open this page, and a sign-in on the shared form renders it too. Neither is a sign-up, so
+ * completion is only counted when this visit started one: same tab, sign_up_started already
+ * sent. The OAuth round trip keeps that, because it returns to this page in the same tab.
  */
 function watchForSignUpCompletion() {
   const container = document.querySelector("#auth");
@@ -76,7 +81,9 @@ function watchForSignUpCompletion() {
   const observer = new MutationObserver(() => {
     const status = container.querySelector("#auth-status");
     const succeeded = Boolean(container.querySelector("#sign-out")) || Boolean(status && !status.hidden && status.textContent?.trim());
-    if (!succeeded) return;
+    // Keep watching rather than disconnecting: the card can be on screen before the visitor
+    // has done anything this visit, and a sign-up may still follow a sign-out.
+    if (!succeeded || !alreadyCaptured("sign_up_started")) return;
     observer.disconnect();
     captureOnce("sign_up_completed");
   });
@@ -85,13 +92,25 @@ function watchForSignUpCompletion() {
 
 /** Once per browser tab session, so a funnel step is not counted twice by two triggers. */
 function captureOnce(event, properties) {
+  if (alreadyCaptured(event)) return;
+  capturedThisLoad.add(event);
   try {
-    if (sessionStorage.getItem(ONCE_PREFIX + event)) return;
     sessionStorage.setItem(ONCE_PREFIX + event, "1");
   } catch {
-    // Storage denied (private mode, blocked cookies). Send the event anyway.
+    // Storage denied (private mode, blocked cookies). Send the event anyway; the in-memory
+    // set still stops a second trigger on this page load from repeating it.
   }
   capture(event, properties);
+}
+
+const capturedThisLoad = new Set();
+function alreadyCaptured(event) {
+  if (capturedThisLoad.has(event)) return true;
+  try {
+    return Boolean(sessionStorage.getItem(ONCE_PREFIX + event));
+  } catch {
+    return false;
+  }
 }
 
 export function capture(event, properties = {}) {

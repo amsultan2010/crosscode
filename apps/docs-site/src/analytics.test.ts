@@ -117,12 +117,27 @@ describe("site analytics with a PostHog key", () => {
     document.body.innerHTML = `<div id="auth"><form id="auth-form"></form><p id="auth-status" hidden></p></div>`;
 
     await loadAnalytics("phc_test_key");
+    document.querySelector("form")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     const status = document.querySelector("#auth-status") as HTMLParagraphElement;
     status.textContent = "Check your email to confirm your account, then sign in.";
     status.hidden = false;
     await vi.waitFor(() => {
       expect(fetchSpy.mock.calls.some(([, init]) => JSON.parse(String(init.body)).event === "sign_up_completed")).toBe(true);
     });
+  });
+
+  it("does not count a visitor who arrives already signed in as a sign-up", async () => {
+    const fetchSpy = stubFetch();
+    window.history.replaceState({}, "", "/auth/signup.html");
+    document.body.innerHTML = `<div id="auth"></div>`;
+
+    await loadAnalytics("phc_test_key");
+    // What account.js renders when getSession() already has one: the form is never drawn.
+    const container = document.querySelector("#auth") as HTMLDivElement;
+    container.innerHTML = `<button type="button" id="sign-out">Sign out</button>`;
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("does not treat a sign-in submit on the shared form as a sign-up", async () => {
