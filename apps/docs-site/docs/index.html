@@ -14,8 +14,10 @@
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
   <header class="site-header">
-    <nav>
+    <nav aria-label="Primary">
       <a class="brand" href="/">Crosscode</a>
       <a href="/docs/index.html">Docs</a>
       <a href="/docs/install.html">Install &amp; quickstart</a>
@@ -28,7 +30,7 @@
     </nav>
   </header>
 
-  <main class="docs-layout wide">
+  <main id="main" class="docs-layout wide">
     <nav class="docs-sidebar" aria-label="Docs navigation">
       <div>
         <div class="docs-sidebar-label">Start here</div>
@@ -77,6 +79,7 @@
         UI, because there isn't one.
       </p>
 
+      <h2 class="visually-hidden">Documentation pages</h2>
       <div class="card-grid">
         <div class="card">
           <h3><a href="/docs/architecture.html">Architecture</a></h3>

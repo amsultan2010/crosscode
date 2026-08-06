@@ -23,6 +23,7 @@ export default defineConfig({
         limitations: resolve(root, "docs/limitations.html"),
         support: resolve(root, "docs/support.html"),
         terms: resolve(root, "docs/terms.html"),
+        accessibility: resolve(root, "docs/accessibility.html"),
         signin: resolve(root, "auth/signin.html"),
         signup: resolve(root, "auth/signup.html"),
         passwordReset: resolve(root, "auth/reset.html"),

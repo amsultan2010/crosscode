@@ -3,17 +3,34 @@
   "version": "0.1.0",
   "description": "Real-time codebase sync between teammates. You edit a file, their checkout updates within seconds; same-line conflicts go to your own coding agent over MCP",
   "license": "MIT",
-  "publishConfig": { "access": "public" },
-  "repository": { "type": "git", "url": "git+https://github.com/amsultan2010/crosscode.git" },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amsultan2010/crosscode.git"
+  },
   "homepage": "https://github.com/amsultan2010/crosscode#readme",
-  "bugs": { "url": "https://github.com/amsultan2010/crosscode/issues" },
-  "keywords": ["ai", "agents", "coding-agents", "mcp", "git", "collaboration", "coordination"],
+  "bugs": {
+    "url": "https://github.com/amsultan2010/crosscode/issues"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "coding-agents",
+    "mcp",
+    "git",
+    "collaboration",
+    "coordination"
+  ],
   "type": "module",
   "bin": {
     "crosscode": "dist/cli.js",
     "crosscode-mcp": "dist/cli.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "packageManager": "pnpm@11.18.0+sha512.33d83c77da82f49fba836925c6f1b841181ec3132b670639bd012f7075f5c7cf634c5f870147c19aae7478fac01df09d8892e880454896edd23ee9b33757563c",
   "engines": {
     "node": ">=24"
@@ -53,6 +70,7 @@
     "@types/jsdom": "^28.0.3",
     "@types/node": "^24.0.0",
     "@vitest/coverage-v8": "^3.2.4",
+    "axe-core": "^4.13.0",
     "esbuild": "^0.28.1",
     "happy-dom": "^20.11.1",
     "jsdom": "^30.0.1",

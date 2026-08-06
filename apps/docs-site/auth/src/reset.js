@@ -24,8 +24,8 @@ function renderRequestForm() {
           <input type="email" name="email" required autocomplete="email" />
         </label>
         <button type="submit">Send reset link</button>
-        <p id="auth-status" class="muted" hidden></p>
-        <p id="auth-error" class="error" hidden></p>
+        <p id="auth-status" class="muted" role="status"></p>
+        <p id="auth-error" class="error" role="alert"></p>
       </form>
       <p class="auth-alt"><a href="/auth/signin.html">Back to sign in</a></p>
     </div>
@@ -52,8 +52,8 @@ function renderUpdateForm() {
           <input type="password" name="password" required minlength="6" autocomplete="new-password" />
         </label>
         <button type="submit">Update password</button>
-        <p id="auth-status" class="muted" hidden></p>
-        <p id="auth-error" class="error" hidden></p>
+        <p id="auth-status" class="muted" role="status"></p>
+        <p id="auth-error" class="error" role="alert"></p>
       </form>
       <p class="auth-alt"><a href="/auth/signin.html">Back to sign in</a></p>
     </div>
@@ -75,15 +75,15 @@ function wire(submit) {
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     void (async () => {
-      errorEl.hidden = true;
-      statusEl.hidden = true;
+      // Emptied rather than hidden: `hidden` drops the live region out of the
+      // accessibility tree, so a message written into a hidden one is announced to nobody.
+      errorEl.textContent = "";
+      statusEl.textContent = "";
       submitButton.disabled = true;
       try {
         statusEl.textContent = await submit(new FormData(form));
-        statusEl.hidden = false;
       } catch (error) {
         errorEl.textContent = error instanceof Error ? error.message : "Request failed";
-        errorEl.hidden = false;
       } finally {
         submitButton.disabled = false;
       }

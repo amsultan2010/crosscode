@@ -26,9 +26,9 @@ export function mountAuthForm(container, { mode = "signin", onSession }) {
     container.innerHTML = `
       <div class="auth-card">
         <a class="auth-brand" href="/">Crosscode</a>
-        <div class="auth-tabs">
-          <button type="button" data-mode="signin" class="${isSignup ? "" : "active"}">Sign in</button>
-          <button type="button" data-mode="signup" class="${isSignup ? "active" : ""}">Sign up</button>
+        <div class="auth-tabs" role="group" aria-label="Account">
+          <button type="button" data-mode="signin" aria-pressed="${isSignup ? "false" : "true"}" class="${isSignup ? "" : "active"}">Sign in</button>
+          <button type="button" data-mode="signup" aria-pressed="${isSignup ? "true" : "false"}" class="${isSignup ? "active" : ""}">Sign up</button>
         </div>
         <h1>${isSignup ? "Create your account" : "Welcome back"}</h1>
         <p class="auth-subtitle">
@@ -39,15 +39,20 @@ export function mountAuthForm(container, { mode = "signin", onSession }) {
         <form id="auth-form" class="stack">
           <label>
             Email
-            <input type="email" name="email" required autocomplete="email" />
+            <input type="email" name="email" required autocomplete="email" aria-describedby="auth-error" />
           </label>
           <label>
             Password
-            <input type="password" name="password" required minlength="6" autocomplete="${isSignup ? "new-password" : "current-password"}" />
+            <input type="password" name="password" required minlength="6" autocomplete="${isSignup ? "new-password" : "current-password"}" aria-describedby="auth-error" />
           </label>
           <button type="submit">${isSignup ? "Sign up" : "Sign in"}</button>
-          <p id="auth-status" class="muted" hidden></p>
-          <p id="auth-error" class="error" hidden></p>
+          <!-- Both stay in the DOM and empty rather than toggling the hidden attribute.
+               A live region a screen reader cannot see when the text arrives announces
+               nothing, and hidden takes the element out of the accessibility tree
+               entirely, so the old pattern wrote the message and then hid the only thing
+               that could have read it out. -->
+          <p id="auth-status" class="muted" role="status"></p>
+          <p id="auth-error" class="error" role="alert"></p>
         </form>
         <p class="auth-alt"><a href="/auth/reset.html">Forgot your password?</a></p>
         <div class="auth-divider"><span>or</span></div>
@@ -92,9 +97,12 @@ export function mountAuthForm(container, { mode = "signin", onSession }) {
       void handleSubmit();
     });
 
+    const inputs = [...form.querySelectorAll("input")];
+
     async function handleSubmit() {
-      errorEl.hidden = true;
-      statusEl.hidden = true;
+      errorEl.textContent = "";
+      statusEl.textContent = "";
+      for (const input of inputs) input.removeAttribute("aria-invalid");
       const formData = new FormData(form);
       const email = String(formData.get("email") ?? "");
       const password = String(formData.get("password") ?? "");
@@ -108,7 +116,6 @@ export function mountAuthForm(container, { mode = "signin", onSession }) {
             // Email confirmation is required before a session is issued; nothing more
             // to do here client-side until the user confirms and signs in.
             statusEl.textContent = "Check your email to confirm your account, then sign in.";
-            statusEl.hidden = false;
             return;
           }
           await createWorkspace(data.session.access_token, `${email}'s workspace`);
@@ -120,7 +127,10 @@ export function mountAuthForm(container, { mode = "signin", onSession }) {
         }
       } catch (error) {
         errorEl.textContent = error instanceof Error ? error.message : `${isSignup ? "Sign-up" : "Sign-in"} failed`;
-        errorEl.hidden = false;
+        // The service cannot say which field was wrong -- "invalid login credentials" is
+        // deliberately one answer for both -- so both are marked, and both point at the
+        // one message via aria-describedby.
+        for (const input of inputs) input.setAttribute("aria-invalid", "true");
       } finally {
         submitButton.disabled = false;
       }

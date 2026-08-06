@@ -130,7 +130,10 @@ if (scene) {
     scene.dataset.step = String(step);
     const active = TAB_FOR_STEP[step];
     for (const tab of tabs) {
-      tab.setAttribute("aria-selected", String(Number(tab.dataset.stepTab) === active));
+      // aria-pressed, not aria-selected: the strip was marked up as a tablist but has
+      // no tabpanels and no arrow-key navigation, so it promised a widget it is not.
+      // It is a group of toggle buttons that drive one scene, and says so now.
+      tab.setAttribute("aria-pressed", String(Number(tab.dataset.stepTab) === active));
     }
   }
 

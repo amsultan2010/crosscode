@@ -85,11 +85,11 @@
       <!-- The product, playing. -->
       <div class="wrap wrap-wide">
         <div class="stage reveal">
-          <div class="stage-tabs" role="tablist" aria-label="Steps in the loop">
-            <button type="button" role="tab" class="stage-tab" data-step-tab="1" aria-selected="false">Maya's agent writes</button>
-            <button type="button" role="tab" class="stage-tab" data-step-tab="2" aria-selected="false">Sent once it settles</button>
-            <button type="button" role="tab" class="stage-tab" data-step-tab="3" aria-selected="false">Applied to your tree</button>
-            <button type="button" role="tab" class="stage-tab" data-step-tab="4" aria-selected="false">Same lines? your agent</button>
+          <div class="stage-tabs" role="group" aria-label="Steps in the loop">
+            <button type="button" class="stage-tab" data-step-tab="1" aria-pressed="false" aria-controls="scene">Maya's agent writes</button>
+            <button type="button" class="stage-tab" data-step-tab="2" aria-pressed="false" aria-controls="scene">Sent once it settles</button>
+            <button type="button" class="stage-tab" data-step-tab="3" aria-pressed="false" aria-controls="scene">Applied to your tree</button>
+            <button type="button" class="stage-tab" data-step-tab="4" aria-pressed="false" aria-controls="scene">Same lines? your agent</button>
           </div>
 
           <div class="scene" id="scene" data-step="0">
@@ -103,7 +103,7 @@
                 </header>
                 <div class="panel-body">
                   <div class="file-head"><span class="file-name">services/payments/retry.ts</span><span class="file-state" data-state="editing">editing</span></div>
-                  <pre class="code"><code><span class="ln"><span class="c">// retry a failed capture with backoff</span></span>
+                  <pre class="code" tabindex="0"><code><span class="ln"><span class="c">// retry a failed capture with backoff</span></span>
 <span class="ln"><span class="k">export async function</span> <span class="f">retryCapture</span>(id: <span class="t">string</span>) {</span>
 <span class="ln add a1"><span class="s">+</span>  <span class="k">const</span> delays = [<span class="n">250</span>, <span class="n">1000</span>, <span class="n">4000</span>];</span>
 <span class="ln add a2"><span class="s">+</span>  <span class="k">for</span> (<span class="k">const</span> ms <span class="k">of</span> delays) {</span>
@@ -133,7 +133,7 @@
                 </header>
                 <div class="panel-body">
                   <div class="file-head"><span class="file-name">services/checkout/session.ts</span><span class="file-state" data-state="yours">yours, untouched</span></div>
-                  <pre class="code"><code><span class="ln"><span class="k">export function</span> <span class="f">startSession</span>(cart: <span class="t">Cart</span>) {</span><span class="ln">  <span class="k">const</span> total = <span class="f">sum</span>(cart.items);</span><span class="ln">  <span class="k">return</span> { id: <span class="f">uuid</span>(), total };</span><span class="ln">}</span></code></pre>
+                  <pre class="code" tabindex="0"><code><span class="ln"><span class="k">export function</span> <span class="f">startSession</span>(cart: <span class="t">Cart</span>) {</span><span class="ln">  <span class="k">const</span> total = <span class="f">sum</span>(cart.items);</span><span class="ln">  <span class="k">return</span> { id: <span class="f">uuid</span>(), total };</span><span class="ln">}</span></code></pre>
 
                   <div class="proposal">
                     <div class="proposal-head">
@@ -289,15 +289,15 @@
 
         <div class="plan-strip reveal">
           <div>
-            <h4>MIT licensed</h4>
+            <h3>MIT licensed</h3>
             <p>The CLI, daemon, and MCP server are yours to read, modify, and fork.</p>
           </div>
           <div>
-            <h4>No account beyond GitHub</h4>
+            <h3>No account beyond GitHub</h3>
             <p>The CLI signs in with GitHub, and an invite is checked against real repo access.</p>
           </div>
           <div>
-            <h4>Questions about a team</h4>
+            <h3>Questions about a team</h3>
             <p>Ask in the open. <a href="https://github.com/amsultan2010/crosscode/issues" rel="noopener">Open an issue</a>.</p>
           </div>
         </div>
@@ -322,7 +322,7 @@
             <span class="panel-path">run in your project</span>
             <button class="copy-btn" type="button" data-copy-target="install-command-text">Copy</button>
           </header>
-          <pre class="code"><code id="install-command-text">npm install -g crosscode-cli
+          <pre class="code" tabindex="0"><code id="install-command-text">npm install -g crosscode-cli
 cd your-repo
 crosscode start</code></pre>
         </div>
@@ -354,7 +354,7 @@ crosscode start</code></pre>
                 <span class="panel-path">paste into your coding agent</span>
                 <button class="copy-btn" type="button" data-copy-target="install-prompt-text">Copy prompt</button>
               </header>
-              <pre><code id="install-prompt-text">Set up Crosscode for this project. Crosscode syncs uncommitted working-tree files between
+              <pre tabindex="0"><code id="install-prompt-text">Set up Crosscode for this project. Crosscode syncs uncommitted working-tree files between
 my teammates' checkouts and mine in real time: they edit, my copy updates within seconds,
 and vice versa. It never touches commits, branches, or remotes. Do the following:
 
@@ -503,6 +503,7 @@ Crosscode to me unless there is a conflict you cannot merge on your own.</code><
         <a href="/docs/limitations.html">Limitations</a>
         <a href="/docs/terms.html">Terms</a>
         <a href="/docs/support.html">Support</a>
+        <a href="/docs/accessibility.html">Accessibility</a>
       </nav>
       <nav class="footer-col" aria-label="More">
         <h2>More</h2>
