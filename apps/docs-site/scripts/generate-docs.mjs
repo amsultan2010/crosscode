@@ -97,7 +97,9 @@ const NAV_GROUPS = [
     label: "Support & legal",
     links: [
       { href: "/docs/support.html", label: "Support", key: "support" },
-      { href: "/docs/terms.html", label: "Terms of Service", key: "terms" }
+      { href: "/docs/terms.html", label: "Terms of Service", key: "terms" },
+      { href: "/docs/dmca.html", label: "Copyright and DMCA", key: "dmca" },
+      { href: "/docs/dsa-contact.html", label: "EU DSA contact", key: "dsa-contact" }
     ]
   }
 ];
@@ -159,6 +161,22 @@ const GENERATED_PAGES = [
     title: "Terms of Service",
     mdFile: "terms.md",
     htmlOut: "terms.html",
+    nextHref: "/docs/dmca.html",
+    nextLabel: "Copyright and DMCA"
+  },
+  {
+    key: "dmca",
+    title: "Copyright and DMCA",
+    mdFile: "dmca.md",
+    htmlOut: "dmca.html",
+    nextHref: "/docs/dsa-contact.html",
+    nextLabel: "EU DSA contact"
+  },
+  {
+    key: "dsa-contact",
+    title: "EU DSA contact",
+    mdFile: "dsa-contact.md",
+    htmlOut: "dsa-contact.html",
     nextHref: "/docs/index.html",
     nextLabel: "Docs overview"
   }
@@ -247,13 +265,21 @@ ${bodyHtml}
 `;
 }
 
+// Legal docs carry `<!-- LAWYER: ... -->` notes flagging choices that need review. The
+// renderer runs with html:false, so a comment left in would be escaped and printed on the
+// page as visible text. Strip them from everything published; the repo's docs/*.md keeps
+// them, which is where they are meant to be read.
+function stripHtmlComments(markdown) {
+  return markdown.replace(/^[ \t]*<!--[\s\S]*?-->[ \t]*\r?\n?/gm, "");
+}
+
 function generateDocPages() {
   mkdirSync(siteDocsDir, { recursive: true });
   mkdirSync(publicDocsDir, { recursive: true });
 
   for (const p of GENERATED_PAGES) {
     const mdPath = path.join(rootDocsDir, p.mdFile);
-    const mdContent = readFileSync(mdPath, "utf8");
+    const mdContent = stripHtmlComments(readFileSync(mdPath, "utf8"));
     const bodyHtml = md.render(mdContent);
     const mdOutName = p.mdOutName ?? p.mdFile;
     const mdHref = `/docs/${mdOutName}`;
@@ -360,7 +386,7 @@ function generateLlmsFullTxt() {
   ];
 
   for (const s of sections) {
-    const content = readFileSync(path.join(rootDocsDir, s.file), "utf8");
+    const content = stripHtmlComments(readFileSync(path.join(rootDocsDir, s.file), "utf8"));
     parts.push("---", "", `<!-- source: docs/${s.file} -->`, "", content.trimEnd(), "");
   }
 
