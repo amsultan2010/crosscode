@@ -7,9 +7,12 @@ Something is broken, or you need a human. This page says where to go and what to
 | What is wrong | Where | Expect a reply |
 | --- | --- | --- |
 | A bug, a crash, a wrong result, a missing feature | [GitHub issues](https://github.com/amsultan2010/crosscode/issues) | 2 business days for a first response |
-| Account access, a lost project, a compromised credential | [SUPPORT EMAIL] | 1 business day |
-| Deleting your account or your data | [SUPPORT EMAIL] | 2 business days |
+| Account access, a lost project, a compromised credential | support@getcrosscode.dev | 1 business day |
+| Deleting your account or your data | support@getcrosscode.dev | 2 business days |
 | A security vulnerability | [SECURITY.md](https://github.com/amsultan2010/crosscode/blob/main/SECURITY.md), never a public issue | 2 business days |
+| Illegal content, or content that breaches [section 4 of the terms](/docs/terms.html) | abuse@getcrosscode.dev — see the [DSA contact page](/docs/dsa-contact.html) for what to include | 2 business days |
+| A copyright complaint or counter-notice | legal@getcrosscode.dev — see the [DMCA page](/docs/dmca.html) | 2 business days |
+| A privacy request: access, deletion, or a question about what we hold | privacy@getcrosscode.dev | 30 days, usually much sooner |
 
 Those are targets, not a service level agreement. Crosscode is a small project and there is
 no 24-hour desk behind it. If a reply matters by a deadline, say so in the first message.
@@ -76,4 +79,11 @@ Redact anything you would not post publicly. We do not need your source code.
 ## Legal
 
 - [Terms of Service](/docs/terms.html)
-- [Privacy](/docs/privacy.html)
+- [Privacy: what we can and can't see](/docs/privacy.html) — the plain-language version
+- [Privacy Policy](/docs/privacy-policy.html) — the formal notice, and how to exercise your rights
+- [Cookies](/docs/cookies.html)
+- [Subprocessors](/docs/subprocessors.html) — the third parties that process data for us
+- [Data Processing Addendum](/docs/dpa.html) — for business users; applies without signing
+- [Copyright and DMCA](/docs/dmca.html)
+- [DSA contact and illegal content reports](/docs/dsa-contact.html)
+- [Accessibility](/docs/accessibility.html)
