@@ -1,0 +1,59 @@
+name: DCO
+
+on:
+  pull_request:
+
+jobs:
+  # Contributions are MIT licensed and every commit must carry a Signed-off-by line per
+  # the Developer Certificate of Origin (developercertificate.org). CONTRIBUTING.md says
+  # so, but a rule nothing enforces is a rule that quietly stops being true — and the
+  # whole point of the sign-off is that it holds for *every* commit in the history, not
+  # most of them. A few lines of git and grep do this; a third-party action would need
+  # more trust than the job is worth.
+  signoff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The default shallow checkout can't see the base commit, so the PR's commit
+          # range wouldn't resolve at all.
+          fetch-depth: 0
+      - name: Every commit is signed off
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # Merge commits are skipped: GitHub generates them and there is no author to
+          # certify anything.
+          commits=$(git log --no-merges --format=%H "$BASE_SHA..$HEAD_SHA")
+          if [ -z "$commits" ]; then
+            echo "No non-merge commits in this pull request."
+            exit 0
+          fi
+          missing=0
+          for sha in $commits; do
+            author=$(git show -s --format='%an <%ae>' "$sha")
+            # The DCO is a statement by the author, so the sign-off has to name the
+            # author. A sign-off from someone else certifies nothing about this commit.
+            if git show -s --format=%B "$sha" | grep -qiF "Signed-off-by: $author"; then
+              echo "ok    $(git show -s --format='%h %s' "$sha")"
+            else
+              echo "MISSING $(git show -s --format='%h %s' "$sha")"
+              echo "        expected: Signed-off-by: $author"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            cat <<'EOF'
+
+          At least one commit is missing a Signed-off-by line matching its author.
+
+          Fix the most recent commit:   git commit -s --amend
+          Fix the whole branch:         git rebase --signoff origin/main
+          Then force-push.
+
+          See CONTRIBUTING.md, "Licensing your contribution".
+          EOF
+            exit 1
+          fi
