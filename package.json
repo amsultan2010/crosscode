@@ -15,13 +15,18 @@
     "url": "https://github.com/amsultan2010/crosscode/issues"
   },
   "keywords": [
-    "ai",
-    "agents",
-    "coding-agents",
     "mcp",
-    "git",
-    "collaboration",
-    "coordination"
+    "mcp-server",
+    "git-sync",
+    "coding-agent",
+    "claude-code",
+    "codex",
+    "pair-programming",
+    "real-time-sync",
+    "cursor",
+    "opencode",
+    "agent",
+    "agentic-coding"
   ],
   "type": "module",
   "bin": {
