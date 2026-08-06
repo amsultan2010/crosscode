@@ -28,6 +28,8 @@ type Subscriber = { socket: WebSocket; projectId: string; branch: string; replic
 export type SyncServiceStub = {
   url: string;
   changes: Change[];
+  /** How many times `GET /v1/changes` has been asked, so a test can catch a spin. */
+  readonly listCalls: number;
   /** Sequences at or below this are "no longer retained", to exercise cursor-too-old. */
   retentionFloor: number;
   /** Drops every open stream, as a network partition would. */
@@ -35,11 +37,20 @@ export type SyncServiceStub = {
   close(): Promise<void>;
 };
 
-export async function startSyncServiceStub(): Promise<SyncServiceStub> {
+export type SyncServiceStubOptions = {
+  /**
+   * Whether the stub answers a WebSocket upgrade at all. False stands in for a serverless
+   * host, which cannot: the routes work, `/v1/stream` never will, and the daemon has to
+   * fall back to polling rather than reconnect forever.
+   */
+  streams?: boolean;
+};
+
+export async function startSyncServiceStub(options: SyncServiceStubOptions = {}): Promise<SyncServiceStub> {
   const changes: Change[] = [];
   const subscribers = new Set<Subscriber>();
   let sequence = 0;
-  const state = { retentionFloor: 0 };
+  const state = { retentionFloor: 0, listCalls: 0 };
 
   const send = (response: import("node:http").ServerResponse, status: number, body: unknown) => {
     response.writeHead(status, { "content-type": "application/json" });
@@ -78,6 +89,7 @@ export async function startSyncServiceStub(): Promise<SyncServiceStub> {
         return;
       }
       if (request.method === "GET" && url.pathname === "/v1/changes") {
+        state.listCalls += 1;
         const query = listChangesQuerySchema.parse({
           projectId: url.searchParams.get("projectId"),
           branch: url.searchParams.get("branch"),
@@ -113,8 +125,10 @@ export async function startSyncServiceStub(): Promise<SyncServiceStub> {
     }
   };
 
-  const sockets = new WebSocketServer({ server, path: "/v1/stream" });
-  sockets.on("connection", (socket) => {
+  // No upgrade listener at all when streams are off, which is what makes node destroy the
+  // socket -- the client's view of a host that does not serve WebSockets.
+  const sockets = options.streams === false ? undefined : new WebSocketServer({ server, path: "/v1/stream" });
+  sockets?.on("connection", (socket) => {
     let subscriber: Subscriber | undefined;
     socket.on("message", (data) => {
       const message: unknown = JSON.parse(data.toString());
@@ -145,6 +159,7 @@ export async function startSyncServiceStub(): Promise<SyncServiceStub> {
   return {
     url: `http://127.0.0.1:${port}`,
     changes,
+    get listCalls() { return state.listCalls; },
     get retentionFloor() { return state.retentionFloor; },
     set retentionFloor(value: number) { state.retentionFloor = value; },
     disconnectAll() {
@@ -153,7 +168,7 @@ export async function startSyncServiceStub(): Promise<SyncServiceStub> {
     },
     async close() {
       for (const subscriber of [...subscribers]) subscriber.socket.terminate();
-      sockets.close();
+      sockets?.close();
       // `server.close` only stops new connections; it waits for the open ones, and the
       // daemon's fetch keeps its sockets alive between requests. Without this the close
       // never resolves and the test's teardown hook dies on its own timeout instead.

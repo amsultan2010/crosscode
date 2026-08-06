@@ -21,9 +21,11 @@ import {
   readSyncState,
   removeOwnedDescriptor,
   writeDaemonDescriptor,
+  writeSyncConfig,
   writeSyncState,
   type DaemonDescriptor
 } from "./sync-config.js";
+import type { StoredSession } from "./supabase-client.js";
 import { SyncServiceClient } from "./sync-service-client.js";
 
 /**
@@ -44,6 +46,8 @@ export type SyncDaemonOptions = {
   deferralMs?: number;
   /** How often the daemon looks for a branch switch or an in-progress git operation. */
   gitPollMs?: number;
+  /** How often changes are pulled when the stream is unavailable. Real default is 3s. */
+  streamPollMs?: number;
   port?: number;
   actor?: string;
   engine?: EngineOptions;
@@ -66,7 +70,10 @@ class HttpError extends Error {
 export class SyncDaemon {
   private watcher?: FSWatcher;
   private server?: Server;
+  private draining = false;
   private descriptor?: DaemonDescriptor;
+  /** Built when the loopback server binds, published only once start-up has fully succeeded. */
+  private pendingDescriptor?: DaemonDescriptor;
   private timers: NodeJS.Timeout[] = [];
   private readonly debounce = new Map<string, NodeJS.Timeout>();
   private readonly dirty = new Set<string>();
@@ -103,7 +110,7 @@ export class SyncDaemon {
     const state = await readSyncState(root);
     const branch = await currentBranch(root);
     const engine = await SyncEngine.open(root, options.engine ?? {});
-    const client = new SyncServiceClient(config, branch, state.branch === branch ? state.replicaId : undefined);
+    const client = new SyncServiceClient(config, branch, state.branch === branch ? state.replicaId : undefined, persistSession(root, config), options.streamPollMs);
     const daemon = new SyncDaemon(root, config, engine, client, branch, await headCommit(root), {
       debounceMs: options.debounceMs ?? 300,
       flushMs: options.flushMs ?? 2_000,
@@ -127,6 +134,7 @@ export class SyncDaemon {
     this.timers.push(interval(() => void this.enqueue(() => this.observeGit()), this.options.gitPollMs));
     // Anything edited while the daemon was down is still a change the peers need.
     await this.enqueue(() => this.publishAll());
+    await this.announceReady();
   }
 
   // ---- serialization ----------------------------------------------------
@@ -231,7 +239,11 @@ export class SyncDaemon {
       // Announce on every (re)subscribe: a peer that joins after we committed would
       // otherwise never learn our HEAD, since presence is only sent when something happens.
       onConnected: () => { void this.enqueue(async () => { await this.catchUp(); await this.announce(); }); },
-      onDisconnected: () => {}
+      onDisconnected: () => {},
+      // The stream's fallback. Same catch-up, on a timer instead of on a subscribe, so a
+      // checkout that can never open a socket still receives its peers' edits. Presence is
+      // not sent here: it lives only on the socket, so the room goes quiet but not blind.
+      onPoll: () => this.enqueue(() => this.catchUp())
     }, () => this.cursor);
   }
 
@@ -248,6 +260,13 @@ export class SyncDaemon {
       // The sender built on a blob we have never held, so we are genuinely behind. Fill
       // the gap from the cursor and retry once; a second miss has to surface rather than
       // loop, which is what allowCatchup: false forces.
+      //
+      // That guard covers the retry but not the fill: called from inside a drain, catchUp
+      // re-walks the same page from the same cursor -- which the cursor cannot leave, because
+      // it only advances past a change that applied. One unrebasable change from a peer
+      // therefore span the service at several requests a second, forever, while `crosscode
+      // status` showed a cursor that never moved. The guard inside catchUp makes the nested
+      // call a no-op, so the retry below decides, and an honest conflict reaches the agent.
       await this.catchUp();
       result = await this.engine.receive(change.version, { peer: change.replicaId, allowCatchup: false });
     }
@@ -268,6 +287,18 @@ export class SyncDaemon {
    * is what turns a dropped socket into a gap that closes itself.
    */
   private async catchUp(): Promise<void> {
+    // Not re-entrant: apply() calls this to fill a gap, and the drain that is already
+    // running is the fill. See the note there for what the recursion cost.
+    if (this.draining) return;
+    this.draining = true;
+    try {
+      await this.drainChanges();
+    } finally {
+      this.draining = false;
+    }
+  }
+
+  private async drainChanges(): Promise<void> {
     for (let page = 0; page < 100; page += 1) {
       const response = await this.client.changes(this.cursor);
       if ("status" in response) {
@@ -331,7 +362,7 @@ export class SyncDaemon {
       this.headNotice = undefined;
       this.reviewedHeads = "";
       this.client.stop();
-      this.client = new SyncServiceClient(this.config, branch);
+      this.client = new SyncServiceClient(this.config, branch, undefined, persistSession(this.root, this.config), this.options.streamPollMs);
       if (this.options.stream ?? true) await this.startStream();
       await this.publishAll();
       return;
@@ -371,7 +402,7 @@ export class SyncDaemon {
 
   /** Tells the room where this checkout is. Silent when there is no stream to say it on. */
   private async announce(paths: string[] = []): Promise<void> {
-    if (!this.client.id || !this.client.connected) return;
+    if (!this.client.id || !this.client.streaming) return;
     await this.client.presence(paths, this.options.actor ?? "you", this.head ?? undefined).catch(() => {});
   }
 
@@ -466,12 +497,24 @@ export class SyncDaemon {
       server.listen(this.options.port ?? 0, "127.0.0.1", () => { server.off("error", failed); ready(); });
     });
     this.server = server;
-    this.descriptor = daemonDescriptorSchema.parse({
+    this.pendingDescriptor = daemonDescriptorSchema.parse({
       pid: process.pid,
       port: (server.address() as { port: number }).port,
       secret,
       startedAt: new Date().toISOString()
     });
+  }
+
+  /**
+   * The descriptor is the daemon saying "I am up", so it is written last -- after the
+   * stream, the watcher, and the first publish have all succeeded. Written from startHttp()
+   * as it used to be, a daemon that then died on an expired session still left `crosscode
+   * start` reporting "Daemon started; this checkout is syncing" about a process that was
+   * gone a second later, because `start` polls for exactly this file.
+   */
+  private async announceReady(): Promise<void> {
+    if (!this.pendingDescriptor) throw new Error("The daemon's loopback server was never started");
+    this.descriptor = this.pendingDescriptor;
     await writeDaemonDescriptor(this.root, this.descriptor);
   }
 
@@ -556,6 +599,17 @@ function interval(task: () => void, ms: number): NodeJS.Timeout {
 }
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Writes a refreshed session back to the checkout's config. Supabase rotates the refresh
+ * token on every use, so this is not an optimization: without it a restart would present
+ * the token the last refresh already spent, and sign-in would be the only way back.
+ */
+function persistSession(root: string, config: SyncDaemonConfig): (session: StoredSession) => Promise<void> {
+  return async (session) => {
+    await writeSyncConfig(root, { ...config, service: { ...config.service, session } });
+  };
+}
 
 async function readJsonBody(request: import("node:http").IncomingMessage): Promise<unknown> {
   if (request.headers["content-type"]?.split(";")[0]?.trim() !== "application/json") throw new HttpError(415, "Unsupported content type");

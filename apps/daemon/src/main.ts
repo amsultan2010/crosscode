@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { createDaemonTelemetry } from "./observability.js";
+import { SessionExpiredError } from "./supabase-client.js";
 import { supervise } from "./supervisor.js";
 import { SyncDaemon } from "./sync-daemon.js";
 import { VERSION } from "./version.js";
@@ -33,6 +34,13 @@ if (!directory) {
   const daemon = await SyncDaemon.start(directory).catch(async (error: unknown) => {
     telemetry.capture(error, "startup");
     await telemetry.flush();
+    // An expired sign-in is the one start-up failure with a one-line fix, and a stack trace
+    // buries it. Everything else still throws, because it is a bug and the trace is the
+    // useful part.
+    if (error instanceof SessionExpiredError) {
+      process.stderr.write(`${error.message}\n`);
+      process.exit(1);
+    }
     throw error;
   });
   process.stdout.write(`${JSON.stringify({ ready: true, pid: process.pid, port: daemon.connection.port })}\n`);

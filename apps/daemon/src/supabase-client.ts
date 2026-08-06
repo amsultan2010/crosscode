@@ -70,6 +70,27 @@ export function getSupabaseClient(): SupabaseClient {
   return createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
 }
 
+/** Re-signing-in is the only fix, so this is worth telling apart from a network failure. */
+export class SessionExpiredError extends Error {}
+
+/**
+ * Trades a refresh token for a fresh access token. Supabase access tokens last an hour, so
+ * without this a daemon that has been running since before lunch holds a token the service
+ * refuses -- which is exactly what happened: `register()` threw "Access token is invalid or
+ * expired" and took the process down, and the only way back was signing in again.
+ */
+export async function refreshStoredSession(session: StoredSession): Promise<StoredSession> {
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase.auth.refreshSession({ refresh_token: session.refreshToken });
+  if (error || !data.session) {
+    // A refresh token is spent on first use and rotated, so "already used" and "expired"
+    // both mean the same thing to the person reading this: sign in again. Say that, rather
+    // than leaving them with Supabase's wording and a stack trace.
+    throw new SessionExpiredError(`This checkout's Crosscode sign-in is no longer valid (${error?.message ?? "no session returned"}); run \`crosscode start\` to sign in again`);
+  }
+  return toStoredSession(data.session);
+}
+
 export function toStoredSession(session: Session): StoredSession {
   const expiresAtMs = session.expires_at ? session.expires_at * 1_000 : Date.now() + (session.expires_in ?? 3_600) * 1_000;
   return { accessToken: session.access_token, refreshToken: session.refresh_token, expiresAt: new Date(expiresAtMs).toISOString() };

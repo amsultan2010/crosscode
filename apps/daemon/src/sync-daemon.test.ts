@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createServer } from "node:http";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -36,6 +37,7 @@ const FAST: SyncDaemonOptions = {
   flushMs: 100,
   deferralMs: 60,
   gitPollMs: 100,
+  streamPollMs: 100,
   // The 10s hot window is real behaviour, not a constant worth waiting out in a test.
   engine: { hotWindowMs: 150, maxDeferrals: 3 }
 };
@@ -217,6 +219,102 @@ describe("the daemon around the engine", () => {
     // The cursor moves once the change is fully accounted for, which is a beat after the
     // bytes land on disk.
     await waitFor("bob's cursor to advance", async () => bob.status().cursor > 0);
+  }, 60_000);
+
+  /**
+   * The production outage this covers: the service runs as a serverless function, which
+   * cannot answer a WebSocket upgrade, so `/v1/stream` 404s forever. Publishing worked and
+   * receiving did not -- an uploader, not a sync -- and `crosscode status` said
+   * `connected: false` with no way for it to ever become true.
+   */
+  it("still receives a peer's edits when the host cannot serve a stream at all", async () => {
+    const service = await startSyncServiceStub({ streams: false });
+    services.push(service);
+    const origin = await seedOrigin({ "a.txt": "0\n", "b.txt": "0\n" });
+    const roots = await Promise.all(["alice", "bob"].map((name) => checkout(origin, name, service)));
+    const [alice, bob] = [await start(roots[0]!), await start(roots[1]!)];
+
+    // Reachable by the only transport there is, and honest about saying so.
+    await waitFor("both daemons to report themselves connected", async () => alice.status().connected && bob.status().connected);
+
+    // Each direction gets its own file. Bouncing one file back immediately would land the
+    // reply inside the hot window the first write opened, which is a deferral test, not a
+    // transport one.
+    await type(roots[0]!, "a.txt", "arrived without a socket\n");
+    await waitFor("bob to receive it", () => allEqual(roots, "a.txt", "arrived without a socket\n"));
+
+    // And the other way, so it is a two-way sync rather than one lucky direction.
+    await type(roots[1]!, "b.txt", "and back again\n");
+    await waitFor("alice to receive it", () => allEqual(roots, "b.txt", "and back again\n"));
+  }, 60_000);
+
+  /**
+   * `crosscode start` polls for the descriptor every 100ms and reports success the moment
+   * it appears. Written when the loopback server bound, it appeared before the stream was
+   * up -- so a daemon that then died on an expired session still had `start` announcing
+   * "Daemon started; this checkout is syncing" about a process that was already gone.
+   */
+  it("does not advertise itself as ready while start-up is still in flight", async () => {
+    // Accepts the connection and never answers, so the daemon is unambiguously still
+    // starting up while the assertions below run.
+    const hanging = createServer(() => {});
+    await new Promise<void>((ready) => hanging.listen(0, "127.0.0.1", ready));
+    const service = await startSyncServiceStub();
+    services.push(service);
+    const origin = await seedOrigin({ "a.txt": "0\n" });
+    const root = await checkout(origin, "alice", service);
+    await writeSyncConfig(root, {
+      projectId: "project-1", repo: "acme/app",
+      service: { url: `http://127.0.0.1:${(hanging.address() as { port: number }).port}` }
+    });
+
+    const starting = start(root).catch(() => undefined);
+    // Comfortably past the point the loopback server has bound and the old code would have
+    // published the descriptor, and well inside the request that never returns.
+    await new Promise((settle) => setTimeout(settle, 2_000));
+    const descriptor = await read(root, ".git/crosscode/daemon.json");
+
+    // Dropping the connection fails the pending request now rather than at its 10s timeout,
+    // which is 8s this suite does not need to spend.
+    hanging.closeAllConnections();
+    await new Promise<void>((closed) => hanging.close(() => closed()));
+    await starting;
+
+    expect(descriptor).toBeNull();
+  }, 60_000);
+
+  /**
+   * A change built on a blob this checkout has never held makes apply() call catchUp() to
+   * fill the gap. Called from inside a drain, that re-walked the same page from the same
+   * cursor -- and the cursor cannot move past a change that has not applied, so it never
+   * moved. One such change from one peer span the real service at several requests a second
+   * indefinitely, while `crosscode status` showed `cursor` frozen and no error anywhere.
+   */
+  it("does not spin the service on a change it cannot rebase", async () => {
+    const service = await startSyncServiceStub();
+    services.push(service);
+    const origin = await seedOrigin({ "a.txt": "0\n" });
+    const root = await checkout(origin, "alice", service);
+    // A modify whose baseHash names a blob that exists nowhere: the sender's history is one
+    // this checkout has no way to reach.
+    service.changes.push({
+      sequence: 1, projectId: "project-1", branch: "main",
+      replicaId: "00000000-1111-4222-8333-444455556666",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      version: {
+        path: "a.txt", op: "modify", baseHash: "0".repeat(40),
+        contentHash: "1".repeat(40), content: "from a history we never had\n", encoding: "utf8"
+      }
+    });
+
+    const daemon = await start(root);
+    await waitFor("the cursor to get past it", async () => daemon.status().cursor >= 1);
+    const afterSettling = service.listCalls;
+    await new Promise((settle) => setTimeout(settle, 1_000));
+
+    // Ten polls a second would be a spin; the configured interval is 100ms in these tests,
+    // so a healthy daemon asks a handful of times in a second and no more.
+    expect(service.listCalls - afterSettling).toBeLessThan(20);
   }, 60_000);
 
   it("resyncs from full content when the service says the cursor is too old", async () => {
