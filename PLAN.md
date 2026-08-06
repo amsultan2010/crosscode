@@ -22,7 +22,7 @@ That's the whole product.
 **Joining**
 
 ```
-Alice:  crosscode invite  →  https://getcrosscode.dev/join/7f3a9c2e
+Alice:  crosscode invite  →  https://www.getcrosscode.dev/join/7f3a9c2e
 
 Bob clicks it, signs in with GitHub, and the page gives him:
         git clone git@github.com:acme/app.git && cd app

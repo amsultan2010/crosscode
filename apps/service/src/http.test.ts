@@ -54,7 +54,7 @@ describe("service HTTP boundary", () => {
       requireMembership: async () => ({ projectId, userId, role: "owner" as const, repo: "acme/app" }),
       registerReplica: async () => ({ replicaId, cursor: 0 })
     } as unknown as PgStore;
-    const base = await listen(store, { appUrl: "https://getcrosscode.dev" });
+    const base = await listen(store, { appUrl: "https://www.getcrosscode.dev" });
     const token = await signToken();
 
     const created = await post(base, "/v1/projects", { name: "app", repo: "acme/app" }, token);
@@ -67,7 +67,7 @@ describe("service HTTP boundary", () => {
     expect(invited.status).toBe(201);
     expect((await invited.json() as Envelope).data).toEqual({
       code: "CC-7F3A-9C2E",
-      url: "https://getcrosscode.dev/join/CC-7F3A-9C2E",
+      url: "https://www.getcrosscode.dev/join/CC-7F3A-9C2E",
       projectId,
       repo: "acme/app",
       expiresAt: "2026-01-08T00:00:00.000Z"

@@ -26,7 +26,7 @@ export type ServiceServerOptions = {
   jwks: JWTVerifyGetKey;
   supabaseUrl: string;
   /**
-   * Origin the join links in invites point at, e.g. "https://getcrosscode.dev". The
+   * Origin the join links in invites point at, e.g. "https://www.getcrosscode.dev". The
    * invite's `url` is the only thing an invitee ever sees, so this is what makes a code
    * clickable rather than something to retype.
    */
@@ -149,7 +149,13 @@ const JSON_TYPE = "application/json";
  */
 const GITHUB_TOKEN_HEADER = "x-crosscode-github-token";
 
-const DEFAULT_APP_URL = "https://getcrosscode.dev";
+/**
+ * `www`, not the apex. The apex answers 308 to this host, so both work in a browser -- but
+ * these URLs are printed in a terminal for someone to open or retype, and the sign-in and
+ * invite links are the two places a redirect hop is most expensive. It is also the host the
+ * Supabase redirect allowlist is written against.
+ */
+const DEFAULT_APP_URL = "https://www.getcrosscode.dev";
 
 export function assertSafeServiceBinding(host: string, tlsEnabled: boolean): void {
   if (!isLoopback(host) && !tlsEnabled) {
