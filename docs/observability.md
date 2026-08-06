@@ -113,7 +113,7 @@ Same Vercel project, **Settings, Environment Variables**, for Production and Pre
 
 These are build-time variables. Vite inlines them, so the key must be present when the site
 builds, and a redeploy is required. With no key set, Vite eliminates the whole module: the
-built file is 0.05 kB and contains no PostHog URL.
+built file is empty and contains no PostHog URL. With a key it is about 2 kB.
 
 ### 6. Verify that site events land
 
@@ -132,6 +132,12 @@ the device. No email, no account id, nothing derived from the visitor.
 
 `sign_up_started` and `sign_up_completed` are counted once per browser tab session, so the
 link click on the landing page and the form submit that follows it are one event, not two.
+
+`sign_up_completed` also requires `sign_up_started` earlier in the same tab. The signed-in
+card is what the sign-up page draws for anyone who already has a session, and a sign-in on
+the shared form draws it too; without that condition both would report a sign-up that never
+happened. So verify step 3 above in a tab that has not signed in, or the event will not
+fire and the page will look broken when it is not.
 
 ### 7. Confirm the health route the uptime job watches
 
@@ -240,8 +246,8 @@ bury a service outage.
 ## Where the include actually is
 
 `apps/docs-site/src/analytics.js` is a standalone module and has to be included per page.
-It is included in `apps/docs-site/index.html` and needs the same include on
+It is included in `apps/docs-site/index.html` and in
 `apps/docs-site/auth/signup.html`. `landing_page_view` and `install_prompt_copied` fire
 from the landing page, as does `sign_up_started` on a click through to
-`/auth/signup.html`. `sign_up_completed` fires from the sign-up page itself, so add the
-include there to close the funnel.
+`/auth/signup.html`. `sign_up_completed` fires from the sign-up page itself, which is why
+the include is on both pages: without it the funnel has no last step.
