@@ -121,7 +121,7 @@ match the commit's author. Forgot the sign-off? Fix the last commit with
 
 CI (`.github/workflows/dco.yml`) checks every non-merge commit in a pull request
 for a matching sign-off and fails the PR if one is missing. That check is the
-whole enforcement mechanism — there is no bot to comment and no other gate.
+whole enforcement mechanism: there is no bot to comment and no other gate.
 
 The name and logo are not covered by the MIT License. See
 [TRADEMARK.md](./TRADEMARK.md) for what you can do with them.

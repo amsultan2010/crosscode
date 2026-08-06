@@ -152,7 +152,7 @@ export class Replica {
 
   /**
    * Whatever the watcher would have seen: every synced path whose disk bytes differ
-   * from the shadow. Sending advances our shadow to what we sent — that is what makes
+   * from the shadow. Sending advances our shadow to what we sent: that is what makes
    * an applied write stop looking like a local edit (loop suppression).
    */
   publish() {
@@ -259,7 +259,7 @@ export class Replica {
     }
 
     if (L === null) {
-      // I deleted it, they edited it — mirror of delete-vs-edit.
+      // I deleted it, they edited it: mirror of delete-vs-edit.
       this.recordConflict(path, null, theirs, base, "edit-vs-delete");
       return "conflict";
     }
@@ -327,7 +327,7 @@ export function mergeFile(ours, base, theirs) {
     writeFileSync(join(d, "base"), base);
     writeFileSync(join(d, "theirs"), theirs);
     const r = raw(d, ["merge-file", "-p", "-L", "ours", "-L", "ancestor", "-L", "theirs", "ours", "base", "theirs"]);
-    // Exit code is the number of conflict hunks. Anything >127 is a hard refusal —
+    // Exit code is the number of conflict hunks. Anything >127 is a hard refusal,
     // notably "Cannot merge binary files", where stdout is EMPTY.
     if (r.status === null || r.status > 127) {
       return { clean: false, refused: true, content: r.out, error: r.err.trim() };

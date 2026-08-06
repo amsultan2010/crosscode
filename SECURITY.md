@@ -33,7 +33,7 @@ a staffed SLA. If a deadline slips you will hear that it slipped, not silence.
 
 - **Acknowledgement within 3 business days.** If you haven't heard anything by
   then, assume the mail went astray and ping the other channel.
-- **An initial assessment within 10 business days** — whether it reproduces,
+- **An initial assessment within 10 business days**: whether it reproduces,
   the severity as we see it, and a rough fix timeline.
 - **Progress updates at least every 14 days** until it's resolved.
 - Fixes ship as fast as the severity warrants. Something that exposes other
@@ -48,7 +48,7 @@ We coordinate disclosure with you.
 - Please give us **90 days** from your report before publishing, or until a fix
   is released, whichever comes first. If we need longer we'll ask and explain
   why; if we're unresponsive or the issue is being actively exploited, publish
-  — a stalled report is not a reason to leave users exposed.
+  A stalled report is not a reason to leave users exposed.
 - When a fix ships, we publish a GitHub Security Advisory describing the issue
   and its impact.
 - You'll be credited by name or handle in that advisory unless you'd rather not
@@ -81,8 +81,8 @@ Good faith means, concretely:
 
 This is the same promise [docs/terms.md](./docs/terms.md) §4 makes: good-faith
 security research on your own project is welcome and is not a breach of the
-terms. Work outside these limits — hitting other users, or degrading the
-service — isn't covered, and nothing here waives the rights of any third party,
+terms. Work outside these limits (hitting other users, or degrading the
+service) isn't covered, and nothing here waives the rights of any third party,
 including our hosting providers.
 
 If you're unsure whether something is in bounds, ask at
@@ -104,7 +104,7 @@ To help us reproduce and fix the issue quickly, include:
 
 ### Scope
 
-Crosscode is pre-1.0. It runs a hosted coordination service at
+Crosscode runs a hosted coordination service at
 `https://www.getcrosscode.dev`, which is the default for the CLI and the daemon,
 and that service plus the daemon, CLI, and MCP server are in scope. The software
 is MIT licensed, so you may run your own instance, but there is no supported

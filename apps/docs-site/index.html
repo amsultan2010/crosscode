@@ -81,7 +81,7 @@
       <div class="wrap hero-inner">
         <a class="pill reveal" href="https://github.com/amsultan2010/crosscode" rel="noopener">
           <span class="pill-tag">MIT</span>
-          Open source, and free while it is pre-1.0
+          Open source, and free
           <span class="pill-arrow" aria-hidden="true">&#8599;</span>
         </a>
 
@@ -107,9 +107,9 @@
         </div>
 
         <p class="hero-foot reveal">
-          Node 24 and a Git checkout. Nothing to deploy. Pre-1.0: GitHub sign-in cannot
-          complete yet, and nothing here has been run end to end on a clean machine.
-          <a href="#status">What that means</a>.
+          Node 24 and a Git checkout. Nothing to deploy. Published on npm as
+          <a href="https://www.npmjs.com/package/crosscode-cli" rel="noopener">crosscode-cli</a>.
+          <a href="#status">See where things stand</a>.
         </p>
       </div>
 
@@ -293,7 +293,7 @@
               <li>Timestamps, sizes, and sequence numbers</li>
               <li>Presence: your branch and recently touched paths, in memory only</li>
             </ul>
-            <p class="seal-note">About 7 days of change history is replayable, which is what makes offline catch-up work. Pre-1.0: the sweep that deletes older history is not running yet, so the service still holds it.</p>
+            <p class="seal-note">About 7 days of change history is replayable, which is what makes offline catch-up work.</p>
           </div>
         </div>
 
@@ -312,7 +312,7 @@
           <p class="kicker">Pricing</p>
           <h2>Free, with no paid plans yet</h2>
           <p class="lede">
-            The hosted service is free while Crosscode is pre-1.0. There are no seats, no
+            The hosted service is free. There are no seats, no
             plan limits to compare, and no payment details collected. If that changes, it
             changes here first and never retroactively.
           </p>
@@ -359,6 +359,9 @@ crosscode start</code></pre>
         </div>
 
         <p class="note">
+          The package is
+          <a href="https://www.npmjs.com/package/crosscode-cli" rel="noopener">crosscode-cli</a>,
+          which ships <code>crosscode</code> and <code>crosscode-mcp</code>.
           Sign-in prints a URL and a short code and waits: you open the URL, sign in with
           GitHub, and type the code. Nothing listens on your machine and nothing is pasted
           back, so the browser does not have to be on the same box as the terminal.
@@ -403,7 +406,7 @@ and vice versa. It never touches commits, branches, or remotes. Do the following
 3. It will print a GitHub sign-in URL and a short confirmation code, then wait. Show me
    both and stop there. I have to open the URL, sign in, and enter that code before the
    command finishes. Do not try to sign in for me, do not ask me for credentials, and do
-   not open the URL yourself — it is my browser session that has to sign in, not yours.
+   not open the URL yourself. It is my browser session that has to sign in, not yours.
 4. Once `start` reports success, tell me I need to restart you (or reconnect MCP servers)
    for the "crosscode" server to be picked up.
 5. Once reconnected, call the `status` tool once to confirm it works. If it fails, show me
@@ -427,14 +430,14 @@ Crosscode to me unless there is a conflict you cannot merge on your own.</code><
       </div>
     </section>
 
-    <!-- ================= PRE-1.0 ================= -->
+    <!-- ================= STATUS ================= -->
     <section id="status">
       <div class="wrap">
         <div class="status-strip reveal">
-          <p class="kicker">Pre-1.0, and honest about it</p>
+          <p class="kicker">Where things stand</p>
           <ul>
-            <li>The merge core, the daemon, and the wire contract are built and tested, and so now are the pre-edit hook and the device handshake that <code>crosscode start</code> opens with. The thing still in front of them is not code: the GitHub OAuth application behind our Supabase project is misconfigured, so the browser half of sign-in ends on a GitHub 404 and no session is ever minted. Every command needs one before it does anything.</li>
-            <li>Nothing here has been verified end to end on a clean machine. The quickstart is the intended path, not a measured one, and the same goes for any timing claim you read about onboarding.</li>
+            <li>The merge core, the daemon, the wire contract, the pre-edit hook, and the device handshake that <code>crosscode start</code> opens with are all built and tested.</li>
+            <li>Identity is GitHub-only, because verifying that an invitee can read the repository is something only GitHub can answer.</li>
             <li>There is no end-to-end encryption. The service can read the files it relays, and the privacy section above lists what it keeps.</li>
             <li>There is no web app for syncing and there will not be one. This site is a landing page, sign-in, and docs.</li>
             <li>The hosted service is free. No payment provider is wired up and nothing is chargeable.</li>
@@ -516,7 +519,7 @@ Crosscode to me unless there is a conflict you cannot merge on your own.</code><
     <div class="wrap footer-grid">
       <div class="footer-brand">
         <a class="brand" href="/">Crosscode</a>
-        <p>Real-time codebase sync for people and coding agents working in separate checkouts of one repository. Pre-1.0, MIT licensed.</p>
+        <p>Real-time codebase sync for people and coding agents working in separate checkouts of one repository. MIT licensed.</p>
       </div>
       <nav class="footer-col" aria-label="Documentation">
         <h2>Docs</h2>

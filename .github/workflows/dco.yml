@@ -6,7 +6,7 @@ on:
 jobs:
   # Contributions are MIT licensed and every commit must carry a Signed-off-by line per
   # the Developer Certificate of Origin (developercertificate.org). CONTRIBUTING.md says
-  # so, but a rule nothing enforces is a rule that quietly stops being true — and the
+  # so, but a rule nothing enforces is a rule that quietly stops being true, and the
   # whole point of the sign-off is that it holds for *every* commit in the history, not
   # most of them. A few lines of git and grep do this; a third-party action would need
   # more trust than the job is worth.

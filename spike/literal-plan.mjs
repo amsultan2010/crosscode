@@ -87,7 +87,7 @@ function runner(name) {
 
 /**
  * Reading A: the sender advances its shadow when it sends.
- * Concurrent edits then hit rule 1 on both sides — each blindly overwrites its own
+ * Concurrent edits then hit rule 1 on both sides: each blindly overwrites its own
  * work with the peer's. Edits are LOST and the replicas end up permanently swapped.
  */
 export function literalRule1DataLoss() {
@@ -108,7 +108,7 @@ export function literalRule1DataLoss() {
     r.check("B's own edit was destroyed", !b.includes("// B"), b.includes("// B") ? "survived" : "gone");
     r.check("the two replicas ended up swapped, not merged", a === bText && b === aText);
     r.check("trees did NOT converge", diffTrees(w.A, w.B).length > 0);
-    r.check("and it is silent — zero conflicts recorded", w.A.conflicts.length + w.B.conflicts.length === 0);
+    r.check("and it is silent, zero conflicts recorded", w.A.conflicts.length + w.B.conflicts.length === 0);
     return r;
   } finally {
     w.cleanup();

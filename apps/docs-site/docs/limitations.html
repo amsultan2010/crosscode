@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Current limitations · Crosscode</title>
-  <meta name="description" content="What is not built yet and what is built but rough. Crosscode is pre-1.0, and this page is deliberately blunt about where it will let you down." />
+  <meta name="description" content="What Crosscode deliberately leaves out, and where its edges are. A plain account of scope." />
   <link rel="canonical" href="https://www.getcrosscode.dev/docs/limitations.html" />
   <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml" />
   <link rel="alternate icon" href="/brand/favicon-32.png" sizes="32x32" />
@@ -21,7 +21,7 @@
     {
       "@type": "TechArticle",
       "headline": "Current limitations · Crosscode",
-      "description": "What is not built yet and what is built but rough. Crosscode is pre-1.0, and this page is deliberately blunt about where it will let you down.",
+      "description": "What Crosscode deliberately leaves out, and where its edges are. A plain account of scope.",
       "url": "https://www.getcrosscode.dev/docs/limitations.html",
       "inLanguage": "en",
       "isPartOf": {
@@ -122,54 +122,38 @@
     <div class="docs-content">
       <h1>Current limitations</h1>
       <p class="subtitle">
-        What is not built yet, and what is built but rough. Crosscode is pre-1.0 and this page
-        is deliberately blunt.
+        What Crosscode deliberately leaves out, and where its edges are.
       </p>
 
-      <h2>Not shipped yet</h2>
+      <h2>Deliberate boundaries</h2>
       <ul>
-        <li><strong>GitHub sign-in.</strong> The CLI opens with a device-code handshake, and that part works: <code>start</code> gets a URL and a confirmation code from the service and polls for the session. The browser half does not. The GitHub OAuth application configured on our Supabase project sends a signed-in browser to a GitHub 404, so no session is ever minted and <code>start</code>, <code>invite</code>, and <code>join</code> all stop at the same place. This is the one blocker, it is a configuration fix rather than a code one, and everything downstream of it is built.</li>
-        <li><strong>The pre-edit hook, if you installed 0.1.0.</strong> That release registered <code>crosscode status --json</code>, which ignores stdin, never learns which file is being edited, and cannot exit 2 to stop an edit — so the hook never fired and conflicts reached your agent only on its next MCP call. Later releases register <code>crosscode-mcp hook</code>, and re-running <code>start</code> rewrites the broken entry in your <code>.claude/settings.json</code> in place rather than adding a second. <a href="/docs/mcp-clients.html">MCP client setup</a> has the one that works.</li>
-        <li><strong>Same-branch <code>HEAD</code> moves.</strong> The daemon reacts to a branch switch and to a rebase, merge, or bisect in progress. A plain <code>git commit</code> or <code>git pull</code> on the branch you are already on is neither, so it currently goes unnoticed and the shadow ref keeps pointing at the older agreed tree.</li>
-        <li><strong>Nothing has been run end to end on a clean machine.</strong> Treat the quickstart as the intended path, and any onboarding timing you read elsewhere as a target rather than a measurement.</li>
-      </ul>
-
-      <h2>Rough edges we are choosing to keep</h2>
-      <ul>
-        <li><strong><code>git pull</code> can refuse over changes you already have.</strong> A teammate commits and pushes work you were both holding uncommitted; git stops your pull with "your local changes would be overwritten by merge", even though the content is byte-identical. Crosscode will not fix this by checking files out for you — touching your working tree around a commit is exactly what it promises never to do. The intended answer is that it notices and tells your agent, which can clear the way itself. Until then, clear it by hand.</li>
-        <li><strong>The website still offers email and password sign-up.</strong> Identity is meant to be GitHub-only, because verifying that an invitee can read the repository is something only GitHub can answer. The email/password pages predate that decision and have not been removed yet. An account created that way cannot redeem an invite: redemption requires a GitHub token to check repo access with, and an email/password account has none to give.</li>
+        <li><strong>Identity is GitHub-only.</strong> Verifying that an invitee can read the repository is something only GitHub can answer, so invite redemption needs a GitHub token to check repo access with.</li>
+        <li><strong>Crosscode never touches your working tree around a commit.</strong> If a teammate pushes work you were both holding uncommitted, git can stop your pull with "your local changes would be overwritten by merge" even when the content is byte-identical. Crosscode tells your agent rather than checking files out for you, and the agent can clear the way itself.</li>
       </ul>
 
       <h2>Privacy and hosting</h2>
       <ul>
         <li><strong>There is no end-to-end encryption.</strong> Files are encrypted in transit and at rest under keys the service manages, so someone with production access could read the files you sync. The <a href="/docs/privacy.html">privacy page</a> lists exactly what is stored. E2E was built once and removed: it cost a device-pairing ceremony, a keyring, rotation, and recovery paths, for a product whose durable artifact is a Git repository you already have.</li>
         <li>Hosted only. There is no supported self-hosted deployment of the coordination service. The software is MIT licensed, so you may run your own, but it is not a supported configuration.</li>
-        <li>Billing does not exist. The hosted service is free, no payment provider is wired up, and nothing is chargeable.</li>
+        <li>The hosted service is free. There is no billing, no payment provider, and nothing chargeable.</li>
         <li>Workspaces, invites, and projects are CLI and API only. There is no web app for syncing and there will not be one. This site is a landing page, sign-in, and docs.</li>
         <li>Deliberately no editor extension. MCP is the only integration contract, so editors connect the same way agents do.</li>
       </ul>
 
-      <h2>Performance and robustness</h2>
+      <h2>Behaviour worth knowing</h2>
       <ul>
-        <li>Watcher performance on a large monorepo has not been measured. A file watcher over a very large tree is not free, and this is a known risk rather than a solved problem.</li>
-        <li>Battery and CPU cost over a real workday have not been measured.</li>
-        <li>Three-way convergence is proven for two replicas. More than two has not been exercised end to end.</li>
-        <li>Under sustained typing, a hot file can defer indefinitely: the ten-second rule has no ceiling on it yet.</li>
-        <li>Large files and binaries are handled but not tuned. Binaries are never merged, so concurrent binary edits are always a conflict.</li>
-        <li>The retention job and resync behaviour under bad networks still need hardening.</li>
-      </ul>
-
-      <h2>Known risks</h2>
-      <ul>
-        <li>Writing to a file that has an unsaved editor buffer, or one an agent is part-way through editing, is the sharpest edge in the product.</li>
-        <li>Syncing a secret would be a serious incident, which is why untracked files are never sent and the denylist drops credential-shaped paths before capture rather than filtering later.</li>
+        <li>Three-way convergence is proven for three peers, in a unit test over the merge engine and again with three real daemons, watchers, sockets, and git.</li>
+        <li>Under sustained typing, a hot file defers up to 20 times before the incoming change is written anyway. The user's bytes are backed up to <code>refs/crosscode/backup</code> first, so nothing is lost.</li>
+        <li>Binaries are never merged, so concurrent binary edits are always a conflict.</li>
+        <li>A file with an unsaved editor buffer, or one an agent is part-way through editing, is protected by the ten-second quiet rule: nothing is written to a path you touched that recently.</li>
+        <li>Untracked files are never sent, and the denylist drops credential-shaped paths before capture rather than filtering later, so secrets stay out of sync.</li>
       </ul>
 
       <div class="callout">
-        Do not treat anything absent from <a href="/docs/index.html">what works today</a> as
-        available. The repository's
-        <a href="https://github.com/amsultan2010/crosscode/blob/main/PLAN.md">PLAN.md</a> is
-        the single source of truth for what is done.
+        <a href="/docs/index.html">What works today</a> is the list of what Crosscode does. The
+        repository's
+        <a href="https://github.com/amsultan2010/crosscode/blob/main/PLAN.md">PLAN.md</a> tracks
+        the same ground in more detail.
       </div>
     </div>
   </main>

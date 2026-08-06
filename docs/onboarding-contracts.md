@@ -54,8 +54,8 @@ to anyone; `userCode` is short enough to read off a terminal and type into a pag
 its own it grants nothing. The service stores a hash of the device code, not the code. Both
 expire together, in about fifteen minutes, and the pair is single-use.
 
-The first two routes are unauthenticated by definition — the whole point is that the caller
-has no session yet — so they are the only routes exempt from the bearer check. The poll
+The first two routes are unauthenticated by definition (the whole point is that the caller
+has no session yet) so they are the only routes exempt from the bearer check. The poll
 route is rate-limited, because it is the one endpoint an attacker can hit without
 credentials.
 
@@ -138,7 +138,7 @@ Both commands leave the checkout in the same state, and both are idempotent:
 3. The MCP server registered with the agent config that is present.
 4. The `crosscode` skill copied into the agent's skills directory.
 5. The pre-edit hook registered for Claude Code, and for Codex where its config format is
-   recognized. The command is `crosscode-mcp hook` — the hook is a subcommand of the MCP
+   recognized. The command is `crosscode-mcp hook`, because the hook is a subcommand of the MCP
    entrypoint, not a sixth CLI command.
 
 Steps 3 to 5 are described in [mcp-clients.md](./mcp-clients.md). Any of them failing is

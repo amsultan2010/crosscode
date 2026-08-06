@@ -1179,7 +1179,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 .disclose-body { padding: 1.3rem; }
 .disclose-body .note:first-child { margin-top: 0; margin-bottom: 1.2rem; }
 
-/* --- pre-1.0 strip ------------------------------------------------------- */
+/* --- status strip ------------------------------------------------------- */
 
 .status-strip {
   border: 1px solid var(--line);

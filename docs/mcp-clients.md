@@ -124,7 +124,7 @@ the hook just moves the moment earlier.
 
 The command is **`crosscode-mcp hook`**, not `crosscode hook`. Both bins in the published
 package point at the same file and it dispatches on the name it was invoked under, so
-`crosscode` is the CLI and `crosscode-mcp` is the MCP entrypoint — and the hook is a
+`crosscode` is the CLI and `crosscode-mcp` is the MCP entrypoint, and the hook is a
 subcommand of the MCP entrypoint, not a sixth CLI command. `crosscode hook` is an unknown
 subcommand and exits with a `USAGE_ERROR`, which a hook runner will read as a hook that
 declined to say anything.
@@ -160,8 +160,8 @@ learns which file is being edited, prints CLI status JSON rather than a hook res
 cannot exit 2 to stop an edit.
 
 Re-running `crosscode start` on a later release rewrites that command in place. It does not
-append a second entry and does not leave the old one alone — an installer that skipped a
-hook it had already written would leave every 0.1.0 user broken forever. Editing the
+append a second entry and does not leave the old one alone. An installer that skipped a
+hook it had already written would leave every 0.1.0 user on the old entry forever. Editing the
 `command` string by hand does the same job; nothing else in the entry changes.
 
 ### Codex CLI

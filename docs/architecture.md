@@ -52,14 +52,14 @@ bisect, and resyncs afterwards.
 
 **When `HEAD` moves.** Switching branch is a different room: the daemon resets the shadow to
 the new `HEAD`, drops what was in flight, and rejoins. A commit or a pull on the *same*
-branch is subtler — the branch is unchanged and no git operation is in progress, but the
+branch is subtler: the branch is unchanged and no git operation is in progress, but the
 tree the shadow points at is no longer what both sides agreed on. The daemon has to notice
 and rebase the shadow onto the new `HEAD` without discarding uncommitted work that is
 genuinely local, and without republishing everything each time somebody commits.
 
 What it deliberately does **not** do is touch your working tree to make `git pull` succeed.
 If a teammate commits and pushes changes you are still holding uncommitted, git refuses the
-pull — "your local changes would be overwritten" — even though the content is identical.
+pull ("your local changes would be overwritten") even though the content is identical.
 Crosscode could clear that by checking files out for you, and checking files out on your
 behalf around a commit is exactly the magic invariant 1 exists to forbid. Instead it tells
 your agent a pull is waiting, and your agent, which is allowed to run git, clears the way.
@@ -67,15 +67,18 @@ your agent a pull is waiting, and your agent, which is allowed to run git, clear
 ## Coordination service (`apps/service`)
 
 A store-and-forward relay on Supabase-hosted Postgres. Six tables carry the product:
-`users`, `projects`, `project_members`, `invites`, `replicas`, `file_versions`. Sign-in
-adds a seventh, `device_codes`, holding short-lived pending sign-ins. Presence is in-memory
-in the websocket gateway, not a table.
+`users`, `projects`, `project_members`, `invites`, `replicas`, `file_versions`. Two more
+support it: `device_codes` holds short-lived pending sign-ins, and `terms_acceptances`
+records which version of the terms and privacy notice each account has accepted. Presence
+is in-memory in the websocket gateway, not a table.
 
 Routes: `POST /v1/projects`, `POST /v1/invites`, `POST /v1/invites/:code/redeem`,
 `POST /v1/replicas`, `GET /v1/changes?since=`, `POST /v1/changes`, and the websocket at
-`/v1/stream`. Sign-in adds `POST /v1/auth/github/device`, `/device/token`, and
-`/device/bind` — with `GET /health` and `/healthz`, the only routes exempt from the bearer
-check, because their whole job is to serve a caller who has no session yet. Redeeming an
+`/v1/stream`. Sign-in adds `POST /v1/auth/github/device`, `/device/token` and
+`/device/bind`; terms acceptance adds `GET /v1/legal`, `POST /v1/legal/acceptances` and
+`GET /v1/legal/acceptances`. The device routes, with `GET /health` and `/healthz`, are the
+only ones exempt from the bearer check, because their whole job is to serve a caller who
+has no session yet. Redeeming an
 invite verifies the invitee actually has access to the repo, using the invitee's own GitHub
 token passed as `x-crosscode-github-token`. Row Level Security is on from the first
 migration; `device_codes` carries no policy at all, which denies it to every role that does
@@ -84,8 +87,7 @@ not bypass RLS.
 The service assigns sequence numbers and fans changes out. It does not merge, classify, or
 inspect anything. About 7 days of changes are replayable (`HISTORY_RETENTION_DAYS` in
 `apps/service/src/store.ts`); a replica whose cursor is older than that is told to resync
-from full content rather than handed a partial history. The sweep that deletes aged rows is
-not built yet, so today the service keeps them past that window — see PLAN.md.
+from full content rather than handed a partial history.
 
 A room is one project plus one branch name. Different branches do not sync, because
 different branches mean you did not want to.

@@ -9,13 +9,13 @@ you like, just don't claim to *be* Crosscode.
 ## What you can do without asking
 
 - **Fork it and say so.** "Based on Crosscode", "a fork of Crosscode", "derived
-  from Crosscode" — all fine, and encouraged, as long as the name of your
+  from Crosscode": all fine, and encouraged, as long as the name of your
   project is not itself Crosscode or a name close enough to be mistaken for it.
 - **Redistribute it unmodified.** Packaging or mirroring an unmodified release
   under the name Crosscode is fine, keeping the MIT licence and copyright
   notice intact.
 - **Talk about it.** Blog posts, talks, tutorials, reviews, comparisons,
-  benchmarks, "works with Crosscode", "Crosscode vs. X" — ordinary nominative
+  benchmarks, "works with Crosscode", "Crosscode vs. X": ordinary nominative
   use needs no permission, including where the conclusion is unflattering.
 - **Use the logo to refer to Crosscode**, for example next to a link or in a
   comparison table, unmodified and not as the primary branding of your thing.
@@ -28,7 +28,7 @@ you like, just don't claim to *be* Crosscode.
 - **Don't use the logo as your own mark**, and don't use it in your project's
   or company's logo, icon, or wordmark.
 - **Don't imply endorsement, affiliation, or an official relationship** that
-  doesn't exist — "official Crosscode plugin", "Crosscode certified",
+  doesn't exist: "official Crosscode plugin", "Crosscode certified",
   "Crosscode partner".
 - **Don't register** "Crosscode" or a confusingly similar name as a trademark,
   domain, package name, or social handle in a way that suggests you are the
@@ -43,7 +43,7 @@ easy yeses.
 ## Status
 
 No Crosscode trademark is registered anywhere today, and registration is
-deferred — Crosscode is a pre-1.0 side project. This policy states what the
+deferred. Crosscode is a small project. This policy states what the
 project asks of you; it is not a claim to a registered mark. It may change as
 the project does.
 

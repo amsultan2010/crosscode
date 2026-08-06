@@ -5,8 +5,8 @@
 > end is done.
 
 This is the Article 28 agreement between you and Crosscode for the personal data that ends
-up inside the files you sync. It applies automatically when you use the hosted service —
-you do not have to sign, request or negotiate anything. If you need a counter-signed copy
+up inside the files you sync. It applies automatically when you use the hosted service.
+You do not have to sign, request or negotiate anything. If you need a counter-signed copy
 for your own records, write to **legal@getcrosscode.dev**.
 
 It is short on purpose. Everything in it is a commitment a one-person project can actually
@@ -16,14 +16,14 @@ Effective from {{EFFECTIVE_DATE}}.
 
 ## 1. Parties and roles
 
-- **Controller:** you — the account holder, or the organisation you sync on behalf of.
+- **Controller:** you: the account holder, or the organisation you sync on behalf of.
 - **Processor:** {{PROVIDER_NAME}}, an individual acting as a sole proprietor, at
   {{PROVIDER_ADDRESS}} ("Crosscode").
 
 You decide why and how the personal data inside your repositories is processed. Crosscode
 processes it only to run the sync service, on your instructions.
 
-For your own account data — your email, your GitHub identity, your projects — Crosscode is
+For your own account data (your email, your GitHub identity, your projects) Crosscode is
 the **controller**, not your processor, and the [Privacy Policy](./privacy-policy.md)
 governs instead. This agreement covers only the data inside your files.
 
@@ -57,7 +57,7 @@ categorise them, so this is stated by shape rather than by list:
   else that ends up in a fixture.
 - Anything else a tracked file happens to hold.
 
-**Two limits that reduce this materially.** Only files Git already *tracks* are ever sent —
+**Two limits that reduce this materially.** Only files Git already *tracks* are ever sent, and
 untracked files never leave the machine. And a path denylist drops `.env*`, `.envrc`,
 `.npmrc`, `.netrc`, `credentials*`, `secret*`, SSH private keys, and `*.pem` / `*.key` /
 `*.p12` / `*.pfx` / `*.jks` / `*.keystore` before a change is captured, rather than
@@ -94,7 +94,7 @@ Exactly one person has production access: {{PROVIDER_NAME}}. There is no team, s
 no list of authorised personnel to maintain and nobody else to bind. That person is bound
 to confidentiality by this agreement.
 
-If that ever stops being true — a second maintainer, a contractor with production access —
+If that ever stops being true (a second maintainer, a contractor with production access)
 each such person will be under a written confidentiality obligation before they get access,
 and this section will be updated to say so.
 
@@ -118,7 +118,7 @@ If a repository cannot be read by us, do not sync it.
 
 ### 7.2 Encryption
 
-- **In transit:** TLS everywhere. Database connections require `sslmode=verify-full` — both
+- **In transit:** TLS everywhere. Database connections require `sslmode=verify-full`, so both
   certificate chain and hostname are verified, with a private root supplied where the
   managed provider uses one. A non-loopback connection string without `verify-full` is
   refused at startup, not warned about.
@@ -155,7 +155,7 @@ If a repository cannot be read by us, do not sync it.
 The receiving daemon verifies every change before applying it: content must hash to the
 `contentHash` on the wire, and the merge base must resolve to the `baseHash` the sender
 recorded. A change failing either is not applied. The check is deliberately the receiver's
-— a service willing to substitute content would substitute the hash beside it.
+A service willing to substitute content would substitute the hash beside it.
 
 ### 7.6 Telemetry hygiene
 
@@ -193,7 +193,7 @@ performance.
 ## 9. Assisting you
 
 **Data subject requests.** If a data subject contacts Crosscode about data inside your
-repository, we will not respond substantively — we will tell them to contact you, and tell
+repository, we will not respond substantively. We will tell them to contact you, and tell
 you within **5 business days** if we can identify you. Realistically we usually cannot
 identify whose data is in a file, because identifying it would mean reading your files.
 
@@ -215,7 +215,7 @@ retain time inside your own 72-hour Art. 33 clock.
 
 The notification will describe the nature of the breach, the categories and approximate
 number of data subjects and records affected, the likely consequences, and the measures
-taken or proposed — or, where the facts are not yet established, what is known so far,
+taken or proposed, or, where the facts are not yet established, what is known so far,
 followed by updates as the picture firms up. Notice goes to the email address on the
 account, from **security@getcrosscode.dev**.
 
@@ -256,7 +256,7 @@ You may verify compliance with this agreement by:
 3. **Sub-processor reports.** We will pass on whatever certifications and audit reports
    Supabase and Vercel make available to their customers.
 
-**On-site inspection is not offered.** There is no site — one person, no office, no
+**On-site inspection is not offered.** There is no site: one person, no office, no
 datacentre of our own. An on-premises audit right would be a promise that could not be
 kept. If your compliance programme requires one, Crosscode is not a suitable processor for
 that workload, and it is better that you learn it here than after signing.
@@ -270,14 +270,14 @@ Where the EU Standard Contractual Clauses are needed for a transfer under this a
 Module Three (processor to sub-processor) applies, together with the UK Addendum for UK
 transfers, and they are incorporated by reference with the annexes completed as follows:
 
-- **Annex I(A), Parties** — you as data exporter; {{PROVIDER_NAME}}, {{PROVIDER_ADDRESS}}
+- **Annex I(A), Parties**: you as data exporter; {{PROVIDER_NAME}}, {{PROVIDER_ADDRESS}}
   as data importer.
-- **Annex I(B), Description of transfer** — §§2, 3 and 4 of this agreement.
-- **Annex I(C), Competent supervisory authority** — the authority competent for you as
+- **Annex I(B), Description of transfer**: §§2, 3 and 4 of this agreement.
+- **Annex I(C), Competent supervisory authority**: the authority competent for you as
   controller.
-- **Annex II, Technical and organisational measures** — §7 of this agreement, in full,
+- **Annex II, Technical and organisational measures**: §7 of this agreement, in full,
   including §7.7.
-- **Annex III, Sub-processors** — the [Subprocessors](./subprocessors.md) page as it stands
+- **Annex III, Sub-processors**: the [Subprocessors](./subprocessors.md) page as it stands
   from time to time.
 
 <!-- LAWYER: this incorporates the SCCs by reference with a mapped-annex approach rather
@@ -305,17 +305,17 @@ case the statutory position governs.
 
 Fill in, in this file:
 
-- `{{PROVIDER_NAME}}` — appears in §1, §6, and Annex I(A) in §13
-- `{{PROVIDER_ADDRESS}}` — appears in §1 and Annex I(A) in §13
-- `{{JURISDICTION}}` — §14
-- `{{EFFECTIVE_DATE}}` — the header
+- `{{PROVIDER_NAME}}`: appears in §1, §6, and Annex I(A) in §13
+- `{{PROVIDER_ADDRESS}}`: appears in §1 and Annex I(A) in §13
+- `{{JURISDICTION}}`: §14
+- `{{EFFECTIVE_DATE}}`: the header
 
 And resolve, before publishing:
 
 - The `<!-- LAWYER -->` note in §13 on the SCC annexes and the missing transfer impact
   assessment.
 - Add an accept-by-reference clause to the [Terms of Service](./terms.md) pointing here, so
-  this agreement is actually incorporated. That file is owned by another workstream — see
+  this agreement is actually incorporated. That file is owned by another workstream, see
   `HANDOFF.md`.
 - Decide whether the 48-hour breach deadline in §10 is one you can meet as a single person.
   It is deliberately tighter than the 72 hours the law gives your controller. If it is not

@@ -59,7 +59,7 @@ function commonChecks(r, w, { maxMessages, expectConverged = true, expectConflic
   return r;
 }
 
-// 1 — edits to completely different files
+// 1: edits to completely different files
 export function scenario1() {
   const r = runner("1. disjoint files");
   const w = makeWorld({ "src/auth.ts": numbered(40, "auth"), "src/billing.ts": numbered(40, "billing") });
@@ -77,7 +77,7 @@ export function scenario1() {
   }
 }
 
-// 2 — same file, non-overlapping hunks (concurrent: neither has published yet)
+// 2: same file, non-overlapping hunks (concurrent: neither has published yet)
 export function scenario2() {
   const r = runner("2. same file, disjoint hunks");
   const base = numbered(220, "code");
@@ -100,7 +100,7 @@ export function scenario2() {
   }
 }
 
-// 3 — same file, same lines
+// 3: same file, same lines
 export function scenario3() {
   const r = runner("3. same file, same lines");
   const base = numbered(40, "code");
@@ -137,7 +137,7 @@ export function scenario3() {
   }
 }
 
-// 4 — delete on one side, edit on the other
+// 4: delete on one side, edit on the other
 export function scenario4() {
   const r = runner("4. delete vs edit");
   const base = numbered(30, "calc");
@@ -172,7 +172,7 @@ export function scenario4() {
   }
 }
 
-// 5 — rename
+// 5: rename
 export function scenario5() {
   const r = runner("5. rename");
   const base = numbered(20, "util");
@@ -191,7 +191,7 @@ export function scenario5() {
   }
 }
 
-// 5b — rename racing an edit to the old path. Documented behaviour, not a spec.
+// 5b: rename racing an edit to the old path. Documented behaviour, not a spec.
 export function scenario5b() {
   const r = runner("5b. rename vs edit on the old path (observed behaviour)");
   const base = numbered(20, "util");
@@ -218,7 +218,7 @@ export function scenario5b() {
   }
 }
 
-// 6 — binary file
+// 6: binary file
 export function scenario6() {
   const r = runner("6. binary file");
   const seed = binaryBlob(1);
@@ -261,7 +261,7 @@ export function scenario6() {
   }
 }
 
-// 7 — large file / patch-vs-full-content threshold
+// 7: large file / patch-vs-full-content threshold
 export function scenario7() {
   const r = runner("7. large file, patch vs full content");
   const big = numbered(9000, "row");
@@ -284,7 +284,7 @@ export function scenario7() {
     r.check("patched file reconstructed exactly", w.B.read("src/big.ts").toString().includes("row 4000 // A"));
 
     const smallUnits = w.B.publish();
-    // (already published by settle) — re-check encoding rule on a fresh small edit
+    // (already published by settle): re-check encoding rule on a fresh small edit
     w.B.edit("src/small.ts", replaceLine(numbered(5, "s"), 3, "s 3 // B again"));
     w.clock.advance(COOL);
     const su = w.B.publish().find((u) => u.path === "src/small.ts");
@@ -307,7 +307,7 @@ export function scenario7() {
   }
 }
 
-// 8 — both sides offline, then reconnect with queued changes
+// 8: both sides offline, then reconnect with queued changes
 export function scenario8() {
   const r = runner("8. offline, then reconnect");
   const shared = numbered(220, "shared");
@@ -348,7 +348,7 @@ export function scenario8() {
   }
 }
 
-// 9 — rapid interleaved edits, many changes in flight
+// 9: rapid interleaved edits, many changes in flight
 export function scenario9() {
   const r = runner("9. rapid interleaved edits");
   const seed = {};
@@ -382,7 +382,7 @@ export function scenario9() {
   }
 }
 
-// Guard — hot-file deferral
+// Guard: hot-file deferral
 export function guardHotFile() {
   const r = runner("guard: hot-file deferral");
   const base = numbered(40, "code");
@@ -393,7 +393,7 @@ export function guardHotFile() {
     w.clock.advance(COOL);
     const units = w.A.publish();
 
-    // B touches the same file 2s ago — inside the hot window.
+    // B touches the same file 2s ago: inside the hot window.
     const bText = replaceLine(base, 30, "code 30 // B");
     w.B.edit("src/app.ts", bText);
     w.clock.advance(2000);
@@ -414,7 +414,7 @@ export function guardHotFile() {
   }
 }
 
-// Guard — loop suppression
+// Guard: loop suppression
 export function guardLoopSuppression() {
   const r = runner("guard: loop suppression");
   const base = numbered(220, "code");
@@ -438,7 +438,7 @@ export function guardLoopSuppression() {
   }
 }
 
-// Guard — PLAN.md claims the shadow ref gives you "content storage in git's own
+// Guard: PLAN.md claims the shadow ref gives you "content storage in git's own
 // object store" for free. That is only true if the blobs stay REACHABLE: a real
 // daemon outlives `git gc`, and a merge base that is not in any commit gets pruned.
 export function guardShadowKeepsBasesAlive() {
