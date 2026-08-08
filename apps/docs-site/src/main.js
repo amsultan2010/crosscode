@@ -53,6 +53,23 @@ if (navToggle && navLinks) {
   }
 }
 
+/* -- faq hover ----------------------------------------------------------- */
+
+// With a mouse, hovering a question opens it, so scanning the whole list costs no
+// clicks. Touch and keyboard keep the plain <details> click behaviour: a hover that
+// only fires after a tap would just be a slower click. A question opened by hand is
+// left alone until the pointer leaves it.
+const hoverPointer = window.matchMedia("(hover: hover) and (pointer: fine)");
+
+for (const item of document.querySelectorAll(".faq-item")) {
+  item.addEventListener("mouseenter", () => {
+    if (hoverPointer.matches) item.open = true;
+  });
+  item.addEventListener("mouseleave", () => {
+    if (hoverPointer.matches && !item.contains(document.activeElement)) item.open = false;
+  });
+}
+
 /* -- scroll reveal ------------------------------------------------------- */
 
 const revealEls = document.querySelectorAll(".reveal");

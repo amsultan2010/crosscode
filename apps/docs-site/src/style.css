@@ -230,7 +230,7 @@ pre code {
 .note a { color: var(--text-2); }
 .note.center { margin: 1.75rem auto 0; text-align: center; }
 
-.section-head { max-width: 40rem; margin: 0 0 3rem; }
+.section-head { max-width: 40rem; margin: 0 0 2.25rem; }
 .section-head .lede { margin-bottom: 0; }
 
 /* --- header -------------------------------------------------------------- */
@@ -423,11 +423,11 @@ pre code {
 
 /* --- sections ------------------------------------------------------------ */
 
-section { padding: 6.5rem 0; }
+section { padding: 4.75rem 0; }
 section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); }
 
 @media (max-width: 48rem) {
-  section { padding: 4.5rem 0; }
+  section { padding: 3.5rem 0; }
 }
 
 /* --- hero ---------------------------------------------------------------- */
@@ -1211,14 +1211,14 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 
 /* --- faq ----------------------------------------------------------------- */
 
-.faq { max-width: 46rem; border-top: 1px solid var(--line); }
+.faq { border-top: 1px solid var(--line); }
 
 .faq-item { border-bottom: 1px solid var(--line); }
 
 .faq-item summary {
   list-style: none;
   cursor: pointer;
-  padding: 1.2rem 2rem 1.2rem 0;
+  padding: 1.2rem 3rem 1.2rem 0;
   font-size: 1rem;
   font-weight: 570;
   letter-spacing: -0.012em;
@@ -1230,7 +1230,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 .faq-item summary::after {
   content: "+";
   position: absolute;
-  right: 0.2rem;
+  right: 0.6rem;
   top: 1.15rem;
   font-family: var(--mono);
   color: var(--text-3);
@@ -1239,8 +1239,12 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 
 .faq-item[open] summary::after { content: "\2212"; }
 .faq-item[open] summary { color: var(--text); }
-.faq-body { padding: 0 2rem 1.4rem 0; font-size: 1.02rem; }
+.faq-body { padding: 0 3rem 1.4rem 0; font-size: 1.02rem; max-width: 62rem; }
 .faq-body p { color: var(--text-2); }
+
+/* On a pointer device the answer opens on hover, so reading the whole list costs no
+   clicks. Click still works, and touch keeps the plain <details> behaviour. */
+.faq-item summary:hover { color: var(--text); }
 
 /* --- close + footer ------------------------------------------------------ */
 
