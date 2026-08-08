@@ -12,10 +12,10 @@
 </p>
 
 <p align="center">
-  <strong>Real-time codebase sync between teammates and coding agents, so nobody overwrites
-  anyone else's work.</strong><br/>
-  You edit a file, their checkout updates within seconds. They edit, yours does.
-  Nobody presses anything and nobody watches anything.
+  <strong>Multiplayer agentic coding.</strong><br/>
+  Real-time sync for coding with others in the agentic era. You edit a file, their checkout
+  updates within seconds. They edit, yours does. Nobody presses anything and nobody watches
+  anything.
 </p>
 
 <p align="center">
@@ -28,6 +28,9 @@
      <p align="center"><img src="assets/demo.gif" alt="A file edit in one checkout appearing in another within seconds" width="720" /></p>
 -->
 
+Paste [the install prompt](./docs/install-prompt.md) into the coding agent you already have
+open and it does the rest. Prefer to type it yourself:
+
 ```bash
 npm install -g crosscode-cli
 ```
@@ -35,10 +38,13 @@ npm install -g crosscode-cli
 ## Works with the agent you already run
 
 <p>
-  <kbd>Claude Code</kbd> &nbsp;
-  <kbd>Codex CLI</kbd> &nbsp;
-  <kbd>OpenCode</kbd> &nbsp;
-  <kbd>Cursor</kbd> &nbsp;
+  <strong>Claude Code</strong> &nbsp;&middot;&nbsp;
+  <strong>Codex CLI</strong> &nbsp;&middot;&nbsp;
+  <strong>OpenCode</strong> &nbsp;&middot;&nbsp;
+  <strong>Cursor</strong>
+</p>
+
+<p>
   <kbd>Gemini CLI</kbd> &nbsp;
   <kbd>VS Code</kbd> &nbsp;
   <kbd>Amp</kbd> &nbsp;
@@ -55,9 +61,10 @@ npm install -g crosscode-cli
 > hook registers the command that runs, and the daemon notices a commit or a pull on the
 > branch you are already on.
 >
-> There is no end-to-end encryption: the coordination service can read the files you sync,
-> which [docs/privacy.md](./docs/privacy.md) spells out in full. [PLAN.md](./PLAN.md) tracks
-> what is done.
+> Syncing is opt-in per checkout and covers tracked files on the branch you are sharing.
+> Those files are relayed by the hosted service rather than encrypted end to end, which
+> [docs/privacy.md](./docs/privacy.md) spells out in full. [PLAN.md](./PLAN.md) tracks what
+> is done.
 
 ## How it works
 
@@ -174,6 +181,15 @@ then hands them a `git clone` and a `crosscode join`.
 
 ## Quickstart
 
+Hand the setup to the agent you already have open. Paste
+[the install prompt](./docs/install-prompt.md) into Claude Code, Codex CLI, OpenCode,
+Cursor, or any MCP-capable agent: it installs the CLI, runs `crosscode start` in the
+checkout, and wires up its own MCP config. Codex CLI's config is TOML and `start` does not
+write it, so Codex users add a three-line entry by hand. See
+[MCP client setup](./docs/mcp-clients.md).
+
+Or run the same thing yourself:
+
 ```bash
 npm install -g crosscode-cli
 cd your-repo
@@ -216,22 +232,18 @@ crosscode status     # branch, connected, paused, who else is on this branch
 crosscode stop       # stop syncing this checkout
 ```
 
-You can also hand the whole setup to your coding agent. Paste
-[the install prompt](./docs/install-prompt.md) into Claude Code, Codex CLI, OpenCode,
-Cursor, or any MCP-capable agent, and it runs the same commands and wires up the MCP config
-itself. Codex CLI's config is TOML and `start` does not write it, so Codex users add a
-three-line entry by hand. See [MCP client setup](./docs/mcp-clients.md).
-
 ## What syncs, and what never does
 
-Tracked files only, plus a hard denylist. Your commits, branches, index, stash, and remotes
-are never touched, and nothing Crosscode does pushes to a remote. If you stop Crosscode or
-remove it, your repository is an ordinary Git repository, exactly as it was.
+Only the files you sync ever leave the room: tracked files you edit on the branch you are
+sharing, minus a hard denylist. Untracked files stay put, and your commits, branches, index,
+stash, and remotes are never touched, so nothing Crosscode does pushes to a remote. If you
+stop Crosscode or remove it, your repository is an ordinary Git repository, exactly as it
+was.
 
-Your files do pass through the hosted coordination service, and there is no end-to-end
-encryption, so we can read them. [docs/privacy.md](./docs/privacy.md) lists exactly what the
-service stores and for how long, and [docs/security.md](./docs/security.md) has the threat
-model.
+Those files are relayed by the hosted coordination service rather than encrypted end to end,
+so someone with production access could read them. [docs/privacy.md](./docs/privacy.md)
+lists exactly what the service stores and for how long, and
+[docs/security.md](./docs/security.md) has the threat model.
 
 ## The apply rule
 
