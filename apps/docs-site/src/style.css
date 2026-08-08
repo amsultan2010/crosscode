@@ -205,7 +205,7 @@ pre code {
 
 .kicker {
   font-family: var(--mono);
-  font-size: 0.74rem;
+  font-size: 0.8rem;
   letter-spacing: 0.13em;
   text-transform: uppercase;
   color: var(--text-3);
@@ -215,14 +215,14 @@ pre code {
 .kicker.center { text-align: center; }
 
 .lede {
-  font-size: 1.05rem;
+  font-size: 1.1rem;
   color: var(--text-2);
   max-width: var(--prose);
 }
 
 .note {
   margin-top: 1.5rem;
-  font-size: 0.87rem;
+  font-size: 0.95rem;
   color: var(--text-3);
   max-width: 44rem;
 }
@@ -521,7 +521,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   border: 0;
   padding: 0;
   color: var(--term-text);
-  font-size: 0.88rem;
+  font-size: 0.95rem;
   white-space: nowrap;
   overflow-x: auto;
 }
@@ -532,7 +532,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   border-radius: 999px;
   color: var(--text-2);
   font: inherit;
-  font-size: 0.78rem;
+  font-size: 0.85rem;
   padding: 0.28rem 0.75rem;
   cursor: pointer;
   flex-shrink: 0;
@@ -544,7 +544,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 
 .hero-foot {
   margin-top: 1.1rem;
-  font-size: 0.85rem;
+  font-size: 0.93rem;
   color: var(--text-3);
 }
 
@@ -896,13 +896,49 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 .chips li {
   border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 0.38rem 0.95rem;
-  font-size: 0.87rem;
+  padding: 0.4rem 1rem;
+  font-size: 0.95rem;
   color: var(--text-2);
   transition: border-color 0.15s ease, color 0.15s ease;
 }
 
 .chips li:hover { border-color: var(--line-2); color: var(--text); }
+
+/* The four agents most people arrive with get their own row, with the mark next to
+   the name. The SVGs are masks rather than <img>, so they take the row's colour and
+   a replacement file needs no CSS change. */
+.agent-logos {
+  list-style: none;
+  margin: 0 0 1.1rem;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.6rem 2.4rem;
+}
+
+.agent-logos li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 1.05rem;
+  font-weight: 560;
+  letter-spacing: -0.01em;
+  color: var(--text-2);
+  transition: color 0.15s ease;
+}
+
+.agent-logos li:hover { color: var(--text); }
+
+.agent-mark {
+  width: 1.35em;
+  height: 1.35em;
+  flex-shrink: 0;
+  background: currentColor;
+  mask: var(--mark) center / contain no-repeat;
+  -webkit-mask: var(--mark) center / contain no-repeat;
+}
 .chips .chip-more { color: var(--text-3); border-style: dashed; }
 
 /* Inside the hero the agent wall has to share the first screen with the install
@@ -913,11 +949,11 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   position: relative;
 }
 
-.agents-hero .kicker { font-size: 0.68rem; margin-bottom: 0.7rem; }
+.agents-hero .kicker { font-size: 0.76rem; margin-bottom: 0.7rem; }
 
 .agents-hero .chips { gap: 0.4rem; }
 
-.agents-hero .chips li { padding: 0.28rem 0.7rem; font-size: 0.8rem; }
+.agents-hero .chips li { padding: 0.3rem 0.8rem; font-size: 0.9rem; }
 
 /* --- features ------------------------------------------------------------ */
 
@@ -935,7 +971,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   padding: 1.5rem 1.75rem 1.5rem 0;
   border-bottom: 1px solid var(--line);
   color: var(--text-2);
-  font-size: 0.95rem;
+  font-size: 1.02rem;
   line-height: 1.65;
 }
 
@@ -952,11 +988,11 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   .hero-lede { font-size: 0.95rem; line-height: 1.5; margin-bottom: 1.1rem; }
   .hero-actions { margin-bottom: 1.1rem; }
   .hero-actions .btn-lg { font-size: 0.95rem; padding: 0.62rem 1.4rem; }
-  .hero-foot { margin-top: 0.7rem; font-size: 0.79rem; }
+  .hero-foot { margin-top: 0.7rem; font-size: 0.86rem; }
   .agents-hero { padding-top: 1.2rem; }
   .agents-hero .kicker { margin-bottom: 0.5rem; }
   .agents-hero .chips { gap: 0.32rem; }
-  .agents-hero .chips li { padding: 0.2rem 0.58rem; font-size: 0.75rem; }
+  .agents-hero .chips li { padding: 0.22rem 0.62rem; font-size: 0.82rem; }
 
   .feature-list { grid-template-columns: 1fr; }
   .feature-list li,
@@ -965,50 +1001,6 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
     border-right: 0;
     padding: 1.2rem 0;
   }
-}
-
-/* --- safety -------------------------------------------------------------- */
-
-.split {
-  display: grid;
-  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1fr);
-  gap: 4rem;
-  align-items: start;
-}
-
-.split .section-head { margin-bottom: 0; }
-
-.rule-list {
-  list-style: none;
-  counter-reset: rule;
-  margin: 0;
-  padding: 0;
-}
-
-.rule-list li {
-  counter-increment: rule;
-  display: grid;
-  grid-template-columns: 2rem 1fr;
-  gap: 0.5rem;
-  padding: 1.05rem 0;
-  border-bottom: 1px solid var(--line);
-  color: var(--text-2);
-  font-size: 0.95rem;
-  line-height: 1.6;
-}
-
-.rule-list li:first-child { border-top: 1px solid var(--line); }
-
-.rule-list li::before {
-  content: "0" counter(rule);
-  font-family: var(--mono);
-  font-size: 0.76rem;
-  color: var(--text-3);
-  padding-top: 0.2rem;
-}
-
-@media (max-width: 60rem) {
-  .split { grid-template-columns: 1fr; gap: 2.5rem; }
 }
 
 /* --- encryption ---------------------------------------------------------- */
@@ -1051,18 +1043,28 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 .seal li {
   padding: 0.42rem 0;
   color: var(--text-2);
-  font-size: 0.92rem;
+  font-size: 1rem;
 }
 
 .seal-note {
   margin-top: 1.1rem;
   padding-top: 1.1rem;
   border-top: 1px solid var(--line);
-  font-size: 0.84rem;
+  font-size: 0.92rem;
   color: var(--text-3);
 }
 
 .seal-open { background: none; }
+
+/* Prose card: same shell, no status dot, used for the control guarantees. */
+.seal-plain h3::before { display: none; }
+
+.seal p {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 1rem;
+  line-height: 1.65;
+}
 
 /* --- pricing ------------------------------------------------------------- */
 
@@ -1167,7 +1169,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 /* h3 rather than h4 so the heading level does not skip one under the section's h2;
    the size stays what the h4 was. */
 .plan-strip h3 { font-size: 0.94rem; letter-spacing: -0.01em; margin-bottom: 0.4rem; }
-.plan-strip p { font-size: 0.87rem; color: var(--text-3); margin: 0; }
+.plan-strip p { font-size: 0.95rem; color: var(--text-3); margin: 0; }
 
 /* --- install ------------------------------------------------------------- */
 
@@ -1207,44 +1209,6 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 .disclose-body { padding: 1.3rem; }
 .disclose-body .note:first-child { margin-top: 0; margin-bottom: 1.2rem; }
 
-/* --- status strip ------------------------------------------------------- */
-
-.status-strip {
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 2rem;
-  background: var(--bg-raise);
-}
-
-.status-strip .kicker { margin-bottom: 1.3rem; }
-
-.status-strip ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
-  gap: 0.9rem 2rem;
-}
-
-.status-strip li {
-  position: relative;
-  padding-left: 1.1rem;
-  font-size: 0.89rem;
-  color: var(--text-2);
-  line-height: 1.6;
-}
-
-.status-strip li::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0.72em;
-  width: 0.4rem;
-  height: 1px;
-  background: var(--text-3);
-}
-
 /* --- faq ----------------------------------------------------------------- */
 
 .faq { max-width: 46rem; border-top: 1px solid var(--line); }
@@ -1275,7 +1239,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 
 .faq-item[open] summary::after { content: "\2212"; }
 .faq-item[open] summary { color: var(--text); }
-.faq-body { padding: 0 2rem 1.4rem 0; font-size: 0.93rem; }
+.faq-body { padding: 0 2rem 1.4rem 0; font-size: 1.02rem; }
 .faq-body p { color: var(--text-2); }
 
 /* --- close + footer ------------------------------------------------------ */
@@ -1304,7 +1268,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 
 .footer-brand p {
   margin-top: 0.9rem;
-  font-size: 0.85rem;
+  font-size: 0.92rem;
   color: var(--text-3);
   max-width: 22rem;
 }
@@ -1322,7 +1286,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 }
 
 .footer-col a {
-  font-size: 0.87rem;
+  font-size: 0.94rem;
   color: var(--text-2);
   text-decoration: none;
 }

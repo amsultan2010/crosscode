@@ -64,7 +64,6 @@
       <div class="nav-links" id="nav-links">
         <a href="#features">Features</a>
         <a href="#privacy">Privacy</a>
-        <a href="#status">Status</a>
         <a href="/docs/index.html">Docs</a>
         <span class="nav-spacer" aria-hidden="true"></span>
         <a class="nav-plain" href="/auth/signin.html">Sign in</a>
@@ -88,16 +87,14 @@
           <span class="pill-arrow" aria-hidden="true">&#8599;</span>
         </a>
 
-        <h1 class="reveal">Everyone on the branch is already up to date</h1>
+        <h1 class="reveal">Multiplayer agentic coding</h1>
 
         <p class="lede hero-lede reveal">
-          A teammate's agent finishes an edit and it is in your working tree within seconds.
-          No pulling, no pasting files between agents, and nothing you are touching gets
-          overwritten &mdash; same-line conflicts go to your own agent.
+          Real-time sync for coding with others in the agentic era.
         </p>
 
         <div class="hero-actions reveal">
-          <a class="btn btn-primary btn-lg" href="#install">Install in one command</a>
+          <a class="btn btn-primary btn-lg" href="#install">Set it up with your agent</a>
           <a class="btn btn-quiet btn-lg" href="https://github.com/amsultan2010/crosscode" rel="noopener">
             <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
             View on GitHub
@@ -105,14 +102,14 @@
         </div>
 
         <div class="hero-cmd reveal">
-          <code id="hero-command-text">npm install -g crosscode-cli</code>
-          <button class="copy-btn" type="button" data-copy-target="hero-command-text">Copy</button>
+          <code>paste one prompt into your coding agent</code>
+          <button class="copy-btn" type="button" data-copy-target="install-prompt-text">Copy prompt</button>
         </div>
 
         <p class="hero-foot reveal">
-          Node 24 and a Git checkout. Nothing to deploy. Published on npm as
-          <a href="https://www.npmjs.com/package/crosscode-cli" rel="noopener">crosscode-cli</a>.
-          <a href="#status">See where things stand</a>.
+          Your agent installs and configures the rest itself. Needs Node 24 and a Git
+          checkout. Prefer to type it yourself?
+          <a href="#install">Run the two commands</a>.
         </p>
       </div>
 
@@ -120,11 +117,13 @@
       <section class="agents agents-hero">
         <div class="wrap">
           <p class="kicker center reveal">Works with the agent you already run</p>
+          <ul class="agent-logos reveal">
+            <li><span class="agent-mark" style="--mark: url('/brand/agents/claude.svg')" aria-hidden="true"></span>Claude Code</li>
+            <li><span class="agent-mark" style="--mark: url('/brand/agents/codex.svg')" aria-hidden="true"></span>Codex CLI</li>
+            <li><span class="agent-mark" style="--mark: url('/brand/agents/opencode.svg')" aria-hidden="true"></span>OpenCode</li>
+            <li><span class="agent-mark" style="--mark: url('/brand/agents/cursor.svg')" aria-hidden="true"></span>Cursor</li>
+          </ul>
           <ul class="chips reveal">
-            <li>Claude Code</li>
-            <li>Codex CLI</li>
-            <li>OpenCode</li>
-            <li>Cursor</li>
             <li>Gemini CLI</li>
             <li>VS Code</li>
             <li>Amp</li>
@@ -140,7 +139,7 @@
       <div class="wrap wrap-wide">
         <div class="stage reveal">
           <div class="stage-tabs" role="group" aria-label="Steps in the loop">
-            <button type="button" class="stage-tab" data-step-tab="1" aria-pressed="false" aria-controls="scene">Maya's agent writes</button>
+            <button type="button" class="stage-tab" data-step-tab="1" aria-pressed="false" aria-controls="scene">A teammate's agent writes</button>
             <button type="button" class="stage-tab" data-step-tab="2" aria-pressed="false" aria-controls="scene">Sent once it settles</button>
             <button type="button" class="stage-tab" data-step-tab="3" aria-pressed="false" aria-controls="scene">Applied to your tree</button>
             <button type="button" class="stage-tab" data-step-tab="4" aria-pressed="false" aria-controls="scene">Same lines? your agent</button>
@@ -221,7 +220,7 @@
       <div class="wrap">
         <div class="section-head reveal">
           <p class="kicker">Features</p>
-          <h2>A sync layer, not another Git wrapper</h2>
+          <h2>It sits beside Git, never on top of it</h2>
           <p class="lede">Turn it off and your repository is exactly what it was.</p>
         </div>
 
@@ -241,24 +240,39 @@
     <!-- ================= SAFETY ================= -->
     <section id="safety">
       <div class="wrap">
-        <div class="split">
-          <div class="section-head reveal">
-            <p class="kicker">Safety</p>
-            <h2>Five rules it will not break</h2>
-            <p class="lede">
-              Crosscode writes to your working tree, so the limits on when it may do that are
-              the product.
-            </p>
-            <p class="note">Full detail on the <a href="/docs/safety.html">safety model page</a>.</p>
-          </div>
-          <ol class="rule-list stagger">
-            <li class="reveal">Uncommitted working-tree files are the entire scope. Commits, branches, the index, and remotes are never touched, and nothing pushes.</li>
-            <li class="reveal">Never write a file you or your agent touched in the last ten seconds.</li>
-            <li class="reveal">Tracked files only, minus the secret denylist.</li>
-            <li class="reveal">Never sync during a rebase, merge, or bisect. Pause, then resync.</li>
-            <li class="reveal">Everything is undoable with one command.</li>
-          </ol>
+        <div class="section-head reveal">
+          <p class="kicker">Control</p>
+          <h2>You keep the last word on your own files</h2>
+          <p class="lede">
+            Crosscode writes into a working tree you are actively using, so the limits on
+            when it may do that are the product.
+          </p>
         </div>
+
+        <div class="seal-grid reveal">
+          <div class="seal seal-plain">
+            <h3>It waits for you</h3>
+            <p>A file you or your agent touched in the last ten seconds is never written to,
+            and syncing pauses outright during a rebase, merge, or bisect.</p>
+          </div>
+          <div class="seal seal-plain">
+            <h3>Conflicts go to your agent</h3>
+            <p>A same-line collision is never applied. It arrives as ours, theirs, and
+            ancestor, and the agent already running on your machine merges it.</p>
+          </div>
+          <div class="seal seal-plain">
+            <h3>Git is off limits</h3>
+            <p>No commits, branches, index, stash, or remotes. <code>HEAD</code> never moves,
+            nothing pushes, and nothing shows up in <code>git log</code>.</p>
+          </div>
+          <div class="seal seal-plain">
+            <h3>Undo is one command</h3>
+            <p>Anything Crosscode wrote comes back with
+            <code>git checkout refs/crosscode/shadow -- &lt;path&gt;</code>.</p>
+          </div>
+        </div>
+
+        <p class="note center">Full detail on the <a href="/docs/safety.html">safety model page</a>.</p>
       </div>
     </section>
 
@@ -267,12 +281,11 @@
       <div class="wrap">
         <div class="section-head reveal">
           <p class="kicker">Privacy</p>
-          <h2>We can read the files you sync</h2>
+          <h2>Only the files you sync ever leave the room</h2>
           <p class="lede">
-            Your edits pass through our coordination service. There is no end-to-end
-            encryption: files travel over TLS and sit at rest inside Supabase and Vercel,
-            encrypted under keys those providers hold, which means someone with production
-            access could read them. We would rather say that plainly than imply otherwise.
+            Syncing covers the tracked files you edit on the branch you are sharing, and
+            nothing else. Secrets, untracked files, and your Git history stay put. It is
+            opt-in per checkout, so a repository you do not start it in is never involved.
           </p>
         </div>
 
@@ -301,9 +314,11 @@
         </div>
 
         <p class="note center">
-          No third-party model provider is in the loop. Crosscode has no AI features and
-          stores no model provider credentials; the only agent involved is the one already on
-          your machine. <a href="/docs/privacy.html">Read the privacy page</a>.
+          No model provider is in the loop: Crosscode has no AI features and stores no
+          provider credentials, and the only agent involved is the one already on your
+          machine. Synced files travel over TLS and are relayed by our service rather than
+          encrypted end to end, which the
+          <a href="/docs/privacy.html">privacy page</a> spells out in full.
         </p>
       </div>
     </section>
@@ -343,55 +358,20 @@
       <div class="wrap">
         <div class="section-head reveal">
           <p class="kicker">Install</p>
-          <h2>One command, in the repo your team shares</h2>
+          <h2>Hand the setup to the agent you already have open</h2>
           <p class="lede">
-            <code>crosscode start</code> signs you in with GitHub, attaches the checkout to a
-            project, starts the daemon, and installs the MCP server, skill, and pre-edit
-            hooks for your agent. Re-running it is safe.
+            Paste the prompt below into Claude Code, Codex CLI, OpenCode, Cursor, or any
+            MCP-capable agent. It installs the CLI, runs <code>crosscode start</code> in this
+            checkout, and wires up its own MCP config. Re-running it is safe.
           </p>
         </div>
 
         <div class="panel install-panel reveal">
           <header class="panel-bar">
-            <span class="panel-path">run in your project</span>
-            <button class="copy-btn" type="button" data-copy-target="install-command-text">Copy</button>
+            <span class="panel-path">paste into your coding agent</span>
+            <button class="copy-btn" type="button" data-copy-target="install-prompt-text">Copy prompt</button>
           </header>
-          <pre class="code" tabindex="0"><code id="install-command-text">npm install -g crosscode-cli
-cd your-repo
-crosscode start</code></pre>
-        </div>
-
-        <p class="note">
-          The package is
-          <a href="https://www.npmjs.com/package/crosscode-cli" rel="noopener">crosscode-cli</a>,
-          which ships <code>crosscode</code> and <code>crosscode-mcp</code>.
-          Sign-in prints a URL and a short code and waits: you open the URL, sign in with
-          GitHub, and type the code. Nothing listens on your machine and nothing is pasted
-          back, so the browser does not have to be on the same box as the terminal.
-        </p>
-
-        <p class="note">
-          Restart your agent afterwards so it picks up the new MCP server. To bring a
-          teammate in, run <code>crosscode invite</code> and send them the link. They sign in
-          with GitHub, the page checks they have access to the repo, and it hands them a
-          <code>git clone</code> and a <code>crosscode join CC-XXXX-XXXX</code> to paste.
-          That is the whole onboarding. The only other commands are
-          <code>crosscode status</code> and <code>crosscode stop</code>.
-        </p>
-
-        <details class="disclose reveal">
-          <summary>Or hand the whole setup to your coding agent</summary>
-          <div class="disclose-body">
-            <p class="note">
-              Paste this into Claude Code, Codex CLI, OpenCode, Cursor, or any MCP-capable
-              agent. It runs the same command and wires up the MCP config itself.
-            </p>
-            <div class="panel install-panel">
-              <header class="panel-bar">
-                <span class="panel-path">paste into your coding agent</span>
-                <button class="copy-btn" type="button" data-copy-target="install-prompt-text">Copy prompt</button>
-              </header>
-              <pre tabindex="0"><code id="install-prompt-text">Set up Crosscode for this project. Crosscode syncs uncommitted working-tree files between
+          <pre tabindex="0"><code id="install-prompt-text">Set up Crosscode for this project. Crosscode syncs uncommitted working-tree files between
 my teammates' checkouts and mine in real time: they edit, my copy updates within seconds,
 and vice versa. It never touches commits, branches, or remotes. Do the following:
 
@@ -422,36 +402,49 @@ directory rather than the steps above.
 After setup, read the `crosscode` skill and follow it. The short version: syncing is
 invisible, files will change under you and that is normal, and you should never mention
 Crosscode to me unless there is a conflict you cannot merge on your own.</code></pre>
+        </div>
+
+        <p class="note">
+          Sign-in prints a URL and a short code and waits: you open the URL, sign in with
+          GitHub, and type the code. Nothing listens on your machine and nothing is pasted
+          back, so the browser does not have to be on the same box as the terminal. Restart
+          your agent afterwards so it picks up the new MCP server. Codex CLI's config is
+          TOML and <code>start</code> does not write it, so Codex users add a three-line
+          entry by hand &mdash; see <a href="/docs/mcp-clients.html">MCP client setup</a>.
+        </p>
+
+        <details class="disclose reveal">
+          <summary>Or run the commands yourself</summary>
+          <div class="disclose-body">
+            <p class="note">
+              Same setup, typed by hand. The package is
+              <a href="https://www.npmjs.com/package/crosscode-cli" rel="noopener">crosscode-cli</a>,
+              which ships <code>crosscode</code> and <code>crosscode-mcp</code>.
+            </p>
+            <div class="panel install-panel">
+              <header class="panel-bar">
+                <span class="panel-path">run in your project</span>
+                <button class="copy-btn" type="button" data-copy-target="install-command-text">Copy</button>
+              </header>
+              <pre class="code" tabindex="0"><code id="install-command-text">npm install -g crosscode-cli
+cd your-repo
+crosscode start</code></pre>
             </div>
             <p class="note">
-              Codex CLI's config is TOML and <code>start</code> does not write it, so Codex
-              users add a three-line entry by hand. See
-              <a href="/docs/mcp-clients.html">MCP client setup</a>.
+              To bring a teammate in, run <code>crosscode invite</code> and send them the
+              link. They sign in with GitHub, the page checks they have access to the repo,
+              and it hands them a <code>git clone</code> and a
+              <code>crosscode join CC-XXXX-XXXX</code> to paste. That is the whole
+              onboarding. The only other commands are <code>crosscode status</code> and
+              <code>crosscode stop</code>.
             </p>
           </div>
         </details>
       </div>
     </section>
 
-    <!-- ================= STATUS ================= -->
-    <section id="status">
-      <div class="wrap">
-        <div class="status-strip reveal">
-          <p class="kicker">Where things stand</p>
-          <ul>
-            <li>The merge core, the daemon, the wire contract, the pre-edit hook, and the device handshake that <code>crosscode start</code> opens with are all built and tested.</li>
-            <li>Identity is GitHub-only, because verifying that an invitee can read the repository is something only GitHub can answer.</li>
-            <li>There is no end-to-end encryption. The service can read the files it relays, and the privacy section above lists what it keeps.</li>
-            <li>There is no web app for syncing and there will not be one. This site is a landing page, sign-in, and docs.</li>
-            <li>The hosted service is free. No payment provider is wired up and nothing is chargeable.</li>
-          </ul>
-          <p class="note"><a href="/docs/limitations.html">Read the full limitations page</a>.</p>
-        </div>
-      </div>
-    </section>
-
     <!-- ================= FAQ ================= -->
-    <section id="faq" class="band">
+    <section id="faq">
       <div class="wrap">
         <div class="section-head reveal">
           <p class="kicker">Questions</p>
@@ -509,10 +502,10 @@ Crosscode to me unless there is a conflict you cannot merge on your own.</code><
     <section class="close">
       <div class="wrap reveal">
         <h2>Put it in your team's repo</h2>
-        <p class="lede">One command in the checkout you already have.</p>
+        <p class="lede">One prompt, in the checkout you already have.</p>
         <div class="hero-cmd">
-          <code id="close-command-text">npm install -g crosscode-cli</code>
-          <button class="copy-btn" type="button" data-copy-target="close-command-text">Copy</button>
+          <code>paste one prompt into your coding agent</code>
+          <button class="copy-btn" type="button" data-copy-target="install-prompt-text">Copy prompt</button>
         </div>
       </div>
     </section>
