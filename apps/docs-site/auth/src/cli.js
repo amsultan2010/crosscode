@@ -15,8 +15,8 @@ void main();
 async function main() {
   if (!port || !state) {
     renderMessage(
-      "This page needs a terminal",
-      "Open it by running <code>crosscode login</code> in your terminal, which supplies the port and state it is waiting on."
+      "this page needs a terminal",
+      "open it by running <code>crosscode login</code> in your terminal, which supplies the port and state it is waiting on."
     );
     return;
   }
@@ -44,8 +44,8 @@ async function handOff(session) {
     });
   } catch {
     renderMessage(
-      "Couldn't reach your terminal",
-      "The <code>crosscode login</code> command that opened this page is no longer listening. Run it again, or use <code>crosscode login --email &lt;email&gt; --password &lt;password&gt;</code>."
+      "couldn't reach your terminal",
+      "the <code>crosscode login</code> command that opened this page is no longer listening. run it again, or use <code>crosscode login --email &lt;email&gt; --password &lt;password&gt;</code>."
     );
     return;
   }
@@ -55,12 +55,12 @@ async function handOff(session) {
   if (!response.ok) {
     const detail = await response.json().then((body) => body?.error).catch(() => undefined);
     renderMessage(
-      "Your terminal rejected this sign-in",
+      "your terminal rejected this sign-in",
       `${detail ? `It reported: <code>${escapeHtml(detail)}</code>. ` : ""}Run <code>crosscode login</code> again and complete the sign-in in the tab it opens, so the page and the command belong to the same login.`
     );
     return;
   }
-  renderMessage("You're signed in", "Return to your terminal. You can close this tab.");
+  renderMessage("you're signed in", "return to your terminal. you can close this tab.");
 }
 
 function escapeHtml(value) {
@@ -72,7 +72,7 @@ function escapeHtml(value) {
 function renderMessage(heading, body) {
   container.innerHTML = `
     <div class="auth-card">
-      <a class="auth-brand" href="/">Crosscode</a>
+      <a class="auth-brand" href="/">crosscode</a>
       <h1>${heading}</h1>
       <p class="auth-subtitle">${body}</p>
     </div>

@@ -115,7 +115,7 @@ describe("what the page shows", () => {
     renderDevice(root, { status: "signed-out", staleSession: true });
 
     expect(root.querySelector("[data-github-signin]")).not.toBeNull();
-    expect(root.textContent).toContain("confirm your GitHub access");
+    expect(root.textContent).toContain("confirm your github access");
   });
 
   it("keeps a rejected code in the box, and says what was wrong with it", async () => {

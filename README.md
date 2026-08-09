@@ -1,198 +1,198 @@
 <h1 align="center">
-  <a href="https://www.getcrosscode.dev"><img src="assets/LOGO-square.png" alt="Crosscode" width="64" valign="middle" /></a> Crosscode
+  <a href="https://www.getcrosscode.dev"><img src="assets/LOGO-square.png" alt="crosscode" width="64" valign="middle" /></a> crosscode
 </h1>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/crosscode-cli"><img src="https://img.shields.io/npm/v/crosscode-cli?style=flat&color=08C&label=npm" alt="crosscode-cli on npm" /></a>
   <a href="https://www.npmjs.com/package/crosscode-cli"><img src="https://img.shields.io/npm/dw/crosscode-cli?style=flat&color=08C&label=downloads" alt="crosscode-cli weekly downloads" /></a>
-  <a href="https://github.com/amsultan2010/crosscode/actions/workflows/ci.yml"><img src="https://github.com/amsultan2010/crosscode/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://github.com/amsultan2010/crosscode"><img src="https://img.shields.io/github/stars/amsultan2010/crosscode?style=flat&label=%E2%98%85&color=08C" alt="GitHub stars" /></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-08C?style=flat" alt="License: MIT" /></a>
-  <img src="https://img.shields.io/badge/node-24%2B-4493F8?style=flat" alt="Requires Node 24 or newer" />
+  <a href="https://github.com/amsultan2010/crosscode/actions/workflows/ci.yml"><img src="https://github.com/amsultan2010/crosscode/actions/workflows/ci.yml/badge.svg" alt="ci" /></a>
+  <a href="https://github.com/amsultan2010/crosscode"><img src="https://img.shields.io/github/stars/amsultan2010/crosscode?style=flat&label=%E2%98%85&color=08C" alt="github stars" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-08C?style=flat" alt="license: mit" /></a>
+  <img src="https://img.shields.io/badge/node-24%2B-4493F8?style=flat" alt="requires node 24 or newer" />
 </p>
 
 <p align="center">
-  <strong>Multiplayer agentic coding.</strong><br/>
-  Real-time sync for coding with others in the agentic era. You edit a file, their checkout
-  updates within seconds. They edit, yours does. Nobody presses anything and nobody watches
+  <strong>multiplayer agentic coding.</strong><br/>
+  real-time sync for coding with others in the agentic era. you edit a file, their checkout
+  updates within seconds. they edit, yours does. nobody presses anything and nobody watches
   anything.
 </p>
 
 <p align="center">
-  Built by <a href="https://www.amsultan.site">Abdullah Sultan</a>
+  built by <a href="https://www.amsultan.site">abdullah sultan</a>
 </p>
 
 <p align="center">
-  <sub>Node 24 and a Git checkout. Nothing to deploy.</sub>
+  <sub>node 24 and a git checkout. nothing to deploy.</sub>
 </p>
 
 <!-- TODO(abdullah): record a ~10s screen capture of a sync landing in a second
      checkout (edit on the left, file updating on the right), save it as
      assets/demo.gif, and replace this comment with:
-     <p align="center"><img src="assets/demo.gif" alt="A file edit in one checkout appearing in another within seconds" width="720" /></p>
+     <p align="center"><img src="assets/demo.gif" alt="a file edit in one checkout appearing in another within seconds" width="720" /></p>
 -->
 
-Paste [the install prompt](./docs/install-prompt.md) into the coding agent you already have
-open and it does the rest. Prefer to type it yourself:
+paste [the install prompt](./docs/install-prompt.md) into the coding agent you already have
+open and it does the rest. prefer to type it yourself:
 
 ```bash
 npm install -g crosscode-cli
 ```
 
-## Works with the agent you already run
+## works with the agent you already run
 
 <p>
-  <strong>Claude Code</strong> &nbsp;&middot;&nbsp;
-  <strong>Codex CLI</strong> &nbsp;&middot;&nbsp;
-  <strong>OpenCode</strong> &nbsp;&middot;&nbsp;
-  <strong>Cursor</strong>
+  <strong>claude code</strong> &nbsp;&middot;&nbsp;
+  <strong>codex cli</strong> &nbsp;&middot;&nbsp;
+  <strong>opencode</strong> &nbsp;&middot;&nbsp;
+  <strong>cursor</strong>
 </p>
 
 <p>
-  <kbd>Gemini CLI</kbd> &nbsp;
-  <kbd>VS Code</kbd> &nbsp;
-  <kbd>Amp</kbd> &nbsp;
-  <kbd>Cline</kbd> &nbsp;
-  <kbd>Zed</kbd> &nbsp;
-  <kbd>Windsurf</kbd> &nbsp;
-  <kbd>+ any MCP client</kbd>
+  <kbd>gemini cli</kbd> &nbsp;
+  <kbd>vs code</kbd> &nbsp;
+  <kbd>amp</kbd> &nbsp;
+  <kbd>cline</kbd> &nbsp;
+  <kbd>zed</kbd> &nbsp;
+  <kbd>windsurf</kbd> &nbsp;
+  <kbd>+ any mcp client</kbd>
 </p>
 
 > [!IMPORTANT]
 > [`crosscode-cli`](https://www.npmjs.com/package/crosscode-cli) installs from npm, and the
 > sync engine underneath it (the shadow ref, the
-> three-way merge, hot-file deferral, offline catch-up) is built and tested. The pre-edit
+> three-way merge, hot-file deferral, offline catch-up) is built and tested. the pre-edit
 > hook registers the command that runs, and the daemon notices a commit or a pull on the
 > branch you are already on.
 >
-> Syncing is opt-in per checkout and covers tracked files on the branch you are sharing.
-> Those files are relayed by the hosted service rather than encrypted end to end, which
+> syncing is opt-in per checkout and covers tracked files on the branch you are sharing.
+> those files are relayed by the hosted service rather than encrypted end to end, which
 > [docs/privacy.md](./docs/privacy.md) spells out in full. [PLAN.md](./PLAN.md) tracks what
 > is done.
 
-## How it works
+## how it works
 
-You both work in ordinary Git checkouts. A small background daemon per checkout notices an
+you both work in ordinary git checkouts. a small background daemon per checkout notices an
 edit once it settles, sends that one file to whoever is on the same branch, and applies
-theirs to your working tree the same way. Commits, branches, and pushes stay pure Git.
-Crosscode only ever touches uncommitted working-tree files, and never a file you or your
+theirs to your working tree the same way. commits, branches, and pushes stay pure git.
+crosscode only ever touches uncommitted working-tree files, and never a file you or your
 agent touched in the last few seconds.
 
-The only interruption is the case that genuinely needs a decision: you both changed the same
-lines of the same file. That goes to your own coding agent, with the three sides of the
-merge, and your agent fixes it. Crosscode never judges the change, classifies risk, or
-reviews code. It delivers the right information at the right moment, and your agent does the
+the only interruption is the case that genuinely needs a decision: you both changed the same
+lines of the same file. that goes to your own coding agent, with the three sides of the
+merge, and your agent fixes it. crosscode never judges the change, classifies risk, or
+reviews code. it delivers the right information at the right moment, and your agent does the
 work.
 
-There is no web app, no dashboard, and no UI. Five CLI commands, four MCP tools, one skill.
+there is no web app, no dashboard, and no ui. five cli commands, four mcp tools, one skill.
 
-## Features
+## features
 
 <table>
 <tr>
 <td width="50%" valign="top">
 
-### Silent by default
+### silent by default
 
-An edit that lands cleanly is written to your working tree with no prompt, no diff, and no
-notification. That is roughly 95% of real use.
+an edit that lands cleanly is written to your working tree with no prompt, no diff, and no
+notification. that is roughly 95% of real use.
 
 </td>
 <td width="50%" valign="top">
 
-### Conflicts go to your agent
+### conflicts go to your agent
 
-Same-line collisions arrive as `ours` / `theirs` / `ancestor` on your own coding agent, which
+same-line collisions arrive as `ours` / `theirs` / `ancestor` on your own coding agent, which
 merges them without being asked.
 
-[Docs →](./docs/mcp-clients.md)
+[docs →](./docs/mcp-clients.md)
 
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
 
-### Pure Git underneath
+### pure git underneath
 
-One ref, `refs/crosscode/shadow`, holds the last agreed state. `HEAD` never moves, and
+one ref, `refs/crosscode/shadow`, holds the last agreed state. `HEAD` never moves, and
 nothing shows up in `git log`.
 
-[Docs →](./docs/architecture.md)
+[docs →](./docs/architecture.md)
 
 </td>
 <td width="50%" valign="top">
 
-### One-command undo
+### one-command undo
 
-Everything Crosscode writes is reversible with
+everything crosscode writes is reversible with
 `git checkout refs/crosscode/shadow -- <path>`.
 
-[Docs →](./docs/architecture.md)
+[docs →](./docs/architecture.md)
 
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
 
-### MCP native
+### mcp native
 
-A standard stdio MCP server, so there is no editor extension to install. Claude Code and
-Codex also get a pre-edit hook.
+a standard stdio mcp server, so there is no editor extension to install. claude code and
+codex also get a pre-edit hook.
 
-[Docs →](./docs/mcp-clients.md)
+[docs →](./docs/mcp-clients.md) · [mcp.so →](https://mcp.so/servers/crosscode-cli-66206f)
 
 </td>
 <td width="50%" valign="top">
 
-### Secrets never move
+### secrets never move
 
-Dropped before capture, even when Git tracks them: `.env*` and `.envrc`/`.npmrc`/`.netrc`/
+dropped before capture, even when git tracks them: `.env*` and `.envrc`/`.npmrc`/`.netrc`/
 `.pgpass`/`.htpasswd`/`.pypirc`/`.dockercfg`/`.git-credentials`; `.aws/`, `.ssh/`,
 `.kube/`, `.gnupg/`; `id_rsa` and friends; `*.pem`/`*.key`/`*.p8`/`*.p12`/`*.pfx`/`*.jks`/
 `*.keystore`/`*.keytab`/`*.kdbx`/`*.ovpn`/`*.gpg`/`*.asc`; anything with `credentials` or
 `secrets` in a path segment, `*service-account*.json`, `kubeconfig`; `*.tfvars` and
-`*.tfstate`. The patterns are anchored to path segments and extensions so ordinary source
+`*.tfstate`. the patterns are anchored to path segments and extensions so ordinary source
 keeps syncing, and the full list is
-[`SECRET_PATH_PATTERNS`](./packages/core/src/index.ts). Untracked files are never sent.
+[`SECRET_PATH_PATTERNS`](./packages/core/src/index.ts). untracked files are never sent.
 
-[Docs →](./docs/privacy.md)
+[docs →](./docs/privacy.md)
 
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
 
-### Survives the network
+### survives the network
 
-The daemon keeps capturing offline and catches up from its cursor. History is kept about 7
+the daemon keeps capturing offline and catches up from its cursor. history is kept about 7
 days; past that a replica resyncs from full content.
 
-[Docs →](./docs/protocol.md)
+[docs →](./docs/protocol.md)
 
 </td>
 <td width="50%" valign="top">
 
-### Two-line onboarding
+### two-line onboarding
 
-`crosscode invite` prints a link. The join page checks the invitee actually has repo access,
+`crosscode invite` prints a link. the join page checks the invitee actually has repo access,
 then hands them a `git clone` and a `crosscode join`.
 
-[Docs →](./docs/onboarding-contracts.md)
+[docs →](./docs/onboarding-contracts.md)
 
 </td>
 </tr>
 </table>
 
-## Quickstart
+## quickstart
 
-Hand the setup to the agent you already have open. Paste
-[the install prompt](./docs/install-prompt.md) into Claude Code, Codex CLI, OpenCode,
-Cursor, or any MCP-capable agent: it installs the CLI, runs `crosscode start` in the
-checkout, and wires up its own MCP config. Codex CLI's config is TOML and `start` does not
-write it, so Codex users add a three-line entry by hand. See
-[MCP client setup](./docs/mcp-clients.md).
+hand the setup to the agent you already have open. paste
+[the install prompt](./docs/install-prompt.md) into claude code, codex cli, opencode,
+cursor, or any mcp-capable agent: it installs the cli, runs `crosscode start` in the
+checkout, and wires up its own mcp config. codex cli's config is toml and `start` does not
+write it, so codex users add a three-line entry by hand. see
+[mcp client setup](./docs/mcp-clients.md).
 
-Or run the same thing yourself:
+or run the same thing yourself:
 
 ```bash
 npm install -g crosscode-cli
@@ -200,111 +200,147 @@ cd your-repo
 crosscode start
 ```
 
-The published package is [`crosscode-cli`](https://www.npmjs.com/package/crosscode-cli),
-which ships both binaries: `crosscode` (the CLI) and `crosscode-mcp` (the MCP server and
+the published package is [`crosscode-cli`](https://www.npmjs.com/package/crosscode-cli),
+which ships both binaries: `crosscode` (the cli) and `crosscode-mcp` (the mcp server and
 pre-edit hook).
 
-`crosscode start` does the whole setup and is safe to re-run: it signs you in with GitHub,
-attaches this checkout to a project, starts the background daemon, and installs the MCP
-server, the `crosscode` skill, and the pre-edit hooks for your coding agent. Restart your
-agent afterwards so it picks up the new MCP server.
+`crosscode start` does the whole setup and is safe to re-run: it signs you in with github,
+attaches this checkout to a project, starts the background daemon, and installs the mcp
+server, the `crosscode` skill, and the pre-edit hooks for your coding agent. restart your
+agent afterwards so it picks up the new mcp server.
 
-Sign-in prints a URL and a short confirmation code and waits. You open the URL, sign in
-with GitHub, and enter the code; there is no callback server listening on your machine and
-nothing to paste back into the terminal. On a remote shell, `--no-browser` prints the URL
+sign-in prints a url and a short confirmation code and waits. you open the url, sign in
+with github, and enter the code; there is no callback server listening on your machine and
+nothing to paste back into the terminal. on a remote shell, `--no-browser` prints the url
 instead of opening one.
 
-To bring a teammate in:
+to bring a teammate in:
 
 ```bash
 crosscode invite          # prints https://www.getcrosscode.dev/join/7f3a9c2e
 ```
 
-They open the link, sign in with GitHub, and the page gives them two lines to paste:
+they open the link, sign in with github, and the page gives them two lines to paste:
 
 ```bash
 git clone git@github.com:acme/app.git && cd app
 crosscode join CC-7F3A-9C2E
 ```
 
-That is the entire onboarding budget. From there, both checkouts are in sync.
+that is the entire onboarding budget. from there, both checkouts are in sync.
 
-The other two commands, and that is all of them:
+the other two commands, and that is all of them:
 
 ```bash
 crosscode status     # branch, connected, paused, who else is on this branch
 crosscode stop       # stop syncing this checkout
 ```
 
-## What syncs, and what never does
+## mcp server configuration
 
-Only the files you sync ever leave the room: tracked files you edit on the branch you are
-sharing, minus a hard denylist. Untracked files stay put, and your commits, branches, index,
-stash, and remotes are never touched, so nothing Crosscode does pushes to a remote. If you
-stop Crosscode or remove it, your repository is an ordinary Git repository, exactly as it
+`crosscode start` writes this for you. to add it by hand, put it in `.mcp.json` at the
+checkout root (claude code), `.cursor/mcp.json` (cursor), or `.gemini/settings.json`
+(gemini cli):
+
+```json
+{
+  "mcpServers": {
+    "crosscode": {
+      "command": "crosscode-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+the server speaks mcp over stdio and discovers the checkout from its working directory, so
+launch it with `cwd` set to the checkout root. codex cli's config is toml, and opencode
+uses its own shape; both are in [mcp clients and hooks](./docs/mcp-clients.md).
+
+## tools
+
+four, and there will not be a fifth.
+
+| tool | what it does |
+| --- | --- |
+| `status` | sync status for this checkout: branch, connected, paused, and who else is working on what. read-only. |
+| `conflicts` | list unresolved sync conflicts. each carries ours/theirs/ancestor text for a 3-way merge. |
+| `resolve` | resolve one conflict with your merged file content, written to disk and republished to the team. |
+| `pause` | pause or resume syncing for this checkout, for a rebase, bisect, or bulk rewrite. |
+
+every response from every tool also carries any pending conflicts, whether it was asked for
+them or not. the full catalog, with input schemas, is in
+[mcp clients and hooks](./docs/mcp-clients.md).
+
+## what syncs, and what never does
+
+only the files you sync ever leave the room: tracked files you edit on the branch you are
+sharing, minus a hard denylist. untracked files stay put, and your commits, branches, index,
+stash, and remotes are never touched, so nothing crosscode does pushes to a remote. if you
+stop crosscode or remove it, your repository is an ordinary git repository, exactly as it
 was.
 
-Those files are relayed by the hosted coordination service rather than encrypted end to end,
+those files are relayed by the hosted coordination service rather than encrypted end to end,
 so someone with production access could read them. [docs/privacy.md](./docs/privacy.md)
 lists exactly what the service stores and for how long, and
 [docs/security.md](./docs/security.md) has the threat model.
 
-## The apply rule
+## the apply rule
 
-One Git ref does most of the work. `refs/crosscode/shadow` points at a commit whose tree is
-the last state both sides agreed on. From that one ref come the merge base, "have I edited
-this since we synced?", undo, and content storage in Git's own object store.
+one git ref does most of the work. `refs/crosscode/shadow` points at a commit whose tree is
+the last state both sides agreed on. from that one ref come the merge base, "have i edited
+this since we synced?", undo, and content storage in git's own object store.
 
-The sync unit is one file: `{ path, op, baseHash, contentHash, content-or-patch }`. No
-bundles, no lifecycle, no accept or reject. For an incoming change to path `P`, where `L` is
+the sync unit is one file: `{ path, op, baseHash, contentHash, content-or-patch }`. no
+bundles, no lifecycle, no accept or reject. for an incoming change to path `P`, where `L` is
 your disk and `S` is the shadow:
 
 1. `L == S` **and the sender built from `S`**: write it, silently.
-2. Otherwise, 3-way merge against the sender's base. Clean means write it silently. A
+2. otherwise, 3-way merge against the sender's base. clean means write it silently. a
    conflict is surfaced to your agent.
-3. Only if that base blob is genuinely missing, catch up from the cursor and retry.
+3. only if that base blob is genuinely missing, catch up from the cursor and retry.
 
-Binaries are never merged, so concurrent binary edits are always a conflict. A conflicted
+binaries are never merged, so concurrent binary edits are always a conflict. a conflicted
 path is quarantined, neither published nor applied, until it is resolved.
 
-Rules that keep it invisible:
+rules that keep it invisible:
 
-- Never write a file you or your agent touched in the last ~10 seconds.
-- Never sync during a rebase, merge, or bisect. Pause, then resync.
-- Same branch only. Different branches means you did not want to sync.
-- Everything is undoable with one command.
+- never write a file you or your agent touched in the last ~10 seconds.
+- never sync during a rebase, merge, or bisect. pause, then resync.
+- same branch only. different branches means you did not want to sync.
+- everything is undoable with one command.
 
-More in [architecture](./docs/architecture.md) and [protocol](./docs/protocol.md).
+more in [architecture](./docs/architecture.md) and [protocol](./docs/protocol.md).
 
-## Pricing
+## pricing
 
-The hosted service is free. There are no paid plans, no seats, and no payment details
-collected. See [docs/terms.md](./docs/terms.md).
+the hosted service is free. there are no paid plans, no seats, and no payment details
+collected. see [docs/terms.md](./docs/terms.md).
 
-## What your agent sees
+## what your agent sees
 
-Four MCP tools, `status`, `conflicts`, `resolve`, and `pause`, plus one skill that says how
+four mcp tools, `status`, `conflicts`, `resolve`, and `pause`, plus one skill that says how
 to use them and, mostly, when to leave them alone.
 
-Every response from every tool carries any pending conflicts, whether the tool was asked for
-them or not. That is deliberate. An agent only looks at anything when it is invoked, so a
-conflict that arrives while it is idle would otherwise sit unseen. This way it trips over
-one the next time it does anything at all. Claude Code and Codex additionally get a hook
+every response from every tool carries any pending conflicts, whether the tool was asked for
+them or not. that is deliberate. an agent only looks at anything when it is invoked, so a
+conflict that arrives while it is idle would otherwise sit unseen. this way it trips over
+one the next time it does anything at all. claude code and codex additionally get a hook
 that runs before a file edit, which moves that moment earlier still: a conflict on a file
-is known before the agent writes over it rather than after. The hook is a bonus on top of
-MCP, not a requirement, and every other client relies on the piggybacked conflicts alone.
+is known before the agent writes over it rather than after. the hook is a bonus on top of
+mcp, not a requirement, and every other client relies on the piggybacked conflicts alone.
 
-The bar this is built to: **neither side's agent mentions Crosscode until a real conflict**,
-which the receiving agent then resolves without being asked. See
+the bar this is built to: **neither side's agent mentions crosscode until a real conflict**,
+which the receiving agent then resolves without being asked. see
 [`skills/crosscode/SKILL.md`](./skills/crosscode/SKILL.md) for what the agent is told.
 
-## What Crosscode is not
+## what crosscode is not
 
-No accept-or-reject step on incoming work, no tasks, claims, or handoffs, no hidden snapshot
-layer, no validation profiles, no risk classification, no AI reviewer, no seats, no web app,
-no TUI. We built all of that once, which is how we learned to stop.
+no accept-or-reject step on incoming work, no tasks, claims, or handoffs, no hidden snapshot
+layer, no validation profiles, no risk classification, no ai reviewer, no seats, no web app,
+no tui. we built all of that once, which is how we learned to stop.
 
-## Developing
+## developing
 
 ```bash
 pnpm install
@@ -312,41 +348,41 @@ pnpm build          # typecheck + bundle
 pnpm test           # vitest
 ```
 
-Layout: `packages/protocol` (the wire contract), `packages/sync` (the apply rule, shadow
+layout: `packages/protocol` (the wire contract), `packages/sync` (the apply rule, shadow
 ref, and 3-way merge), `packages/git` (the git plumbing it runs on), `packages/core` (the
 denylist and hashing), `apps/daemon` (per-checkout sync), `apps/service` (the hosted
 coordination service), `apps/cli` (five commands), `apps/mcp-server` (four tools and the
 pre-edit hook), `skills/crosscode` (the agent skill), `apps/docs-site` (landing page and
 these docs).
 
-Want to contribute? See [CONTRIBUTING.md](./CONTRIBUTING.md). `PLAN.md` is the only plan
+want to contribute? see [CONTRIBUTING.md](./CONTRIBUTING.md). `PLAN.md` is the only plan
 document in this repository, and `spike/` holds a throwaway proof of the merge core outside
 the build.
 
-Docs: [architecture](./docs/architecture.md) · [protocol](./docs/protocol.md) ·
-[MCP clients and hooks](./docs/mcp-clients.md) ·
+docs: [architecture](./docs/architecture.md) · [protocol](./docs/protocol.md) ·
+[mcp clients and hooks](./docs/mcp-clients.md) ·
 [onboarding contracts](./docs/onboarding-contracts.md) ·
 [install prompt](./docs/install-prompt.md) · [security](./docs/security.md) ·
 [privacy](./docs/privacy.md) · [observability](./docs/observability.md) ·
 [terms](./docs/terms.md) · [support](./docs/support.md)
 
-## Community and support
+## community and support
 
-- **Issues:** missing something, or hit a bug?
-  [Open an issue](https://github.com/amsultan2010/crosscode/issues).
-- **Security:** report vulnerabilities privately per [SECURITY.md](./SECURITY.md), never in a
+- **issues:** missing something, or hit a bug?
+  [open an issue](https://github.com/amsultan2010/crosscode/issues).
+- **security:** report vulnerabilities privately per [SECURITY.md](./SECURITY.md), never in a
   public issue.
-- **Privacy:** [docs/privacy.md](./docs/privacy.md) lists everything the service can see.
-- **Show support:** [star this repo](https://github.com/amsultan2010/crosscode) to follow
+- **privacy:** [docs/privacy.md](./docs/privacy.md) lists everything the service can see.
+- **show support:** [star this repo](https://github.com/amsultan2010/crosscode) to follow
   along.
 
-## License
+## license
 
-Crosscode is free and open source under the [MIT License](./LICENSE).
+crosscode is free and open source under the [mit license](./LICENSE).
 
-## Trademark
+## trademark
 
-The MIT License covers the code. It does not cover the name "Crosscode" or the logos in
-[`assets/`](./assets). Fork it, ship it, write about it. Just don't present a modified
-version as Crosscode itself. [TRADEMARK.md](./TRADEMARK.md) has the details, and
+the mit license covers the code. it does not cover the name "crosscode" or the logos in
+[`assets/`](./assets). fork it, ship it, write about it. just don't present a modified
+version as crosscode itself. [TRADEMARK.md](./TRADEMARK.md) has the details, and
 `legal@getcrosscode.dev` handles anything it doesn't cover.

@@ -197,7 +197,7 @@ describe("the surfaces that show it", () => {
     // Sign-in uses the adjacent-statement form rather than a second checkbox, and still
     // names both documents and their versions.
     expect(signin.querySelector("input")).toBeNull();
-    expect(signin.textContent).toContain("By signing in you agree");
+    expect(signin.textContent).toContain("by signing in you agree");
     expect(signin.textContent).toContain("version 2026-08-01");
     expect(signin.querySelector('a[href="/docs/privacy-policy.html"]')).not.toBeNull();
   });

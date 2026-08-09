@@ -1,59 +1,59 @@
-# Crosscode install prompt
+# crosscode install prompt
 
-Text to paste into a coding agent's chat when you would rather it did the setup. The agent
-has shell access in the project, so it can do every step itself. This is also what the
-site's "Install" button copies, so keep both in sync.
+text to paste into a coding agent's chat when you would rather it did the setup. the agent
+has shell access in the project, so it can do every step itself. this is also what the
+site's "install" button copies, so keep both in sync.
 
-## The prompt
+## the prompt
 
 ````text
-Set up Crosscode for this project. Crosscode syncs uncommitted working-tree files between
+set up crosscode for this project. crosscode syncs uncommitted working-tree files between
 my teammates' checkouts and mine in real time: they edit, my copy updates within seconds,
-and vice versa. It never touches commits, branches, or remotes. Do the following:
+and vice versa. it never touches commits, branches, or remotes. do the following:
 
-1. Check that Node 24 or newer is available (`node --version`). If it is not, stop and
+1. check that node 24 or newer is available (`node --version`). if it is not, stop and
    tell me, because everything below needs it.
-2. From this project's Git root, run:
+2. from this project's git root, run:
 
    ```
    npm install -g crosscode-cli && crosscode start
    ```
 
-   `start` does the whole setup: it signs me in with GitHub, attaches this checkout to a
-   project, starts the background daemon, and installs the Crosscode MCP server, skill,
-   and pre-edit hook for you. It is safe to re-run.
-3. It will print a GitHub sign-in URL and a short confirmation code, then wait. Show me
-   both and stop there. I have to open the URL, sign in, and enter that code before the
-   command finishes. Do not try to sign in for me, do not ask me for credentials, and do
-   not open the URL yourself. It is my browser session that has to sign in, not yours.
-4. Once `start` reports success, tell me I need to restart you (or reconnect MCP servers)
+   `start` does the whole setup: it signs me in with github, attaches this checkout to a
+   project, starts the background daemon, and installs the crosscode mcp server, skill,
+   and pre-edit hook for you. it is safe to re-run.
+3. it will print a github sign-in url and a short confirmation code, then wait. show me
+   both and stop there. i have to open the url, sign in, and enter that code before the
+   command finishes. do not try to sign in for me, do not ask me for credentials, and do
+   not open the url yourself. it is my browser session that has to sign in, not yours.
+4. once `start` reports success, tell me i need to restart you (or reconnect mcp servers)
    for the "crosscode" server to be picked up.
-5. Once reconnected, call the `status` tool once to confirm it works. If it fails, show me
+5. once reconnected, call the `status` tool once to confirm it works. if it fails, show me
    the exact error rather than guessing at a fix.
 
-If I am joining a teammate instead, they will send me a link that gives me two lines to
-paste: a `git clone` and a `crosscode join CC-XXXX-XXXX`. Run those from the parent
+if i am joining a teammate instead, they will send me a link that gives me two lines to
+paste: a `git clone` and a `crosscode join CC-XXXX-XXXX`. run those from the parent
 directory rather than the steps above.
 
-After setup, read the `crosscode` skill and follow it. The short version: syncing is
+after setup, read the `crosscode` skill and follow it. the short version: syncing is
 invisible, files will change under you and that is normal, and you should never mention
-Crosscode to me unless there is a conflict you cannot merge on your own.
+crosscode to me unless there is a conflict you cannot merge on your own.
 ````
 
-## Notes for whoever is embedding this
+## notes for whoever is embedding this
 
-- Nothing is cloned and nothing is built. The published `crosscode-cli` package carries the
-  CLI, the daemon, and the MCP server. Node 24 is the only requirement.
-- `crosscode start` writes the MCP entry for Claude Code, Cursor, Gemini CLI, and OpenCode.
-  Codex CLI's config is TOML holding model, approval, and sandbox settings, so `start` only
+- nothing is cloned and nothing is built. the published `crosscode-cli` package carries the
+  cli, the daemon, and the mcp server. node 24 is the only requirement.
+- `crosscode start` writes the mcp entry for claude code, cursor, gemini cli, and opencode.
+  codex cli's config is toml holding model, approval, and sandbox settings, so `start` only
   writes it for versions whose format it recognizes; otherwise add the three-line entry
   from [`mcp-clients.md`](./mcp-clients.md) by hand.
-- Signing in needs a browser once, for GitHub OAuth. There is no headless path, because the
-  invite flow verifies repo access through GitHub. It is a device-code handshake (a URL
+- signing in needs a browser once, for github oauth. there is no headless path, because the
+  invite flow verifies repo access through github. it is a device-code handshake (a url
   and a code the user types into the page) so the browser does not have to be on the same
   machine as the terminal, and nothing has to be pasted back.
-- Step 3 is the step agents get wrong. An agent that "helpfully" opens the URL in its own
-  tooling signs in as nobody, and the poll never completes. The prompt says so twice on
+- step 3 is the step agents get wrong. an agent that "helpfully" opens the url in its own
+  tooling signs in as nobody, and the poll never completes. the prompt says so twice on
   purpose.
-- The last paragraph of the prompt is deliberate. An agent that reports sync activity to
+- the last paragraph of the prompt is deliberate. an agent that reports sync activity to
   its user has broken the product, and saying so once at install time costs nothing.

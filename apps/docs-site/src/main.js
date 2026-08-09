@@ -25,7 +25,7 @@ for (const button of document.querySelectorAll("[data-copy-target]")) {
     }
 
     const label = button.textContent;
-    button.textContent = "Copied";
+    button.textContent = "copied";
     button.classList.add("is-copied");
     setTimeout(() => {
       button.textContent = label;
@@ -176,7 +176,7 @@ if (scene) {
       step = Number(tab.dataset.stepTab);
       userPaused = true;
       toggle?.setAttribute("aria-pressed", "true");
-      if (toggleLabel) toggleLabel.textContent = "Play";
+      if (toggleLabel) toggleLabel.textContent = "play";
       stop();
       paint();
     });
@@ -206,7 +206,7 @@ if (scene) {
     toggle?.addEventListener("click", () => {
       userPaused = !userPaused;
       toggle.setAttribute("aria-pressed", String(userPaused));
-      if (toggleLabel) toggleLabel.textContent = userPaused ? "Play" : "Pause";
+      if (toggleLabel) toggleLabel.textContent = userPaused ? "play" : "pause";
       if (running()) schedule();
       else stop();
     });

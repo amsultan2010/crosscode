@@ -1,76 +1,76 @@
-# Privacy: what we can and can't see
+# privacy: what we can and can't see
 
-Crosscode syncs your uncommitted edits between checkouts, so those files pass through our
-coordination service. This page says exactly what that service holds.
+crosscode syncs your uncommitted edits between checkouts, so those files pass through our
+coordination service. this page says exactly what that service holds.
 
-This is the honest summary. The complete, formal notice (legal bases, retention per
+this is the honest summary. the complete, formal notice (legal bases, retention per
 category, your rights and how to exercise them) is the
-[Privacy Policy](./privacy-policy.md). Alongside it: [Cookies and local
-storage](./cookies.md), [Subprocessors](./subprocessors.md), and the [Data Processing
-Agreement](./dpa.md) for personal data that sits inside the files you sync.
+[privacy policy](./privacy-policy.md). alongside it: [cookies and local
+storage](./cookies.md), [subprocessors](./subprocessors.md), and the [data processing
+agreement](./dpa.md) for personal data that sits inside the files you sync.
 
-**We hold your file contents.** There is no end-to-end encryption. Files are encrypted in
-transit (TLS) and at rest, under keys we manage, which means a Crosscode engineer with
-production access could read them. We would rather say that plainly than imply otherwise.
+**we hold your file contents.** there is no end-to-end encryption. files are encrypted in
+transit (tls) and at rest, under keys we manage, which means a crosscode engineer with
+production access could read them. we would rather say that plainly than imply otherwise.
 
-If that is not acceptable for a given repository, do not sync it. Crosscode is opt-in per
-checkout and stopping it leaves an ordinary Git repository behind.
+if that is not acceptable for a given repository, do not sync it. crosscode is opt-in per
+checkout and stopping it leaves an ordinary git repository behind.
 
-## What the service stores
+## what the service stores
 
-- **The files you edit while syncing**: path, content, the hashes either side merged
-  against, and whether the change was a modify or a delete. Tracked files only.
-- **Your GitHub account identity**: the account you signed in with, and the project
+- **the files you edit while syncing**: path, content, the hashes either side merged
+  against, and whether the change was a modify or a delete. tracked files only.
+- **your github account identity**: the account you signed in with, and the project
   memberships we use to decide who may sync with whom.
-- **Your repository, as `owner/repo`.** Projects are keyed on it. If a repository's *name*
+- **your repository, as `owner/repo`.** projects are keyed on it. if a repository's *name*
   is confidential, this is not the tool for it.
-- **Timestamps, sizes, and sequence numbers.** When you were active and how large a change
+- **timestamps, sizes, and sequence numbers.** when you were active and how large a change
   was.
-- **Presence**: which branch you are on and which paths you touched recently, so a teammate's
-  agent can answer "who is working on what". This is in memory in the websocket gateway, not
+- **presence**: which branch you are on and which paths you touched recently, so a teammate's
+  agent can answer "who is working on what". this is in memory in the websocket gateway, not
   in the database.
-- **A pending sign-in, while it is pending.** Signing the CLI in creates a row holding a
-  hash of the device code and the short code you type into the page. It expires in about
+- **a pending sign-in, while it is pending.** signing the cli in creates a row holding a
+  hash of the device code and the short code you type into the page. it expires in about
   fifteen minutes and is consumed the moment sign-in completes.
 
-## What never leaves your machine
+## what never leaves your machine
 
-- **Untracked files.** Only files Git already tracks are ever sent.
-- **Secrets, even when tracked.** `.env*`, `*.pem`, `*.key`, and similar are on a hard
+- **untracked files.** only files git already tracks are ever sent.
+- **secrets, even when tracked.** `.env*`, `*.pem`, `*.key`, and similar are on a hard
   denylist, dropped before a change is captured rather than filtered later.
-- **Your commits, branches, index, stash, and remotes.** Crosscode reads and writes
-  working-tree files and one ref of its own (`refs/crosscode/shadow`). Nothing in Crosscode
+- **your commits, branches, index, stash, and remotes.** crosscode reads and writes
+  working-tree files and one ref of its own (`refs/crosscode/shadow`). nothing in crosscode
   pushes anywhere.
 
-## How long it is kept
+## how long it is kept
 
-About 7 days. That window is what makes offline catch-up possible: a checkout that comes
+about 7 days. that window is what makes offline catch-up possible: a checkout that comes
 back within it replays what it missed, and one that has been away longer is told to
-resynchronize from full content rather than handed a partial history. Beyond that window,
+resynchronize from full content rather than handed a partial history. beyond that window,
 history is no longer served back to any checkout.
 
-Your repository is the durable artifact the whole time, on your disk, as ordinary Git.
+your repository is the durable artifact the whole time, on your disk, as ordinary git.
 
-## What we never do
+## what we never do
 
-- We never send your code to a third-party AI provider. Crosscode has no AI features and
-  stores no model provider credentials. The only agent involved is the one already on your
+- we never send your code to a third-party ai provider. crosscode has no ai features and
+  stores no model provider credentials. the only agent involved is the one already on your
   machine, and it reads your files locally.
-- We never push to your Git remotes.
-- We do not sell or share your data.
+- we never push to your git remotes.
+- we do not sell or share your data.
 
-## Removing someone
+## removing someone
 
-Removing a member from a project ends their access immediately: their daemon stops receiving
-on its next request. It cannot un-share what they already have. They had a full checkout of
-the repository. No product can reach into a copy someone already holds, and we would rather
+removing a member from a project ends their access immediately: their daemon stops receiving
+on its next request. it cannot un-share what they already have. they had a full checkout of
+the repository. no product can reach into a copy someone already holds, and we would rather
 tell you that than let you believe otherwise.
 
-## Deleting your data
+## deleting your data
 
-Ask us and we delete your account, your projects, and the change history attached to them.
-See [support](./support.md). Your repositories are unaffected, because they were never ours.
+ask us and we delete your account, your projects, and the change history attached to them.
+see [support](./support.md). your repositories are unaffected, because they were never ours.
 
-Your other rights (access, rectification, restriction, portability, objection) and the
-one-month response time are in §9 of the [Privacy Policy](./privacy-policy.md). Write to
+your other rights (access, rectification, restriction, portability, objection) and the
+one-month response time are in §9 of the [privacy policy](./privacy-policy.md). write to
 privacy@getcrosscode.dev for any of them.

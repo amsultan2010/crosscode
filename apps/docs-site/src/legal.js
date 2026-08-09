@@ -105,13 +105,13 @@ export function consentFieldHtml({ legal, id = "accept-terms", ageGate = false }
   return `
     <div class="consent">
       <input type="checkbox" id="${id}" name="${id}" aria-describedby="${describedBy}" />
-      <label for="${id}">I have read and agree to the ${links}.</label>
-      ${ageGate ? `<p class="muted" id="${hintId}">You must be at least 16 to use Crosscode.</p>` : ""}
+      <label for="${id}">i have read and agree to the ${links}.</label>
+      ${ageGate ? `<p class="muted" id="${hintId}">you must be at least 16 to use crosscode.</p>` : ""}
       <p class="error" id="${id}-error" role="alert" hidden></p>
     </div>`;
 }
 
-const DOCUMENT_NAMES = { terms: "Terms of Service", privacy: "Privacy Policy", dpa: "Data Processing Addendum" };
+const DOCUMENT_NAMES = { terms: "terms of service", privacy: "privacy policy", dpa: "data processing addendum" };
 
 /** True only if the visitor ticked the box themselves. Nothing here ever ticks it for them. */
 export function consentGiven(root, id = "accept-terms") {
@@ -127,10 +127,10 @@ export function showConsentError(root, message, id = "accept-terms") {
 
 /** The message for each way recording an acceptance can fail. */
 export const CONSENT_MESSAGES = {
-  unticked: "Tick the box to say you agree, then try again.",
-  stale: "The terms changed while this page was open. Reload the page and read them again.",
-  unreachable: "Couldn't record your acceptance. Try again in a moment.",
-  "signed-out": "Sign in first, then accept the terms."
+  unticked: "tick the box to say you agree, then try again.",
+  stale: "the terms changed while this page was open. reload the page and read them again.",
+  unreachable: "couldn't record your acceptance. try again in a moment.",
+  "signed-out": "sign in first, then accept the terms."
 };
 
 function escapeHtml(value) {

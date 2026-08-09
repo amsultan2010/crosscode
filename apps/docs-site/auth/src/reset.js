@@ -15,19 +15,19 @@ else renderRequestForm();
 function renderRequestForm() {
   container.innerHTML = `
     <div class="auth-card">
-      <a class="auth-brand" href="/">Crosscode</a>
-      <h1>Reset your password</h1>
-      <p class="auth-subtitle">We'll email you a link that brings you back here to set a new one.</p>
+      <a class="auth-brand" href="/">crosscode</a>
+      <h1>reset your password</h1>
+      <p class="auth-subtitle">we'll email you a link that brings you back here to set a new one.</p>
       <form id="auth-form" class="stack">
         <label>
-          Email
+          email
           <input type="email" name="email" required autocomplete="email" />
         </label>
-        <button type="submit">Send reset link</button>
+        <button type="submit">send reset link</button>
         <p id="auth-status" class="muted" role="status"></p>
         <p id="auth-error" class="error" role="alert"></p>
       </form>
-      <p class="auth-alt"><a href="/auth/signin.html">Back to sign in</a></p>
+      <p class="auth-alt"><a href="/auth/signin.html">back to sign in</a></p>
     </div>
   `;
   wire(async (formData) => {
@@ -36,33 +36,33 @@ function renderRequestForm() {
       redirectTo: `${window.location.origin}/auth/reset.html`
     });
     if (error) throw error;
-    return "Check your email for the reset link.";
+    return "check your email for the reset link.";
   });
 }
 
 function renderUpdateForm() {
   container.innerHTML = `
     <div class="auth-card">
-      <a class="auth-brand" href="/">Crosscode</a>
-      <h1>Choose a new password</h1>
-      <p class="auth-subtitle">This replaces the password on the account the reset link was sent to.</p>
+      <a class="auth-brand" href="/">crosscode</a>
+      <h1>choose a new password</h1>
+      <p class="auth-subtitle">this replaces the password on the account the reset link was sent to.</p>
       <form id="auth-form" class="stack">
         <label>
-          New password
+          new password
           <input type="password" name="password" required minlength="6" autocomplete="new-password" />
         </label>
-        <button type="submit">Update password</button>
+        <button type="submit">update password</button>
         <p id="auth-status" class="muted" role="status"></p>
         <p id="auth-error" class="error" role="alert"></p>
       </form>
-      <p class="auth-alt"><a href="/auth/signin.html">Back to sign in</a></p>
+      <p class="auth-alt"><a href="/auth/signin.html">back to sign in</a></p>
     </div>
   `;
   wire(async (formData) => {
     const password = String(formData.get("password") ?? "");
     const { error } = await getSupabaseClient().auth.updateUser({ password });
     if (error) throw error;
-    return "Password updated. You can sign in with it now, or run `crosscode login`.";
+    return "password updated. you can sign in with it now, or run `crosscode login`.";
   });
 }
 
@@ -83,7 +83,7 @@ function wire(submit) {
       try {
         statusEl.textContent = await submit(new FormData(form));
       } catch (error) {
-        errorEl.textContent = error instanceof Error ? error.message : "Request failed";
+        errorEl.textContent = error instanceof Error ? error.message : "request failed";
       } finally {
         submitButton.disabled = false;
       }

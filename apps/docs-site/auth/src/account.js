@@ -20,15 +20,15 @@ export async function mountAccountPage(mode) {
 function renderSignedIn(container, email) {
   container.innerHTML = `
     <div class="auth-card">
-      <a class="auth-brand" href="/">Crosscode</a>
-      <h1>You're signed in</h1>
-      <p class="auth-subtitle">Signed in as ${email}. Everything else happens in your terminal:</p>
+      <a class="auth-brand" href="/">crosscode</a>
+      <h1>you're signed in</h1>
+      <p class="auth-subtitle">signed in as ${email}. everything else happens in your terminal:</p>
       <pre><code>crosscode login</code></pre>
       <p class="auth-subtitle">
-        That opens this site once more to hand the session to your local daemon.
-        See the <a href="/docs/install.html">install &amp; quickstart</a> guide.
+        that opens this site once more to hand the session to your local daemon.
+        see the <a href="/docs/install.html">install &amp; quickstart</a> guide.
       </p>
-      <p class="auth-alt"><button type="button" id="sign-out" class="auth-linklike">Sign out</button></p>
+      <p class="auth-alt"><button type="button" id="sign-out" class="auth-linklike">sign out</button></p>
     </div>
   `;
   container.querySelector("#sign-out").addEventListener("click", async () => {

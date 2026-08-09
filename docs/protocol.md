@@ -1,15 +1,15 @@
-# Wire protocol
+# wire protocol
 
 `packages/protocol/src/sync.ts` is the source of truth for every shape exchanged between a
-daemon, the coordination service, and the local clients. Everything below is a description
-of that file; if the two disagree, the file is right. All schemas are Zod and `.strict()`,
-and the CLI, MCP server, daemon, and service validate against the same definitions.
+daemon, the coordination service, and the local clients. everything below is a description
+of that file; if the two disagree, the file is right. all schemas are zod and `.strict()`,
+and the cli, mcp server, daemon, and service validate against the same definitions.
 
 `PROTOCOL_VERSION` is `3`.
 
-## The sync unit
+## the sync unit
 
-One file is one change. There are no bundles, no transactions, and no accept/reject
+one file is one change. there are no bundles, no transactions, and no accept/reject
 lifecycle.
 
 ```ts
@@ -25,15 +25,15 @@ fileVersionSchema = {
 }
 ```
 
-`op` exists because without it a delete is indistinguishable from an empty file. The schema
+`op` exists because without it a delete is indistinguishable from an empty file. the schema
 enforces the rest: a delete carries no content and no `contentHash`; a modify carries
 exactly one of `content` or `patch` and a `contentHash`; a patch is meaningless without a
 `baseHash`.
 
-A `change` is a stored `fileVersion` with `sequence`, `projectId`, `branch`, `replicaId`,
+a `change` is a stored `fileVersion` with `sequence`, `projectId`, `branch`, `replicaId`,
 and `createdAt` attached. `sequence` is assigned by the service and is the cursor.
 
-## Conflicts
+## conflicts
 
 ```ts
 conflictSchema = {
@@ -49,13 +49,13 @@ conflictSchema = {
 }
 ```
 
-This is the whole conflict surface. It is produced by the daemon and consumed by the user's
-own agent through MCP; Crosscode never resolves one itself and stores no resolution
-lifecycle. A conflicted path is quarantined until `resolve` arrives with merged content.
+this is the whole conflict surface. it is produced by the daemon and consumed by the user's
+own agent through mcp; crosscode never resolves one itself and stores no resolution
+lifecycle. a conflicted path is quarantined until `resolve` arrives with merged content.
 
-## Service routes
+## service routes
 
-| Route | Request | Response |
+| route | request | response |
 | --- | --- | --- |
 | `POST /v1/projects` | `createProjectRequest` (`name`, `repo` as `owner/repo`) | `syncProject` |
 | `POST /v1/invites` | `createInviteRequest` (`projectId`, `expiresInHours`) | `syncInvite` |
@@ -64,71 +64,71 @@ lifecycle. A conflicted path is quarantined until `resolve` arrives with merged 
 | `POST /v1/changes` | `publishChangesRequest` (up to 500 versions) | `publishChangesResponse` (`cursor`) |
 | `GET /v1/changes?since=` | `listChangesQuery` | `listChangesResponse` **or** `syncCursorTooOld` |
 
-An invite code is the human-typed `CC-7F3A-9C2E` form, and redeeming it verifies the
+an invite code is the human-typed `CC-7F3A-9C2E` form, and redeeming it verifies the
 invitee has access to the repo.
 
-Sign-in sits in front of all of these and is the one part of the surface that is not
+sign-in sits in front of all of these and is the one part of the surface that is not
 session-authenticated, because its purpose is to produce a session:
 
-| Route | Request | Response |
+| route | request | response |
 | --- | --- | --- |
 | `POST /v1/auth/github/device` | none | `{ deviceCode, userCode, verificationUrl, intervalSeconds, expiresInSeconds }` |
 | `POST /v1/auth/github/device/token` | `{ deviceCode }` | `{ status: "pending" }` **or** `{ status: "complete", session }` |
 | `POST /v1/auth/github/device/bind` | `{ userCode }` | binds a signed-in browser session to the pending code |
 
-Three more carry terms acceptance: `GET /v1/legal` returns the current terms and privacy
+three more carry terms acceptance: `GET /v1/legal` returns the current terms and privacy
 versions, `POST /v1/legal/acceptances` records one, and `GET /v1/legal/acceptances` reports
 what the account still owes. `POST /v1/replicas` refuses with 403 until nothing is
 outstanding.
 
 `session` is the same `{ accessToken, refreshToken, expiresAt }` that
 `syncDaemonConfig.service.session` already pins, so nothing downstream of sign-in has a
-second shape to learn. The CLI parses these two responses in `apps/cli/src/auth.ts`;
+second shape to learn. the cli parses these two responses in `apps/cli/src/auth.ts`;
 [the onboarding contracts](../docs/onboarding-contracts.md) have the sequence and the
 reasoning.
 
 `changesResponse` is a union, and the second arm matters: `{ status: "cursor-too-old",
 resyncFrom, retentionDays }` means `since` predates retention and the gap cannot be filled
-incrementally. A daemon must resync from full content rather than read it as "nothing new".
+incrementally. a daemon must resync from full content rather than read it as "nothing new".
 
-## Websocket `/v1/stream`
+## websocket `/v1/stream`
 
-The client sends `subscribe` (`projectId`, `branch`, `replicaId`, `since`) and then
-`presence` updates. The server sends `change`, `presence`, or `error`. Presence carries
+the client sends `subscribe` (`projectId`, `branch`, `replicaId`, `since`) and then
+`presence` updates. the server sends `change`, `presence`, or `error`. presence carries
 `replicaId`, `actor`, `branch`, and up to 50 recently touched `paths`, which is how an
-agent can answer "who is working on what" without any ambient UI.
+agent can answer "who is working on what" without any ambient ui.
 
-The stream is the fast path, not the only one. A host that cannot serve a WebSocket upgrade
+the stream is the fast path, not the only one. a host that cannot serve a websocket upgrade
 (a serverless function, for one) leaves a daemon publishing happily and receiving
 nothing, so a daemon that cannot open the stream falls back to polling `GET /v1/changes?since=`
-every few seconds. Edits still arrive, a few seconds later than they would have. Presence
+every few seconds. edits still arrive, a few seconds later than they would have. presence
 does not: it exists only on the socket, so a polling room goes quiet about who is where.
 
-## Daemon config and local API
+## daemon config and local api
 
 `syncDaemonConfig` is what the daemon stores per checkout: `projectId`, `repo`, and the
-service URL with an optional session. It lives mode-`0600` under the checkout's Git
+service url with an optional session. it lives mode-`0600` under the checkout's git
 directory.
 
-The daemon's loopback HTTP API is what `crosscode status` and the MCP tools call. The
+the daemon's loopback http api is what `crosscode status` and the mcp tools call. the
 contract pins the shapes:
 
 - `syncStatus`: `branch`, `connected`, `paused`, `cursor`, `pendingConflicts`, `peers`.
-  Returned by `crosscode status` and the `status` MCP tool alike.
+  returned by `crosscode status` and the `status` mcp tool alike.
 - `conflict[]`: the pending conflicts.
-- `resolveConflictRequest`: `{ conflictId, content }`, the agent's merged result. Written
+- `resolveConflictRequest`: `{ conflictId, content }`, the agent's merged result. written
   to disk and republished.
 - `pauseRequest`: `{ paused }`.
 
-The route spellings the MCP server uses are `GET /v1/status`, `GET /v1/conflicts`,
+the route spellings the mcp server uses are `GET /v1/status`, `GET /v1/conflicts`,
 `POST /v1/conflicts/resolve`, and `POST /v1/pause`, with a `Bearer` secret from the
-connection descriptor and an `{ ok, data }` envelope. They are listed in
+connection descriptor and an `{ ok, data }` envelope. they are listed in
 `apps/mcp-server/src/daemon-api.ts`, which is the one place to change if they move.
 
-## What is not in the protocol
+## what is not in the protocol
 
-No operation, task, claim, handoff, intent, snapshot, validation, or review shape, and
-nothing an incoming change has to be approved through. The old transaction-shaped schemas
+no operation, task, claim, handoff, intent, snapshot, validation, or review shape, and
+nothing an incoming change has to be approved through. the old transaction-shaped schemas
 are gone: `packages/protocol/src/index.ts` now holds only the daemon's own on-disk
 shapes (its loopback connection descriptor and the config `crosscode start` writes) and
-re-exports `sync.ts`. The two files together are 296 lines.
+re-exports `sync.ts`. the two files together are 296 lines.

@@ -78,21 +78,21 @@ export function commandBlock({ cloneCommand, code }) {
 }
 
 const MESSAGES = {
-  "bad-link": ["That link isn't a Crosscode invite", "Ask whoever invited you to run <code>crosscode invite</code> again and send you the new link."],
-  expired: ["This invite has expired", "Invite links last a week. Ask whoever invited you for a fresh one."],
-  unreachable: ["Couldn't check this invite", "Something went wrong reaching Crosscode. Reload the page in a moment."],
+  "bad-link": ["that link isn't a crosscode invite", "ask whoever invited you to run <code>crosscode invite</code> again and send you the new link."],
+  expired: ["this invite has expired", "invite links last a week. ask whoever invited you for a fresh one."],
+  unreachable: ["couldn't check this invite", "something went wrong reaching crosscode. reload the page in a moment."],
   "no-access": [
-    "You don't have access to this repository",
-    "Crosscode only syncs a repository you can already open on GitHub, signed in as the account you just used. Ask the repository's owner for access, then reload this page."
+    "you don't have access to this repository",
+    "crosscode only syncs a repository you can already open on github, signed in as the account you just used. ask the repository's owner for access, then reload this page."
   ]
 };
 
 export function renderJoin(root, state) {
   if (state.status === "signed-out") {
     root.innerHTML = `
-      <h1>You've been invited to a Crosscode project</h1>
-      <p>Sign in with GitHub so we can check you have access to the repository.</p>
-      <button type="button" class="button" data-github-signin>Sign in with GitHub</button>`;
+      <h1>you've been invited to a crosscode project</h1>
+      <p>sign in with github so we can check you have access to the repository.</p>
+      <button type="button" class="button" data-github-signin>sign in with github</button>`;
     return;
   }
 
@@ -104,11 +104,11 @@ export function renderJoin(root, state) {
 
   const block = commandBlock(state);
   root.innerHTML = `
-    <h1>You're on ${escapeHtml(state.repo)}</h1>
-    <p>Paste these two lines into your terminal. That's the whole setup.</p>
+    <h1>you're on ${escapeHtml(state.repo)}</h1>
+    <p>paste these two lines into your terminal. that's the whole setup.</p>
     <pre id="join-commands"><code>${escapeHtml(block)}</code></pre>
-    <button type="button" class="button" data-copy-target="join-commands">Copy</button>
-    <p class="muted">Don't have the CLI yet? <code>npm install -g crosscode-cli</code></p>`;
+    <button type="button" class="button" data-copy-target="join-commands">copy</button>
+    <p class="muted">don't have the cli yet? <code>npm install -g crosscode-cli</code></p>`;
 }
 
 /**
@@ -117,15 +117,15 @@ export function renderJoin(root, state) {
  */
 export function renderJoinConsent(root, state) {
   root.innerHTML = `
-    <h1>You've been invited to a Crosscode project</h1>
+    <h1>you've been invited to a crosscode project</h1>
     <p>
-      Crosscode syncs uncommitted working-tree files between checkouts of the same repository.
-      Your teammates' edits are written into your working tree, and the files you edit are held
+      crosscode syncs uncommitted working-tree files between checkouts of the same repository.
+      your teammates' edits are written into your working tree, and the files you edit are held
       by the hosted service for about seven days.
     </p>
     <form data-consent-form class="stack">
       ${consentFieldHtml({ legal: state.legal })}
-      <button type="submit">Accept and join</button>
+      <button type="submit">accept and join</button>
     </form>`;
 }
 
@@ -160,7 +160,7 @@ export async function mountJoinPage(root, { location = window.location } = {}) {
     signIn();
     root.querySelector("[data-copy-target]")?.addEventListener("click", (event) => {
       void navigator.clipboard.writeText(commandBlock(state));
-      event.currentTarget.textContent = "Copied";
+      event.currentTarget.textContent = "copied";
     });
   };
 

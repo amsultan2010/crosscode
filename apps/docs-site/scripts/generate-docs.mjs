@@ -78,44 +78,44 @@ md.core.ruler.push("heading_anchor_ids", (state) => {
 // in sync automatically.
 const NAV_GROUPS = [
   {
-    label: "Start here",
-    links: [{ href: "/docs/index.html", label: "Overview", key: "index" }]
+    label: "start here",
+    links: [{ href: "/docs/index.html", label: "overview", key: "index" }]
   },
   {
-    label: "Architecture & safety",
+    label: "architecture & safety",
     links: [
-      { href: "/docs/architecture.html", label: "Architecture", key: "architecture" },
-      { href: "/docs/safety.html", label: "Safety model", key: "safety" },
-      { href: "/docs/privacy.html", label: "Privacy", key: "privacy" },
-      { href: "/docs/protocol.html", label: "Network protocol", key: "protocol" }
+      { href: "/docs/architecture.html", label: "architecture", key: "architecture" },
+      { href: "/docs/safety.html", label: "safety model", key: "safety" },
+      { href: "/docs/privacy.html", label: "privacy", key: "privacy" },
+      { href: "/docs/protocol.html", label: "network protocol", key: "protocol" }
     ]
   },
   {
-    label: "Setup & operation",
+    label: "setup & operation",
     links: [
-      { href: "/docs/install.html", label: "Install & quickstart", key: "install" },
-      { href: "/docs/mcp-clients.html", label: "MCP client setup", key: "mcp-clients" }
+      { href: "/docs/install.html", label: "install & quickstart", key: "install" },
+      { href: "/docs/mcp-clients.html", label: "mcp client setup", key: "mcp-clients" }
     ]
   },
   {
-    label: "Reference",
+    label: "reference",
     links: [
-      { href: "/docs/cli.html", label: "CLI reference", key: "cli" },
-      { href: "/docs/limitations.html", label: "Limitations", key: "limitations" }
+      { href: "/docs/cli.html", label: "cli reference", key: "cli" },
+      { href: "/docs/limitations.html", label: "limitations", key: "limitations" }
     ]
   },
   {
-    label: "Support & legal",
+    label: "support & legal",
     links: [
-      { href: "/docs/support.html", label: "Support", key: "support" },
-      { href: "/docs/terms.html", label: "Terms of Service", key: "terms" },
-      { href: "/docs/dmca.html", label: "Copyright and DMCA", key: "dmca" },
-      { href: "/docs/dsa-contact.html", label: "EU DSA contact", key: "dsa-contact" },
-      { href: "/docs/privacy-policy.html", label: "Privacy Policy", key: "privacy-policy" },
-      { href: "/docs/cookies.html", label: "Cookies", key: "cookies" },
-      { href: "/docs/subprocessors.html", label: "Subprocessors", key: "subprocessors" },
-      { href: "/docs/dpa.html", label: "Data Processing Agreement", key: "dpa" },
-      { href: "/docs/accessibility.html", label: "Accessibility", key: "accessibility" }
+      { href: "/docs/support.html", label: "support", key: "support" },
+      { href: "/docs/terms.html", label: "terms of service", key: "terms" },
+      { href: "/docs/dmca.html", label: "copyright and dmca", key: "dmca" },
+      { href: "/docs/dsa-contact.html", label: "eu dsa contact", key: "dsa-contact" },
+      { href: "/docs/privacy-policy.html", label: "privacy policy", key: "privacy-policy" },
+      { href: "/docs/cookies.html", label: "cookies", key: "cookies" },
+      { href: "/docs/subprocessors.html", label: "subprocessors", key: "subprocessors" },
+      { href: "/docs/dpa.html", label: "data processing agreement", key: "dpa" },
+      { href: "/docs/accessibility.html", label: "accessibility", key: "accessibility" }
     ]
   }
 ];
@@ -125,144 +125,144 @@ const NAV_GROUPS = [
 const GENERATED_PAGES = [
   {
     key: "architecture",
-    title: "Architecture",
+    title: "architecture",
     description:
-      "How the Crosscode CLI, the daemon in each checkout, the stdio MCP server and the coordination service fit together, and the exact path one file edit takes to reach a teammate's working tree.",
+      "how the crosscode cli, the daemon in each checkout, the stdio mcp server and the coordination service fit together, and the exact path one file edit takes to reach a teammate's working tree.",
     mdFile: "architecture.md",
     htmlOut: "architecture.html",
     nextHref: "/docs/safety.html",
-    nextLabel: "Safety model"
+    nextLabel: "safety model"
   },
   {
     key: "safety",
-    title: "Safety model",
+    title: "safety model",
     description:
-      "The threat model behind the Crosscode CLI: how the daemon, the MCP server, the coordination service and the local clients are each defended, and what none of them defends against.",
+      "the threat model behind the crosscode cli: how the daemon, the mcp server, the coordination service and the local clients are each defended, and what none of them defends against.",
     mdFile: "security.md",
     htmlOut: "safety.html",
     mdOutName: "safety.md",
     nextHref: "/docs/privacy.html",
-    nextLabel: "Privacy"
+    nextLabel: "privacy"
   },
   {
     key: "privacy",
-    title: "Privacy",
+    title: "privacy",
     description:
-      "What the hosted coordination service actually holds while uncommitted edits pass through it from the Crosscode CLI and its MCP server, and what it never sees. The short, honest version.",
+      "what the hosted coordination service actually holds while uncommitted edits pass through it from the crosscode cli and its mcp server, and what it never sees. the short, honest version.",
     mdFile: "privacy.md",
     htmlOut: "privacy.html",
     nextHref: "/docs/protocol.html",
-    nextLabel: "Network protocol"
+    nextLabel: "network protocol"
   },
   {
     key: "protocol",
-    title: "Network protocol",
+    title: "network protocol",
     description:
-      "The Zod wire contract shared by the daemon, the Crosscode CLI, the MCP server and the coordination service. One file is one change; every schema strict, protocol version 3.",
+      "the zod wire contract shared by the daemon, the crosscode cli, the mcp server and the coordination service. one file is one change; every schema strict, protocol version 3.",
     mdFile: "protocol.md",
     htmlOut: "protocol.html",
     nextHref: "/docs/install.html",
-    nextLabel: "Install & quickstart"
+    nextLabel: "install & quickstart"
   },
   {
     key: "mcp-clients",
-    title: "MCP client setup",
+    title: "mcp client setup",
     description:
-      "What the Crosscode CLI's start command installs for a coding agent: the stdio MCP server, the skill that teaches an agent to use it, and hooks for Claude Code and the Codex CLI.",
+      "what the crosscode cli's start command installs for a coding agent: the stdio mcp server, the skill that teaches an agent to use it, and hooks for claude code and the codex cli.",
     mdFile: "mcp-clients.md",
     htmlOut: "mcp-clients.html",
     nextHref: "/docs/cli.html",
-    nextLabel: "CLI reference"
+    nextLabel: "cli reference"
   },
   {
     key: "support",
-    title: "Support",
+    title: "support",
     description:
-      "Where to take a bug in the Crosscode CLI or its MCP server, an account problem or a data deletion request, what to bring with you, and how long a first reply actually takes.",
+      "where to take a bug in the crosscode cli or its mcp server, an account problem or a data deletion request, what to bring with you, and how long a first reply actually takes.",
     mdFile: "support.md",
     htmlOut: "support.html",
     nextHref: "/docs/terms.html",
-    nextLabel: "Terms of Service"
+    nextLabel: "terms of service"
   },
   {
     key: "terms",
-    title: "Terms of Service",
+    title: "terms of service",
     description:
-      "The agreement covering use of the hosted coordination service the Crosscode CLI and its MCP server connect to: your content, acceptable use, availability, liability and termination.",
+      "the agreement covering use of the hosted coordination service the crosscode cli and its mcp server connect to: your content, acceptable use, availability, liability and termination.",
     mdFile: "terms.md",
     htmlOut: "terms.html",
     nextHref: "/docs/dmca.html",
-    nextLabel: "Copyright and DMCA"
+    nextLabel: "copyright and dmca"
   },
   {
     key: "dmca",
-    title: "Copyright and DMCA",
+    title: "copyright and dmca",
     description:
-      "How to send a copyright notice about a file stored in Crosscode's hosted service, how to counter-notify, and what happens to repeat infringers.",
+      "how to send a copyright notice about a file stored in crosscode's hosted service, how to counter-notify, and what happens to repeat infringers.",
     mdFile: "dmca.md",
     htmlOut: "dmca.html",
     nextHref: "/docs/dsa-contact.html",
-    nextLabel: "EU DSA contact"
+    nextLabel: "eu dsa contact"
   },
   {
     key: "dsa-contact",
-    title: "EU DSA contact",
+    title: "eu dsa contact",
     description:
-      "Crosscode's single point of contact and its notice-and-action procedure under the EU Digital Services Act, Regulation (EU) 2022/2065.",
+      "crosscode's single point of contact and its notice-and-action procedure under the eu digital services act, regulation (eu) 2022/2065.",
     mdFile: "dsa-contact.md",
     htmlOut: "dsa-contact.html",
     nextHref: "/docs/privacy-policy.html",
-    nextLabel: "Privacy Policy"
+    nextLabel: "privacy policy"
   },
   {
     key: "privacy-policy",
-    title: "Privacy Policy",
+    title: "privacy policy",
     description:
-      "The full GDPR Article 13 and 14 notice: every category of personal data, the legal basis for it, how long it is kept, and how to exercise your rights.",
+      "the full gdpr article 13 and 14 notice: every category of personal data, the legal basis for it, how long it is kept, and how to exercise your rights.",
     mdFile: "privacy-policy.md",
     htmlOut: "privacy-policy.html",
     nextHref: "/docs/cookies.html",
-    nextLabel: "Cookies and local storage"
+    nextLabel: "cookies and local storage"
   },
   {
     key: "cookies",
-    title: "Cookies and local storage",
+    title: "cookies and local storage",
     description:
-      "Every cookie, localStorage and sessionStorage item Crosscode sets, what each is for, how long it lasts, and whether it needs your consent.",
+      "every cookie, localstorage and sessionstorage item crosscode sets, what each is for, how long it lasts, and whether it needs your consent.",
     mdFile: "cookies.md",
     htmlOut: "cookies.html",
     nextHref: "/docs/subprocessors.html",
-    nextLabel: "Subprocessors"
+    nextLabel: "subprocessors"
   },
   {
     key: "subprocessors",
-    title: "Subprocessors",
+    title: "subprocessors",
     description:
-      "The six vendors that process data on Crosscode's behalf, what each one receives and where it sits. No fonts, no CDN scripts, no third-party tags.",
+      "the six vendors that process data on crosscode's behalf, what each one receives and where it sits. no fonts, no cdn scripts, no third-party tags.",
     mdFile: "subprocessors.md",
     htmlOut: "subprocessors.html",
     nextHref: "/docs/dpa.html",
-    nextLabel: "Data Processing Agreement"
+    nextLabel: "data processing agreement"
   },
   {
     key: "dpa",
-    title: "Data Processing Agreement",
+    title: "data processing agreement",
     description:
-      "The Article 28 processor agreement for personal data inside the files you sync. It applies automatically to the hosted service, with nothing to sign.",
+      "the article 28 processor agreement for personal data inside the files you sync. it applies automatically to the hosted service, with nothing to sign.",
     mdFile: "dpa.md",
     htmlOut: "dpa.html",
     nextHref: "/docs/accessibility.html",
-    nextLabel: "Accessibility"
+    nextLabel: "accessibility"
   },
   {
     key: "accessibility",
-    title: "Accessibility",
+    title: "accessibility",
     description:
-      "Where www.getcrosscode.dev stands against WCAG 2.2 level AA: what is tested, what is known to fall short, and how to report a barrier you hit.",
+      "where www.getcrosscode.dev stands against wcag 2.2 level aa: what is tested, what is known to fall short, and how to report a barrier you hit.",
     mdFile: "accessibility.md",
     htmlOut: "accessibility.html",
     nextHref: "/docs/index.html",
-    nextLabel: "Docs overview"
+    nextLabel: "docs overview"
   }
 ];
 
@@ -296,7 +296,7 @@ function escapeAttr(value) {
 
 function renderPage({ title, activeKey, description, canonicalPath, bodyHtml, mdHref, mdSourceRel, nextHref, nextLabel }) {
   const canonical = `${SITE_URL}${canonicalPath}`;
-  const fullTitle = `${title} · Crosscode CLI (MCP server)`;
+  const fullTitle = `${title} · crosscode cli (mcp server)`;
   const jsonLd = {
     "@context": "https://schema.org",
     "@graph": [
@@ -306,14 +306,14 @@ function renderPage({ title, activeKey, description, canonicalPath, bodyHtml, md
         description,
         url: canonical,
         inLanguage: "en",
-        isPartOf: { "@type": "WebSite", name: "Crosscode", url: `${SITE_URL}/` },
-        publisher: { "@type": "Organization", name: "Crosscode", url: `${SITE_URL}/` }
+        isPartOf: { "@type": "WebSite", name: "crosscode", url: `${SITE_URL}/` },
+        publisher: { "@type": "Organization", name: "crosscode", url: `${SITE_URL}/` }
       },
       {
         "@type": "BreadcrumbList",
         itemListElement: [
-          { "@type": "ListItem", position: 1, name: "Home", item: `${SITE_URL}/` },
-          { "@type": "ListItem", position: 2, name: "Docs", item: `${SITE_URL}/docs/index.html` },
+          { "@type": "ListItem", position: 1, name: "home", item: `${SITE_URL}/` },
+          { "@type": "ListItem", position: 2, name: "docs", item: `${SITE_URL}/docs/index.html` },
           { "@type": "ListItem", position: 3, name: title, item: canonical }
         ]
       }
@@ -348,49 +348,49 @@ ${JSON.stringify(jsonLd, null, 2)}
   </script>
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to content</a>
+  <a class="skip-link" href="#main">skip to content</a>
 
   <header class="site-header">
-    <nav aria-label="Primary">
-      <a class="brand" href="/">Crosscode</a>
-      <a href="/docs/index.html">Docs</a>
-      <a href="/docs/install.html">Install &amp; quickstart</a>
-      <a href="/docs/cli.html">CLI reference</a>
-      <a href="/docs/limitations.html">Limitations</a>
+    <nav aria-label="primary">
+      <a class="brand" href="/">crosscode</a>
+      <a href="/docs/index.html">docs</a>
+      <a href="/docs/install.html">install &amp; quickstart</a>
+      <a href="/docs/cli.html">cli reference</a>
+      <a href="/docs/limitations.html">limitations</a>
       <a class="nav-github" href="${GITHUB_REPO}" rel="noopener">
         ${GITHUB_SVG}
-        GitHub
+        github
       </a>
     </nav>
   </header>
 
   <main id="main" class="docs-layout wide">
-    <nav class="docs-sidebar" aria-label="Docs navigation">
+    <nav class="docs-sidebar" aria-label="docs navigation">
 ${renderSidebar(activeKey)}
     </nav>
 
     <div class="docs-content">
 ${bodyHtml}
       <p class="install-steps">
-        <a href="${mdHref}">View raw markdown</a> &middot; generated from
+        <a href="${mdHref}">view raw markdown</a> &middot; generated from
         <code>${mdSourceRel}</code> at build time, do not hand-edit this page.
       </p>
 
       <div class="docs-next">
-        <a href="${nextHref}">Next: ${nextLabel} →</a>
+        <a href="${nextHref}">next: ${nextLabel} →</a>
       </div>
     </div>
   </main>
 
   <footer class="site-footer">
-    <p>Crosscode: local-first Git coordination.</p>
-    <p><a href="/">Home</a> &middot; <a href="/docs/accessibility.html">Accessibility</a> &middot; <a href="${GITHUB_REPO}" rel="noopener">View on GitHub</a></p>
+    <p>crosscode: local-first git coordination.</p>
+    <p><a href="/">home</a> &middot; <a href="/docs/accessibility.html">accessibility</a> &middot; <a href="${GITHUB_REPO}" rel="noopener">view on github</a></p>
     <p>
-      <a href="/docs/privacy.html">Privacy</a> &middot;
-      <a href="/docs/privacy-policy.html">Privacy Policy</a> &middot;
-      <a href="/docs/cookies.html">Cookies</a> &middot;
-      <a href="/docs/subprocessors.html">Subprocessors</a> &middot;
-      <a href="/docs/dpa.html">DPA</a>
+      <a href="/docs/privacy.html">privacy</a> &middot;
+      <a href="/docs/privacy-policy.html">privacy policy</a> &middot;
+      <a href="/docs/cookies.html">cookies</a> &middot;
+      <a href="/docs/subprocessors.html">subprocessors</a> &middot;
+      <a href="/docs/dpa.html">dpa</a>
     </p>
   </footer>
 </body>
@@ -467,35 +467,35 @@ function syncInstallPrompt() {
 
 function generateLlmsTxt() {
   const entries = [
-    { href: "/docs/architecture.md", label: "Architecture", desc: "The daemon, the coordination service, and how one file change reaches a teammate." },
-    { href: "/docs/safety.md", label: "Safety model", desc: "The rules and threat model governing when Crosscode may touch your working tree." },
-    { href: "/docs/privacy.md", label: "Privacy", desc: "Exactly what the hosted coordination service can and cannot read. Short answer: not your code." },
-    { href: "/docs/protocol.md", label: "Network protocol", desc: "The wire contract (Zod) shared by the daemon, CLI, MCP server, and coordination service." },
-    { href: "/docs/mcp-clients.md", label: "MCP client setup", desc: "Configuring Claude Code, Codex CLI, OpenCode, Gemini CLI, and Cursor, plus the MCP tool catalog." },
-    { href: "/docs/install-prompt.md", label: "Install prompt", desc: "The exact text to paste into any MCP-capable coding agent to set up Crosscode in a project." }
+    { href: "/docs/architecture.md", label: "architecture", desc: "the daemon, the coordination service, and how one file change reaches a teammate." },
+    { href: "/docs/safety.md", label: "safety model", desc: "the rules and threat model governing when crosscode may touch your working tree." },
+    { href: "/docs/privacy.md", label: "privacy", desc: "exactly what the hosted coordination service can and cannot read. short answer: not your code." },
+    { href: "/docs/protocol.md", label: "network protocol", desc: "the wire contract (zod) shared by the daemon, cli, mcp server, and coordination service." },
+    { href: "/docs/mcp-clients.md", label: "mcp client setup", desc: "configuring claude code, codex cli, opencode, gemini cli, and cursor, plus the mcp tool catalog." },
+    { href: "/docs/install-prompt.md", label: "install prompt", desc: "the exact text to paste into any mcp-capable coding agent to set up crosscode in a project." }
   ];
 
   const lines = [
-    "# Crosscode",
+    "# crosscode",
     "",
-    "> Local-first coordination layer for developers and coding agents working in",
-    "> separate checkouts of the same Git repository. A per-checkout daemon captures",
+    "> local-first coordination layer for developers and coding agents working in",
+    "> separate checkouts of the same git repository. a per-checkout daemon captures",
     "> settled work as durable transactions and syncs it through an authenticated",
     "> coordination service; remote work always arrives as a proposal you review and",
     "> accept yourself, never an automatic write to your working tree.",
     "",
-    "Coding agents should reach for the `crosscode` CLI or the local MCP server for",
+    "coding agents should reach for the `crosscode` cli or the local mcp server for",
     "day-to-day work (status, claim, publish, accept/reject) instead of this site.",
-    "This site and the markdown files linked below are for deeper reference.",
+    "this site and the markdown files linked below are for deeper reference.",
     "",
-    "## Docs",
+    "## docs",
     "",
     ...entries.map((e) => `- [${e.label}](${e.href}): ${e.desc}`),
     "",
-    "## Optional",
+    "## optional",
     "",
-    "- [Full documentation bundle](/llms-full.txt): every doc above concatenated into one file.",
-    `- [GitHub repository](${GITHUB_REPO})`,
+    "- [full documentation bundle](/llms-full.txt): every doc above concatenated into one file.",
+    `- [github repository](${GITHUB_REPO})`,
     `- [AGENTS.md](${GITHUB_REPO}/blob/main/AGENTS.md): agent capability ladder and trust model (repo root).`,
     ""
   ];
@@ -505,19 +505,19 @@ function generateLlmsTxt() {
 
 function generateLlmsFullTxt() {
   const sections = [
-    { title: "Architecture", file: "architecture.md" },
-    { title: "Safety model", file: "security.md" },
-    { title: "Privacy", file: "privacy.md" },
-    { title: "Network protocol", file: "protocol.md" },
-    { title: "MCP client setup", file: "mcp-clients.md" },
-    { title: "Install prompt", file: "install-prompt.md" }
+    { title: "architecture", file: "architecture.md" },
+    { title: "safety model", file: "security.md" },
+    { title: "privacy", file: "privacy.md" },
+    { title: "network protocol", file: "protocol.md" },
+    { title: "mcp client setup", file: "mcp-clients.md" },
+    { title: "install prompt", file: "install-prompt.md" }
   ];
 
   const parts = [
-    "# Crosscode: full documentation bundle",
+    "# crosscode: full documentation bundle",
     "",
-    "Concatenation of every docs/*.md source in this repository, for LLMs/agents",
-    "that want the complete reference in a single fetch. See /llms.txt for a",
+    "concatenation of every docs/*.md source in this repository, for llms/agents",
+    "that want the complete reference in a single fetch. see /llms.txt for a",
     "curated index with per-page links.",
     ""
   ];

@@ -72,41 +72,41 @@ export async function bindDeviceCode({ userCode, session, serviceUrl = SERVICE_U
 }
 
 const MESSAGES = {
-  "bad-code": ["That code doesn't look right", "Copy the confirmation code from your terminal exactly as it appears, then try again."],
-  expired: ["That code has expired", "Confirmation codes last fifteen minutes. Run <code>crosscode start</code> again for a fresh one."],
-  used: ["That code has already been used", "Run <code>crosscode start</code> again if your terminal is still waiting."],
-  "not-github": ["Sign in with GitHub", "Crosscode checks your access to a repository on GitHub, so it needs a GitHub sign-in rather than another provider."],
-  unreachable: ["Couldn't reach Crosscode", "Something went wrong on the way to the service. Try again in a moment."]
+  "bad-code": ["that code doesn't look right", "copy the confirmation code from your terminal exactly as it appears, then try again."],
+  expired: ["that code has expired", "confirmation codes last fifteen minutes. run <code>crosscode start</code> again for a fresh one."],
+  used: ["that code has already been used", "run <code>crosscode start</code> again if your terminal is still waiting."],
+  "not-github": ["sign in with github", "crosscode checks your access to a repository on github, so it needs a github sign-in rather than another provider."],
+  unreachable: ["couldn't reach crosscode", "something went wrong on the way to the service. try again in a moment."]
 };
 
 export function renderDevice(root, state) {
   if (state.status === "signed-out") {
     root.innerHTML = `
-      <h1>Sign in to Crosscode</h1>
-      <p>Your terminal is waiting. Sign in with GitHub, then type the confirmation code it's showing.</p>
-      <button type="button" class="button" data-github-signin>Sign in with GitHub</button>
-      ${state.staleSession ? "<p class=\"muted\">You're already signed in, but Crosscode needs to confirm your GitHub access again before it can set up a terminal.</p>" : ""}`;
+      <h1>sign in to crosscode</h1>
+      <p>your terminal is waiting. sign in with github, then type the confirmation code it's showing.</p>
+      <button type="button" class="button" data-github-signin>sign in with github</button>
+      ${state.staleSession ? "<p class=\"muted\">you're already signed in, but crosscode needs to confirm your github access again before it can set up a terminal.</p>" : ""}`;
     return;
   }
 
   if (state.status === "bound") {
     root.innerHTML = `
-      <h1>Your terminal is signed in</h1>
-      <p>You can close this tab and go back to it. Setup carries on from there.</p>`;
+      <h1>your terminal is signed in</h1>
+      <p>you can close this tab and go back to it. setup carries on from there.</p>`;
     return;
   }
 
   const [title, detail] = MESSAGES[state.status] ?? [];
   root.innerHTML = `
-    <h1>Enter your confirmation code</h1>
-    <p>It's the code <code>crosscode start</code> printed in your terminal.</p>
+    <h1>enter your confirmation code</h1>
+    <p>it's the code <code>crosscode start</code> printed in your terminal.</p>
     ${title ? `<p class="error" role="alert"><strong>${title}.</strong> ${detail}</p>` : ""}
     <form data-device-form class="stack">
-      <label for="device-user-code">Confirmation code</label>
+      <label for="device-user-code">confirmation code</label>
       <input id="device-user-code" name="userCode" autocomplete="off" autocapitalize="characters" spellcheck="false"
              placeholder="WDJB-MJHT" value="${escapeHtml(state.userCode ?? "")}" required />
       ${state.needsConsent ? consentFieldHtml({ legal: state.legal }) : ""}
-      <button type="submit">Sign in this terminal</button>
+      <button type="submit">sign in this terminal</button>
     </form>`;
 }
 

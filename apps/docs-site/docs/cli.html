@@ -3,20 +3,20 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Command reference · Crosscode CLI (MCP server)</title>
-  <meta name="description" content="All five crosscode commands in full. The Crosscode CLI holds no sync state; it talks to the local daemon over an authenticated loopback HTTP API, and so does the MCP server." />
+  <title>command reference · crosscode cli (mcp server)</title>
+  <meta name="description" content="all five crosscode commands in full. the crosscode cli holds no sync state; it talks to the local daemon over an authenticated loopback http api, and so does the mcp server." />
   <link rel="canonical" href="https://www.getcrosscode.dev/docs/cli.html" />
   <link rel="icon" href="/favicon.ico" sizes="48x48" />
   <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml" sizes="any" />
   <link rel="icon" type="image/png" sizes="192x192" href="/brand/favicon-192.png" />
   <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png" />
-  <meta property="og:site_name" content="Crosscode" />
-  <meta property="og:title" content="Command reference · Crosscode CLI (MCP server)" />
-  <meta property="og:description" content="All five crosscode commands in full. The Crosscode CLI holds no sync state; it talks to the local daemon over an authenticated loopback HTTP API, and so does the MCP server." />
+  <meta property="og:site_name" content="crosscode" />
+  <meta property="og:title" content="command reference · crosscode cli (mcp server)" />
+  <meta property="og:description" content="all five crosscode commands in full. the crosscode cli holds no sync state; it talks to the local daemon over an authenticated loopback http api, and so does the mcp server." />
   <meta property="og:image" content="/brand/logo-social.png" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Command reference · Crosscode CLI (MCP server)" />
-  <meta name="twitter:description" content="All five crosscode commands in full. The Crosscode CLI holds no sync state; it talks to the local daemon over an authenticated loopback HTTP API, and so does the MCP server." />
+  <meta name="twitter:title" content="command reference · crosscode cli (mcp server)" />
+  <meta name="twitter:description" content="all five crosscode commands in full. the crosscode cli holds no sync state; it talks to the local daemon over an authenticated loopback http api, and so does the mcp server." />
   <meta name="twitter:image" content="/brand/logo-social.png" />
   <link rel="stylesheet" href="/src/style.css" />
   <script type="application/ld+json">
@@ -25,18 +25,18 @@
   "@graph": [
     {
       "@type": "TechArticle",
-      "headline": "CLI reference · Crosscode",
-      "description": "All five crosscode commands in full. The CLI holds no sync state; it talks to the local daemon over an authenticated loopback HTTP API, and so does the MCP server.",
+      "headline": "cli reference · crosscode",
+      "description": "all five crosscode commands in full. the cli holds no sync state; it talks to the local daemon over an authenticated loopback http api, and so does the mcp server.",
       "url": "https://www.getcrosscode.dev/docs/cli.html",
       "inLanguage": "en",
       "isPartOf": {
         "@type": "WebSite",
-        "name": "Crosscode",
+        "name": "crosscode",
         "url": "https://www.getcrosscode.dev/"
       },
       "publisher": {
         "@type": "Organization",
-        "name": "Crosscode",
+        "name": "crosscode",
         "url": "https://www.getcrosscode.dev/"
       }
     },
@@ -46,19 +46,19 @@
         {
           "@type": "ListItem",
           "position": 1,
-          "name": "Home",
+          "name": "home",
           "item": "https://www.getcrosscode.dev/"
         },
         {
           "@type": "ListItem",
           "position": 2,
-          "name": "Docs",
+          "name": "docs",
           "item": "https://www.getcrosscode.dev/docs/index.html"
         },
         {
           "@type": "ListItem",
           "position": 3,
-          "name": "CLI reference",
+          "name": "cli reference",
           "item": "https://www.getcrosscode.dev/docs/cli.html"
         }
       ]
@@ -68,119 +68,119 @@
   </script>
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to content</a>
+  <a class="skip-link" href="#main">skip to content</a>
 
   <header class="site-header">
-    <nav aria-label="Primary">
-      <a class="brand" href="/">Crosscode</a>
-      <a href="/docs/index.html">Docs</a>
-      <a href="/docs/install.html">Install &amp; quickstart</a>
-      <a href="/docs/cli.html">CLI reference</a>
-      <a href="/docs/limitations.html">Limitations</a>
+    <nav aria-label="primary">
+      <a class="brand" href="/">crosscode</a>
+      <a href="/docs/index.html">docs</a>
+      <a href="/docs/install.html">install &amp; quickstart</a>
+      <a href="/docs/cli.html">cli reference</a>
+      <a href="/docs/limitations.html">limitations</a>
       <a class="nav-github" href="https://github.com/amsultan2010/crosscode" rel="noopener">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-        GitHub
+        github
       </a>
     </nav>
   </header>
 
   <main id="main" class="docs-layout wide">
-    <nav class="docs-sidebar" aria-label="Docs navigation">
+    <nav class="docs-sidebar" aria-label="docs navigation">
       <div>
-        <div class="docs-sidebar-label">Start here</div>
+        <div class="docs-sidebar-label">start here</div>
         <div class="docs-sidebar-links">
-          <a href="/docs/index.html">Overview</a>
+          <a href="/docs/index.html">overview</a>
         </div>
       </div>
       <div>
-        <div class="docs-sidebar-label">Architecture &amp; safety</div>
+        <div class="docs-sidebar-label">architecture &amp; safety</div>
         <div class="docs-sidebar-links">
-          <a href="/docs/architecture.html">Architecture</a>
-          <a href="/docs/safety.html">Safety model</a>
-          <a href="/docs/privacy.html">Privacy</a>
-          <a href="/docs/protocol.html">Network protocol</a>
+          <a href="/docs/architecture.html">architecture</a>
+          <a href="/docs/safety.html">safety model</a>
+          <a href="/docs/privacy.html">privacy</a>
+          <a href="/docs/protocol.html">network protocol</a>
         </div>
       </div>
       <div>
-        <div class="docs-sidebar-label">Setup &amp; operation</div>
+        <div class="docs-sidebar-label">setup &amp; operation</div>
         <div class="docs-sidebar-links">
-          <a href="/docs/install.html">Install &amp; quickstart</a>
-          <a href="/docs/mcp-clients.html">MCP client setup</a>
+          <a href="/docs/install.html">install &amp; quickstart</a>
+          <a href="/docs/mcp-clients.html">mcp client setup</a>
         </div>
       </div>
       <div>
-        <div class="docs-sidebar-label">Reference</div>
+        <div class="docs-sidebar-label">reference</div>
         <div class="docs-sidebar-links">
-          <a href="/docs/cli.html" class="active" aria-current="page">CLI reference</a>
-          <a href="/docs/limitations.html">Limitations</a>
+          <a href="/docs/cli.html" class="active" aria-current="page">cli reference</a>
+          <a href="/docs/limitations.html">limitations</a>
         </div>
       </div>
       <div>
-        <div class="docs-sidebar-label">Support &amp; legal</div>
+        <div class="docs-sidebar-label">support &amp; legal</div>
         <div class="docs-sidebar-links">
-          <a href="/docs/support.html">Support</a>
-          <a href="/docs/terms.html">Terms of Service</a>
+          <a href="/docs/support.html">support</a>
+          <a href="/docs/terms.html">terms of service</a>
         </div>
       </div>
     </nav>
 
     <div class="docs-content">
-      <h1>CLI reference</h1>
+      <h1>cli reference</h1>
       <p class="subtitle">
-        Five commands, and that is all of them. The CLI holds no sync state: it talks to the
-        local daemon over an authenticated loopback HTTP API, and so does the MCP server.
+        five commands, and that is all of them. the cli holds no sync state: it talks to the
+        local daemon over an authenticated loopback http api, and so does the mcp server.
       </p>
 
       <div class="callout">
-        Anything that is not on this page does not exist. Crosscode used to have around
+        anything that is not on this page does not exist. crosscode used to have around
         forty-five commands covering tasks, claims, handoffs, proposals, checkpoints,
-        validation profiles, and billing. They were removed, not hidden.
+        validation profiles, and billing. they were removed, not hidden.
       </div>
 
-      <h2>Global flags</h2>
+      <h2>global flags</h2>
       <table>
         <thead>
-          <tr><th>Flag</th><th>Purpose</th></tr>
+          <tr><th>flag</th><th>purpose</th></tr>
         </thead>
         <tbody>
-          <tr><td><code>--json</code></td><td>Print compact JSON on one line instead of pretty-printed JSON</td></tr>
-          <tr><td><code>--version</code>, <code>-V</code></td><td>Print the CLI version</td></tr>
-          <tr><td><code>--help</code></td><td>Print usage for the program or a command</td></tr>
+          <tr><td><code>--json</code></td><td>print compact json on one line instead of pretty-printed json</td></tr>
+          <tr><td><code>--version</code>, <code>-V</code></td><td>print the cli version</td></tr>
+          <tr><td><code>--help</code></td><td>print usage for the program or a command</td></tr>
         </tbody>
       </table>
 
       <h2>crosscode start</h2>
       <p>
-        Sets this checkout up end to end, and is safe to re-run. It signs you in with GitHub,
-        attaches the checkout to a project, starts the daemon, and installs the MCP server,
+        sets this checkout up end to end, and is safe to re-run. it signs you in with github,
+        attaches the checkout to a project, starts the daemon, and installs the mcp server,
         the skill, and the pre-edit hooks for your coding agent.
       </p>
       <pre tabindex="0"><code>crosscode start
 crosscode start --no-browser   # print the sign-in URL instead of opening a browser</code></pre>
       <p>
-        Use <code>--no-browser</code> on a remote shell or in CI. Restart your agent afterwards
-        so it picks up the new MCP server.
+        use <code>--no-browser</code> on a remote shell or in ci. restart your agent afterwards
+        so it picks up the new mcp server.
       </p>
 
       <h2>crosscode invite</h2>
-      <p>Prints a link that invites a teammate to this project. The link is the whole output.</p>
+      <p>prints a link that invites a teammate to this project. the link is the whole output.</p>
       <pre tabindex="0"><code>crosscode invite
 # https://www.getcrosscode.dev/join/7f3a9c2e</code></pre>
       <p>
-        The join page checks the invitee actually has access to the repository before it hands
+        the join page checks the invitee actually has access to the repository before it hands
         them anything.
       </p>
 
       <h2>crosscode join &lt;code&gt;</h2>
       <p>
-        Redeems an invite code in this checkout, then sets it up exactly as <code>start</code>
-        would. The code is a positional argument in the form printed by the join page.
+        redeems an invite code in this checkout, then sets it up exactly as <code>start</code>
+        would. the code is a positional argument in the form printed by the join page.
       </p>
       <pre tabindex="0"><code>crosscode join CC-7F3A-9C2E
 crosscode join CC-7F3A-9C2E --no-browser</code></pre>
 
       <h2>crosscode status</h2>
-      <p>Shows what this checkout's daemon is doing.</p>
+      <p>shows what this checkout's daemon is doing.</p>
       <pre tabindex="0"><code>crosscode status --json</code></pre>
       <pre tabindex="0"><code>{
   "value": {
@@ -194,50 +194,50 @@ crosscode join CC-7F3A-9C2E --no-browser</code></pre>
 }</code></pre>
       <p>
         <code>peers</code> lists who else is working on this branch and which paths they
-        touched recently. Presence is in-memory in the service, so it reflects right now
+        touched recently. presence is in-memory in the service, so it reflects right now
         rather than history.
       </p>
 
       <h2>crosscode stop</h2>
       <p>
-        Stops the daemon for this checkout. Syncing stops; nothing is uninstalled and nothing
+        stops the daemon for this checkout. syncing stops; nothing is uninstalled and nothing
         in your repository changes.
       </p>
       <pre tabindex="0"><code>crosscode stop</code></pre>
 
-      <h2>Output envelope</h2>
+      <h2>output envelope</h2>
       <p>
-        With <code>--json</code>, success is wrapped in <code>value</code> so it is symmetric
-        with the failure shape, and an agent can branch on which key is present. Progress goes
+        with <code>--json</code>, success is wrapped in <code>value</code> so it is symmetric
+        with the failure shape, and an agent can branch on which key is present. progress goes
         to stderr, so stdout stays a single parseable object.
       </p>
       <pre tabindex="0"><code>{"value": {"branch": "main", "connected": true, ...}}
 {"error": {"code": "NOT_A_GIT_REPOSITORY", "message": "Crosscode runs inside a Git repository", "hint": "cd into your project first."}}</code></pre>
       <p>
-        Without <code>--json</code> the value is printed bare, because the envelope is only
-        noise for a human reader. Common error codes are
+        without <code>--json</code> the value is printed bare, because the envelope is only
+        noise for a human reader. common error codes are
         <code>NOT_A_GIT_REPOSITORY</code>, <code>USAGE_ERROR</code>, and
         <code>COMMAND_FAILED</code>.
       </p>
 
-      <h2>The MCP server</h2>
+      <h2>the mcp server</h2>
       <p>
-        The same package installs a <code>crosscode-mcp</code> binary, which is what your
-        coding agent connects to. It exposes four tools, <code>status</code>,
+        the same package installs a <code>crosscode-mcp</code> binary, which is what your
+        coding agent connects to. it exposes four tools, <code>status</code>,
         <code>conflicts</code>, <code>resolve</code>, and <code>pause</code>, and every
-        response carries any pending conflicts whether the tool was asked for them or not. See
-        <a href="/docs/mcp-clients.html">MCP client setup</a>.
+        response carries any pending conflicts whether the tool was asked for them or not. see
+        <a href="/docs/mcp-clients.html">mcp client setup</a>.
       </p>
 
       <div class="docs-next">
-        <a href="/docs/limitations.html">Next: Current limitations →</a>
+        <a href="/docs/limitations.html">next: current limitations →</a>
       </div>
     </div>
   </main>
 
   <footer class="site-footer">
-    <p>Crosscode: local-first Git coordination.</p>
-    <p><a href="/">Home</a> &middot; <a href="https://github.com/amsultan2010/crosscode" rel="noopener">View on GitHub</a></p>
+    <p>crosscode: local-first git coordination.</p>
+    <p><a href="/">home</a> &middot; <a href="https://github.com/amsultan2010/crosscode" rel="noopener">view on github</a></p>
   </footer>
 </body>
 </html>
