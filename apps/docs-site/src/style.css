@@ -462,6 +462,14 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   max-width: 54rem;
 }
 
+.pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-bottom: 2rem;
+}
+
 .pill {
   display: inline-flex;
   align-items: center;
@@ -473,7 +481,6 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   font-size: 0.84rem;
   color: var(--text-2);
   text-decoration: none;
-  margin-bottom: 2rem;
   transition: border-color 0.15s ease, color 0.15s ease;
 }
 
@@ -991,7 +998,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   /* The install command and the agent wall both have to clear the fold on a
      phone, so the hero runs on a tighter rhythm here than anywhere else. */
   .hero { padding-top: 2rem; }
-  .pill { margin-bottom: 1rem; }
+  .pill-row { margin-bottom: 1rem; }
   .hero h1 { font-size: 2.15rem; margin-bottom: 0.8rem; }
   .hero-lede { font-size: 0.95rem; line-height: 1.5; margin-bottom: 1.1rem; }
   .hero-actions { margin-bottom: 1.1rem; }
