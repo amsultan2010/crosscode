@@ -124,6 +124,7 @@ export async function setup(directory: string, environment: Environment, options
   const agent = await environment.installAgentSurface(repository.root);
   report(agent.mcp.changed ? `Registered the crosscode MCP server in ${agent.mcp.path}.` : `The crosscode MCP server is already registered in ${agent.mcp.path}.`);
   report(agent.skill.changed ? `Installed the crosscode skill in ${agent.skill.path}.` : "The crosscode skill is already installed.");
+  report(agent.agents.changed ? `Installed the crosscode guidance in ${agent.agents.path}.` : "The crosscode guidance in AGENTS.md is already installed.");
   report(agent.hooks.changed ? `Installed the crosscode edit hook in ${agent.hooks.path}.` : "The crosscode edit hook is already installed.");
 
   return {
