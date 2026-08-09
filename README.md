@@ -19,6 +19,10 @@
 </p>
 
 <p align="center">
+  Built by <a href="https://www.amsultan.site">Abdullah Sultan</a>
+</p>
+
+<p align="center">
   <sub>Node 24 and a Git checkout. Nothing to deploy.</sub>
 </p>
 
