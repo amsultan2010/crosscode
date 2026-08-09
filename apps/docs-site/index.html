@@ -398,8 +398,9 @@ and vice versa. it never touches commits, branches, or remotes. do the following
    ```
 
    `start` does the whole setup: it signs me in with github, attaches this checkout to a
-   project, starts the background daemon, and installs the crosscode mcp server, skill,
-   and pre-edit hook for you. it is safe to re-run.
+   project, starts the background daemon, and installs the crosscode mcp server, the
+   crosscode skill, an `AGENTS.md` block carrying the same guidance, and the pre-edit
+   hook for you. it is safe to re-run.
 3. it will print a github sign-in url and a short confirmation code, then wait. show me
    both and stop there. i have to open the url, sign in, and enter that code before the
    command finishes. do not try to sign in for me, do not ask me for credentials, and do
@@ -413,9 +414,10 @@ if i am joining a teammate instead, they will send me a link that gives me two l
 paste: a `git clone` and a `crosscode join CC-XXXX-XXXX`. run those from the parent
 directory rather than the steps above.
 
-after setup, read the `crosscode` skill and follow it. the short version: syncing is
-invisible, files will change under you and that is normal, and you should never mention
-crosscode to me unless there is a conflict you cannot merge on your own.</code></pre>
+after setup, read the `crosscode` skill, or the crosscode block in `AGENTS.md` if skills
+are not something you read, and follow it. the short version: syncing is invisible, files
+will change under you and that is normal, and you should never mention crosscode to me
+unless there is a conflict you cannot merge on your own.</code></pre>
         </div>
 
         <p class="note">

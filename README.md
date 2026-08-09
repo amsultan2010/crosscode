@@ -84,7 +84,8 @@ merge, and your agent fixes it. crosscode never judges the change, classifies ri
 reviews code. it delivers the right information at the right moment, and your agent does the
 work.
 
-there is no web app, no dashboard, and no ui. five cli commands, four mcp tools, one skill.
+there is no web app, no dashboard, and no ui. five cli commands, four mcp tools, one skill,
+installed in two places so that whichever agent you run reads it.
 
 ## features
 
@@ -206,8 +207,9 @@ pre-edit hook).
 
 `crosscode start` does the whole setup and is safe to re-run: it signs you in with github,
 attaches this checkout to a project, starts the background daemon, and installs the mcp
-server, the `crosscode` skill, and the pre-edit hooks for your coding agent. restart your
-agent afterwards so it picks up the new mcp server.
+server, the `crosscode` skill, the matching block in `AGENTS.md` for agents that read that
+instead of a skill, and the pre-edit hooks for your coding agent. restart your agent
+afterwards so it picks up the new mcp server.
 
 sign-in prints a url and a short confirmation code and waits. you open the url, sign in
 with github, and enter the code; there is no callback server listening on your machine and
@@ -320,7 +322,9 @@ collected. see [docs/terms.md](./docs/terms.md).
 ## what your agent sees
 
 four mcp tools, `status`, `conflicts`, `resolve`, and `pause`, plus one skill that says how
-to use them and, mostly, when to leave them alone.
+to use them and, mostly, when to leave them alone. claude code reads that skill from
+`.claude/skills/crosscode/`; codex cli, cursor, opencode, and gemini cli read the same text
+from the crosscode block `start` writes into `AGENTS.md`.
 
 every response from every tool carries any pending conflicts, whether the tool was asked for
 them or not. that is deliberate. an agent only looks at anything when it is invoked, so a
@@ -332,7 +336,9 @@ mcp, not a requirement, and every other client relies on the piggybacked conflic
 
 the bar this is built to: **neither side's agent mentions crosscode until a real conflict**,
 which the receiving agent then resolves without being asked. see
-[`skills/crosscode/SKILL.md`](./skills/crosscode/SKILL.md) for what the agent is told.
+[`skills/crosscode/SKILL.md`](./skills/crosscode/SKILL.md) for what the agent is told. that
+file is the only copy there is: `start` installs it verbatim as the skill and, with the
+frontmatter stripped, as the `AGENTS.md` block, and a test fails if the three drift apart.
 
 ## what crosscode is not
 

@@ -1,13 +1,15 @@
-# agent setup: mcp, the skill, and hooks
+# agent setup: mcp, the skill, agents.md, and hooks
 
-`crosscode start` installs all three of these for you. this page is what it installs, for
+`crosscode start` installs all of these for you. this page is what it installs, for
 anyone configuring a client by hand or using one `start` does not write.
 
 the server is also listed on [mcp.so](https://mcp.so/servers/crosscode-cli-66206f).
 
-mcp is the baseline: it is what makes every agent work. the skill teaches an agent what to
-do with it. hooks are a bonus for claude code and codex, and everything degrades cleanly
-where they do not exist.
+mcp is the baseline: it is what makes every agent work. the guidance teaches an agent what
+to do with it, and it ships in two places so that every agent gets it: as a skill for claude
+code, and as a block in `AGENTS.md` for codex cli, cursor, opencode, gemini cli, and
+anything else that reads that file. hooks are a bonus for claude code and codex, and
+everything degrades cleanly where they do not exist.
 
 ## the mcp server
 
@@ -107,16 +109,24 @@ a conflict arriving while it is idle would sit unseen until someone thought to a
 out on every response means the agent trips over it on its next call, whatever that call
 was for.
 
-## the skill
+## the skill, and agents.md
 
 [`skills/crosscode/SKILL.md`](../skills/crosscode/SKILL.md) is one skill, not a suite. it
 tells the agent what is happening in the background, how to resolve a conflict, and, the
 part that matters most, when to do nothing. an agent that narrates sync activity to its
 user has broken the product.
 
-`crosscode start` copies it into the agent's skills directory (`.claude/skills/crosscode/`
-for claude code). for any other agent, point it at the file or paste its contents into
-whatever instructions file that agent reads.
+`crosscode start` installs that one file in two places, for every client, on every run:
+
+- `.claude/skills/crosscode/SKILL.md`, byte-equal to the file in this repository, which is
+  where claude code picks it up.
+- a block in `AGENTS.md` at the checkout root, between `<!-- crosscode:start -->` and
+  `<!-- crosscode:end -->`, holding the same guidance with the yaml frontmatter stripped.
+  that block is what gives codex cli, cursor, opencode, gemini cli, and any other
+  agents.md-reading agent the same instructions claude code gets from the skill.
+
+both are idempotent. whatever else your `AGENTS.md` already says is preserved, and
+re-running `start` rewrites only what is between the two markers.
 
 ## pre-edit hooks
 
