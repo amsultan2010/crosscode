@@ -126,7 +126,7 @@ describe("crosscode start", () => {
       projectId: "project-1",
       repo: "acme/app"
     });
-    expect(result.agent).toMatchObject({ mcp: { changed: true }, skill: { changed: true }, hooks: { changed: true } });
+    expect(result.agent).toMatchObject({ mcp: { changed: true }, skill: { changed: true }, agents: { changed: true }, hooks: { changed: true } });
   });
 
   /**
@@ -184,7 +184,7 @@ describe("crosscode start", () => {
 
   // The property the invite flow depends on: the person sending the link has already run
   // start, and the person receiving it is told to run the same command.
-  it("is idempotent -- one project, one daemon, no duplicated MCP, skill, or hook install", async () => {
+  it("is idempotent -- one project, one daemon, no duplicated MCP, skill, AGENTS.md, or hook install", async () => {
     const root = await checkout();
     const { environment, calls } = stubEnvironment();
 
@@ -194,7 +194,7 @@ describe("crosscode start", () => {
     expect(calls).toEqual({ createProject: 1, redeemInvite: 0, signIn: 1, daemonStart: 1, refreshSession: 0 });
     expect(second.projectId).toBe(first.projectId);
     expect(second).toMatchObject({ signedIn: "already", project: "existing", daemon: { alreadyRunning: true } });
-    expect(second.agent).toMatchObject({ mcp: { changed: false }, skill: { changed: false }, hooks: { changed: false } });
+    expect(second.agent).toMatchObject({ mcp: { changed: false }, skill: { changed: false }, agents: { changed: false }, hooks: { changed: false } });
 
     const mcp = JSON.parse(await readFile(join(root, ".mcp.json"), "utf8"));
     expect(Object.keys(mcp.mcpServers)).toEqual(["crosscode"]);
@@ -303,7 +303,7 @@ describe("crosscode join <code>", () => {
     expect(calls).toEqual({ createProject: 0, redeemInvite: 1, signIn: 1, daemonStart: 1, refreshSession: 0 });
     expect(result).toMatchObject({ projectId: "project-from-invite", repo: "acme/app", project: "joined", daemon: { alreadyRunning: false } });
     expect(await readConfig(root)).toMatchObject({ projectId: "project-from-invite", repo: "acme/app", service: { session: SESSION } });
-    expect(result.agent).toMatchObject({ mcp: { changed: true }, skill: { changed: true }, hooks: { changed: true } });
+    expect(result.agent).toMatchObject({ mcp: { changed: true }, skill: { changed: true }, agents: { changed: true }, hooks: { changed: true } });
   });
 
   /**

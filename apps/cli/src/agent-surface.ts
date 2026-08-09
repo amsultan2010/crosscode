@@ -2,22 +2,30 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { isObject, readJsonObject, writeJsonObjectIfChanged } from "./json-file.js";
 import { registerMcpServer, resolveMcpLaunch, type McpClient } from "./mcp-config.js";
+import { SKILL_MARKDOWN } from "./skill-text.js";
 import { VERSION } from "./version.js";
 
 /**
- * The three things `crosscode start` installs so that the user's own agent can see what the
+ * The four things `crosscode start` installs so that the user's own agent can see what the
  * daemon is doing: the MCP server, the skill that tells the agent what to do about a
- * conflict, and a hook that fires before file edits.
+ * conflict, an AGENTS.md block saying the same thing for every agent that does not read
+ * Claude Code skills, and a hook that fires before file edits.
  *
- * All three are file merges, and all three report whether they changed anything -- installing
+ * All four are file merges, and all four report whether they changed anything -- installing
  * twice writes nothing the second time, which is most of what makes `start` idempotent.
  *
- * The *content* of the skill and the hook belongs to the agent-surface workstream. What is
- * here is the shortest honest version of each, installed in the right place.
+ * The skill's *wording* lives in `skills/crosscode/SKILL.md` and reaches this module through
+ * the generated `skill-text.ts`, so what is installed and what the repository documents cannot
+ * drift apart.
  */
 
 export type InstalledPiece = { path: string; changed: boolean };
-export type AgentSurface = { mcp: InstalledPiece & { client: McpClient; command: string }; skill: InstalledPiece; hooks: InstalledPiece };
+export type AgentSurface = {
+  mcp: InstalledPiece & { client: McpClient; command: string };
+  skill: InstalledPiece;
+  agents: InstalledPiece;
+  hooks: InstalledPiece;
+};
 
 export async function installAgentSurface(repoRoot: string, client: McpClient = "claude"): Promise<AgentSurface> {
   const launch = resolveMcpLaunch(VERSION);
@@ -25,46 +33,10 @@ export async function installAgentSurface(repoRoot: string, client: McpClient = 
   return {
     mcp: { path: registration.path, changed: registration.changed, client: registration.client, command: [launch.command, ...launch.args].join(" ") },
     skill: await installSkill(repoRoot),
+    agents: await installAgentsMd(repoRoot),
     hooks: await installHooks(repoRoot)
   };
 }
-
-const SKILL = `---
-name: crosscode
-description: What Crosscode is doing in the background, and what to do when it surfaces a conflict.
----
-
-# Crosscode
-
-Crosscode syncs this checkout's uncommitted working-tree files with your teammates in real
-time. It runs in the background. Most of the time there is nothing to do and nothing to say.
-
-## What is happening without you
-
-- A teammate edits a file you have not touched: it is written to your disk, silently.
-- A teammate edits different lines of a file you have touched: it is merged, silently.
-- You and a teammate edit the *same lines*: that is a conflict, and it comes to you.
-
-Do not mention Crosscode, describe the sync, or report that files changed. The user did not
-ask for a sync narration.
-
-## When there is a conflict
-
-Every Crosscode MCP response carries the pending conflicts. When one appears:
-
-1. Read \`ours\`, \`theirs\`, and \`ancestor\` from the conflict.
-2. Merge them the way the code means to be merged -- this is your job, not Crosscode's.
-   Crosscode never judges, classifies, or reviews the change.
-3. Call \`resolve\` with the merged content.
-
-The conflicted file is quarantined until you do: it is neither published nor overwritten.
-
-## When to do nothing
-
-- No conflicts: say nothing.
-- A file changed under you mid-task: re-read it and carry on.
-- The user is mid-rebase, mid-merge, or mid-bisect: sync is paused. Nothing to do.
-`;
 
 /**
  * Claude Code reads skills from `.claude/skills/<name>/SKILL.md`. Written into the repo, not
@@ -74,10 +46,50 @@ The conflicted file is quarantined until you do: it is neither published nor ove
 async function installSkill(repoRoot: string): Promise<InstalledPiece> {
   const path = join(repoRoot, ".claude", "skills", "crosscode", "SKILL.md");
   const existing = await readFile(path, "utf8").catch(() => undefined);
-  if (existing === SKILL) return { path, changed: false };
+  if (existing === SKILL_MARKDOWN) return { path, changed: false };
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, SKILL);
+  await writeFile(path, SKILL_MARKDOWN);
   return { path, changed: true };
+}
+
+const AGENTS_START = "<!-- crosscode:start -->";
+const AGENTS_END = "<!-- crosscode:end -->";
+
+/**
+ * The same guidance for every agent that is not Claude Code. Codex, Cursor, Gemini CLI, and
+ * OpenCode all read `AGENTS.md` at the repository root and none of them read a Claude Code
+ * skill, so without this the MCP server is installed for them with nothing telling them what
+ * a conflict means.
+ *
+ * The file belongs to the user, so the crosscode block is fenced by HTML comments and only
+ * what is between them is ever rewritten: an upgrade replaces the block in place, and
+ * everything the user wrote around it survives byte for byte.
+ */
+async function installAgentsMd(repoRoot: string): Promise<InstalledPiece> {
+  const path = join(repoRoot, "AGENTS.md");
+  const existing = await readFile(path, "utf8").catch(() => undefined);
+  const block = `${AGENTS_START}\n${withoutFrontmatter(SKILL_MARKDOWN)}${AGENTS_END}\n`;
+  const merged = existing === undefined ? block : withBlock(existing, block);
+  if (existing === merged) return { path, changed: false };
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, merged);
+  return { path, changed: true };
+}
+
+function withBlock(existing: string, block: string): string {
+  const start = existing.indexOf(AGENTS_START);
+  const end = existing.indexOf(AGENTS_END);
+  if (start === -1 || end < start) return `${existing.replace(/\n*$/, "")}\n\n${block}`;
+  return existing.slice(0, start) + block + existing.slice(end + AGENTS_END.length).replace(/^\n/, "");
+}
+
+/**
+ * The `---`-fenced YAML header a skill file carries and AGENTS.md has no use for. Only a
+ * header at the very top counts; a `---` rule further down the document is left alone.
+ */
+function withoutFrontmatter(markdown: string): string {
+  const match = /^---\n[\s\S]*?\n---\n/.exec(markdown);
+  return match ? markdown.slice(match[0].length).replace(/^\n+/, "") : markdown;
 }
 
 // `crosscode-mcp hook` -- the second entrypoint of the MCP bundle, which reads the tool

@@ -7,6 +7,10 @@
 // workspace packages -- none of which have external consumers.
 import { chmod, readFile, rm } from "node:fs/promises";
 import { build } from "esbuild";
+// The CLI ships the text of skills/crosscode/SKILL.md through a generated module. Imported for
+// its side effect, and imports run before this module's body, so the bundle below can never
+// carry a stale copy of the skill.
+import "./generate-skill.mjs";
 
 // Substituted into apps/daemon/src/version.ts, which both bins read. Taking it from the
 // manifest rather than a second hand-maintained constant means `crosscode --version` cannot
