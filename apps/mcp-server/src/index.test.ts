@@ -89,6 +89,36 @@ describe("the four tools", () => {
   });
 });
 
+describe("the piggybacked payload is a summary", () => {
+  // Three whole copies of every conflicted file used to ride out on calls that had nothing
+  // to do with conflicts. The entry still rides along; the file text does not.
+  const MERGE_SIDES = ["ours", "theirs", "ancestor"] as const;
+
+  it("carries path and id but none of the merge sides on status, pause, and resolve", async () => {
+    const daemon = await fakeDaemon([sampleConflict("src/auth.ts", "c1"), sampleConflict("src/db.ts", "c2")]);
+    const api = await apiFor(daemon);
+
+    for (const call of [
+      () => callSyncTool(api, "status", {}),
+      () => callSyncTool(api, "pause", { paused: false }),
+      () => callSyncTool(api, "resolve", { conflictId: "c1", content: "merged\n" })
+    ]) {
+      const result = await call();
+      expect(result.conflicts.length).toBeGreaterThan(0);
+      for (const conflict of result.conflicts) {
+        expect(conflict).toMatchObject({ path: expect.any(String), id: expect.any(String) });
+        for (const side of MERGE_SIDES) expect(Object.keys(conflict)).not.toContain(side);
+      }
+    }
+  });
+
+  it("still names the conflicting path in attention", async () => {
+    const result = await callSyncTool(await apiFor(await fakeDaemon([sampleConflict("src/auth.ts")])), "status", {});
+    expect(result.attention).toContain("src/auth.ts");
+    expect(result.attention).toContain("resolve");
+  });
+});
+
 describe("conflicts piggyback on every response", () => {
   // The whole design rests on this: an agent only looks at anything when it is invoked, so
   // a conflict that lands while it is idle has to ride out on the next response of any tool.
@@ -127,15 +157,35 @@ describe("no daemon", () => {
 });
 
 describe("over real MCP stdio", () => {
-  it("lists exactly four tools and piggybacks a conflict onto a status call", async () => {
-    const client = await stdioClient(await fakeDaemon([sampleConflict("src/auth.ts")]));
+  it("lists exactly four tools, each with an output schema", async () => {
+    const client = await stdioClient(await fakeDaemon());
 
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual(["conflicts", "pause", "resolve", "status"]);
+    for (const tool of tools) {
+      expect(tool.outputSchema).toMatchObject({ type: "object" });
+      expect(Object.keys((tool.outputSchema as { properties: object }).properties)).toContain("conflicts");
+    }
+  }, 20_000);
 
-    const status = textOf(await client.callTool({ name: "status", arguments: {} }));
-    expect((status.conflicts as Array<{ path: string }>).map((conflict) => conflict.path)).toEqual(["src/auth.ts"]);
-    expect(status.attention).toContain("src/auth.ts");
+  it("piggybacks a conflict onto a status call, as structured content the schema accepts", async () => {
+    const client = await stdioClient(await fakeDaemon([sampleConflict("src/auth.ts")]));
+
+    // The SDK client validates structuredContent against the tool's declared outputSchema and
+    // throws if it does not match, so this call is the check.
+    const result = await client.callTool({ name: "status", arguments: {} });
+    const structured = result.structuredContent as { conflicts: Array<Record<string, unknown>>; attention: string };
+    expect(structured.conflicts.map((conflict) => conflict.path)).toEqual(["src/auth.ts"]);
+    expect(Object.keys(structured.conflicts[0]!)).not.toContain("ours");
+    expect(structured.attention).toContain("src/auth.ts");
+    expect(textOf(result)).toEqual(structured);
+  }, 20_000);
+
+  it("returns the full merge sides from the conflicts tool", async () => {
+    const client = await stdioClient(await fakeDaemon([sampleConflict("src/auth.ts")]));
+    const result = await client.callTool({ name: "conflicts", arguments: {} });
+    expect((result.structuredContent as { conflicts: Array<Record<string, unknown>> }).conflicts[0])
+      .toMatchObject({ ours: "ours\n", theirs: "theirs\n", ancestor: "base\n" });
   }, 20_000);
 
   it("rejects arguments that do not match the contract", async () => {

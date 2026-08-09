@@ -1,20 +1,24 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import type { Conflict, PauseRequest, ResolveConflictRequest } from "@crosscode/protocol";
+import type { Conflict, ConflictSummary, PauseRequest, ResolveConflictRequest } from "@crosscode/protocol";
 import { connectToDaemon, DaemonUnavailableError, START_HINT, type DaemonApi } from "./daemon-api.js";
 import { mcpToolCatalog, toolInputSchemas, type ToolName } from "./tool-catalog.js";
 import { VERSION } from "./version.js";
 
 export interface SyncToolResult {
-  /** Present on every response, whether or not the caller asked. See withConflicts. */
-  conflicts: Conflict[];
+  /**
+   * Present on every response, whether or not the caller asked. See withConflicts. Summaries
+   * everywhere except the `conflicts` tool, which puts full `Conflict`s in this same field --
+   * a `Conflict` has every `ConflictSummary` property, so it is one field, not two.
+   */
+  conflicts: ConflictSummary[];
   attention?: string;
   status?: unknown;
   resolved?: string;
 }
 
-export function conflictNotice(conflicts: Conflict[]): string {
+export function conflictNotice(conflicts: ConflictSummary[]): string {
   const paths = conflicts.map((conflict) => conflict.path).join(", ");
   return `${conflicts.length} unresolved Crosscode conflict${conflicts.length === 1 ? "" : "s"}: ${paths}. `
     + "Merge each one from its ours/theirs/ancestor text and call `resolve`. "
@@ -27,9 +31,23 @@ export function conflictNotice(conflicts: Conflict[]): string {
  * every tool carries the pending conflicts, so the agent trips over one the next time it
  * does anything at all -- including a call that had nothing to do with conflicts.
  */
-async function withConflicts(api: DaemonApi, body: Omit<SyncToolResult, "conflicts" | "attention">): Promise<SyncToolResult> {
+async function withConflicts(
+  api: DaemonApi,
+  body: Omit<SyncToolResult, "conflicts" | "attention">,
+  /** Only the `conflicts` tool asked for the merge sides; nobody else pays for them. */
+  full = false
+): Promise<SyncToolResult> {
   const conflicts = await api.conflicts();
-  return { ...body, conflicts, ...(conflicts.length > 0 ? { attention: conflictNotice(conflicts) } : {}) };
+  return {
+    ...body,
+    conflicts: full ? conflicts : conflicts.map(summarize),
+    ...(conflicts.length > 0 ? { attention: conflictNotice(conflicts) } : {})
+  };
+}
+
+/** Drops the three merge sides outright, rather than nulling them: absent keys cost nothing. */
+function summarize({ ours, theirs, ancestor, ...summary }: Conflict): ConflictSummary {
+  return summary;
 }
 
 export async function callSyncTool(api: DaemonApi, name: ToolName, input: unknown): Promise<SyncToolResult> {
@@ -37,7 +55,7 @@ export async function callSyncTool(api: DaemonApi, name: ToolName, input: unknow
     case "status":
       return withConflicts(api, { status: await api.status() });
     case "conflicts":
-      return withConflicts(api, {});
+      return withConflicts(api, {}, true);
     case "resolve": {
       const request = input as ResolveConflictRequest;
       await api.resolve(request);
@@ -75,7 +93,9 @@ export function buildMcpServer(api: DaemonApi): Server {
     }
     try {
       const result = await callSyncTool(api, name, parsed.data);
-      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      // Both forms, as the spec asks: `structuredContent` for clients that read the declared
+      // outputSchema, the text block for clients that ignore it.
+      return { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result };
     } catch (error) {
       const message = error instanceof Error ? error.message : "the daemon request failed";
       return errorContent(message, error instanceof DaemonUnavailableError ? START_HINT : "Retry, or check `crosscode status`.");

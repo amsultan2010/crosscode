@@ -98,16 +98,28 @@ non-empty:
 {
   "status": { "branch": "main", "connected": true, "paused": false, "cursor": 41,
               "pendingConflicts": 1, "peers": [] },
-  "conflicts": [{ "id": "c-91", "path": "src/auth.ts", "ours": "…", "theirs": "…",
-                  "ancestor": "…", "binary": false, "peer": "bob" }],
+  "conflicts": [{ "id": "c-91", "path": "src/auth.ts", "detectedAt": "2026-08-05T10:00:00.000Z",
+                  "binary": false, "peer": "bob" }],
   "attention": "1 unresolved Crosscode conflict: src/auth.ts. Merge it from its ours/theirs/ancestor text and call `resolve`. …"
 }
 ```
+
+what rides along is a summary: which files are conflicted and since when, not their
+contents. the `ours`/`theirs`/`ancestor` text comes from the `conflicts` tool, one call
+away, and only when the agent is actually about to merge. a `pause` call made for unrelated
+reasons has no business injecting three whole copies of a file into the agent's context.
 
 this is the reason the design works. an agent only looks at anything when it is invoked, so
 a conflict arriving while it is idle would sit unseen until someone thought to ask. riding
 out on every response means the agent trips over it on its next call, whatever that call
 was for.
+
+## typed results
+
+every tool declares an `outputSchema` in `tools/list`, and every successful call answers
+with `structuredContent` matching it as well as the json text block. a client that reads
+structured output gets a typed result; one that ignores it parses the text exactly as
+before. errors keep their plain text shape and carry no structured content.
 
 ## the skill, and agents.md
 

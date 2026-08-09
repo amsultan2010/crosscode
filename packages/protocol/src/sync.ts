@@ -80,6 +80,15 @@ export const conflictSchema = z.object({
 }).strict();
 export type Conflict = z.infer<typeof conflictSchema>;
 
+/**
+ * A conflict without the three merge sides. Piggybacked onto every tool response, where the
+ * file text would be three whole copies of a file nobody asked for; the `conflicts` tool
+ * itself still answers with the full `Conflict`. Derived from `conflictSchema` so the two
+ * cannot drift apart.
+ */
+export const conflictSummarySchema = conflictSchema.omit({ ours: true, theirs: true, ancestor: true });
+export type ConflictSummary = z.infer<typeof conflictSummarySchema>;
+
 /* ---------------------------------------------------------------------- routes */
 
 export const createProjectRequestSchema = z.object({
