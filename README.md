@@ -264,12 +264,13 @@ four, and there will not be a fifth.
 | tool | what it does |
 | --- | --- |
 | `status` | sync status for this checkout: branch, connected, paused, and who else is working on what. read-only. |
-| `conflicts` | list unresolved sync conflicts. each carries ours/theirs/ancestor text for a 3-way merge. |
+| `conflicts` | list unresolved sync conflicts, each with the ours/theirs/ancestor text for a 3-way merge. |
 | `resolve` | resolve one conflict with your merged file content, written to disk and republished to the team. |
 | `pause` | pause or resume syncing for this checkout, for a rebase, bisect, or bulk rewrite. |
 
 every response from every tool also carries any pending conflicts, whether it was asked for
-them or not. the full catalog, with input schemas, is in
+them or not: a summary of each, which file and since when, with the merge text one
+`conflicts` call away. the full catalog, with input and output schemas, is in
 [mcp clients and hooks](./docs/mcp-clients.md).
 
 ## what syncs, and what never does
@@ -325,10 +326,13 @@ to use them and, mostly, when to leave them alone.
 every response from every tool carries any pending conflicts, whether the tool was asked for
 them or not. that is deliberate. an agent only looks at anything when it is invoked, so a
 conflict that arrives while it is idle would otherwise sit unseen. this way it trips over
-one the next time it does anything at all. claude code and codex additionally get a hook
-that runs before a file edit, which moves that moment earlier still: a conflict on a file
-is known before the agent writes over it rather than after. the hook is a bonus on top of
-mcp, not a requirement, and every other client relies on the piggybacked conflicts alone.
+one the next time it does anything at all. what rides along is the summary, so an unrelated
+call never drags whole files into the agent's context; the ours/theirs/ancestor text is one
+`conflicts` call away, at the moment the agent actually merges. claude code and codex
+additionally get a hook that runs before a file edit, which moves that moment earlier still:
+a conflict on a file is known before the agent writes over it rather than after. the hook is
+a bonus on top of mcp, not a requirement, and every other client relies on the piggybacked
+conflicts alone.
 
 the bar this is built to: **neither side's agent mentions crosscode until a real conflict**,
 which the receiving agent then resolves without being asked. see
