@@ -1,0 +1,12 @@
+-- Drops the vestigial `projects.plan` column.
+--
+-- 001 once carried `plan text NOT NULL DEFAULT 'free'` against the day billing existed.
+-- It never did: Crosscode is free for everyone, permanently, with no paid plans, tiers, or
+-- seats, so there is nothing per-project to record. Nothing ever read the column, and every
+-- row in it says 'free', so this drops no information.
+--
+-- 001 no longer creates the column, but CREATE TABLE IF NOT EXISTS does not alter a table
+-- that already exists. This is the half that reaches a database created before then, and
+-- IF EXISTS makes it a no-op on every subsequent run, which is what the re-run-everything
+-- migration model requires.
+ALTER TABLE projects DROP COLUMN IF EXISTS plan;

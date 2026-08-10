@@ -237,9 +237,9 @@ removal (project deletion or member removal) is the only durable stop, which is 
 prefers it.
 
 **g5: no strike, suspension, or termination state in the database.** no column, no table, no
-audit log. `projects.plan` exists and is unread, but nothing records that an account was
-warned, struck, or terminated. the repeat-infringer policy in `dmca.md` is therefore
-implemented entirely outside the system, in whatever record step 4 is kept in.
+audit log. nothing records that an account was warned, struck, or terminated. the
+repeat-infringer policy in `dmca.md` is therefore implemented entirely outside the system,
+in whatever record step 4 is kept in.
 
 **g6: termination is not immediate.** supabase access tokens are verified locally against
 the jwks (`apps/service/src/auth.ts`) with no revocation check on the request path. a deleted

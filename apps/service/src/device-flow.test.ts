@@ -227,7 +227,7 @@ async function listen(device: ReturnType<typeof inMemoryDeviceStore>, overrides:
   const store = {
     ...device,
     upsertUser: async () => ({ created: false }),
-    createProject: async () => ({ id: "3f2504e0-4f89-11d3-9a0c-0305e82c3301", name: "app", repo: "acme/app", plan: "free", createdAt: "2026-01-01T00:00:00.000Z" })
+    createProject: async () => ({ id: "3f2504e0-4f89-11d3-9a0c-0305e82c3301", name: "app", repo: "acme/app", createdAt: "2026-01-01T00:00:00.000Z" })
   } as unknown as PgStore;
   const server = createServiceServer({
     store,

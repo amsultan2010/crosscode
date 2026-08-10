@@ -30,7 +30,7 @@ export type AcceptanceSurface = (typeof ACCEPTANCE_SURFACES)[number];
  * day the text is finalised.
  */
 export const LEGAL_VERSIONS: Record<LegalDocument, string | null> = {
-  terms: "2026-08-01",
+  terms: "2026-08-10",
   privacy: "2026-08-01",
   // No data processing addendum exists yet. The document is accepted-against-able the day
   // one does; until then nobody can be asked to accept a text that is not written.

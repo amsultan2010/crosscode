@@ -8,7 +8,7 @@ import { z } from "zod";
 // replaced still imports them. They get deleted when their last consumer does, not
 // before -- deleting an export ahead of its consumer is what forced a full revert last time.
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 /* ------------------------------------------------------------------ sync unit */
 
@@ -115,7 +115,6 @@ export const syncProjectSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   repo: z.string().min(1),
-  plan: z.string().min(1).default("free"),
   createdAt: z.string().datetime()
 }).strict();
 export type SyncProject = z.infer<typeof syncProjectSchema>;

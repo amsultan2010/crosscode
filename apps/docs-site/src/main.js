@@ -91,31 +91,6 @@ if (reduceMotion.matches) {
   for (const el of revealEls) observer.observe(el);
 }
 
-/* -- pricing period toggle ----------------------------------------------- */
-// Every price and caption carries both values as data-monthly/data-annual, so
-// switching periods is a text swap and never reflows the card grid.
-
-const billingOptions = document.querySelectorAll("[data-billing]");
-
-if (billingOptions.length > 0) {
-  const priceEls = document.querySelectorAll("[data-monthly][data-annual]");
-
-  for (const option of billingOptions) {
-    option.addEventListener("click", () => {
-      const period = option.dataset.billing;
-      for (const other of billingOptions) {
-        const active = other === option;
-        other.classList.toggle("is-active", active);
-        other.setAttribute("aria-pressed", String(active));
-      }
-      for (const el of priceEls) {
-        const next = el.dataset[period];
-        if (next) el.textContent = next;
-      }
-    });
-  }
-}
-
 /* -- the animated loop --------------------------------------------------- */
 // One [data-step] attribute on .scene drives every transition in CSS. This file
 // only advances the number, which is what makes pausing and reduced motion

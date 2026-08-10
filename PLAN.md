@@ -73,7 +73,7 @@ does the work.** Crosscode just delivers the right information at the right mome
 | Hosting | Hosted only. No self-hosting, no `--service` flag. |
 | Presence | No ambient UI. The agent can see who's working on what via MCP. |
 | Encryption | TLS in transit + at rest. No E2E, no device pairing. |
-| Billing | None. Keep a `plan` column for later. |
+| Billing | None, ever. Crosscode is free for everyone: no paid plans, tiers, or seats, and no `plan` column. |
 | AI reviewer | v2, not now. |
 | Method | Strip first, then rebuild. |
 

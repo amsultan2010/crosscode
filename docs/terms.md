@@ -151,12 +151,13 @@ the documents that describe this in detail are incorporated into these terms by 
 
 ## 7. price
 
-the hosted service is currently free, with no paid plans, no seats, and no payment details
-collected. if that changes we will give at least 30 days' notice by email before any charge
-takes effect, and using the service after that means accepting the new terms.
+the hosted service is free. there are no paid plans, no paid tiers, no seats, no usage
+charges, no trials that end, and no payment details collected. every feature is available to
+everyone, and we will never charge you for it. there is no billing system to fail, and there
+is nothing to refund, because you never pay anything.
 
-change history is retained for about seven days regardless. that is a technical limit of how
-offline catch-up works, not a plan feature.
+change history is retained for about seven days. that is a technical limit of how offline
+catch-up works, and it applies identically to everyone.
 
 ## 8. suspension and termination
 
@@ -233,9 +234,8 @@ to the maximum extent the law allows:
 - neither party is liable for indirect, incidental, special, consequential, or punitive
   damages, or for lost profits, lost revenue, or lost data, even if advised that they were
   possible.
-- our total liability arising out of or relating to the hosted service is capped at the
-  greater of the amounts you paid us for it in the 12 months before the claim, or 50 us
-  dollars.
+- our total liability arising out of or relating to the hosted service is capped at 50 us
+  dollars. the service is free, so you never pay us anything that could raise that cap.
 
 nothing here excludes liability that cannot lawfully be excluded, including for fraud or
 for death or personal injury caused by negligence. some jurisdictions do not allow some of

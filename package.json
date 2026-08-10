@@ -1,6 +1,6 @@
 {
   "name": "crosscode-cli",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Crosscode CLI — an MCP server for real-time codebase sync between coding agents",
   "license": "MIT",
   "publishConfig": {

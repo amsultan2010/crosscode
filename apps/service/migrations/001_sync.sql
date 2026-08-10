@@ -46,13 +46,13 @@ CREATE TABLE IF NOT EXISTS users (
 -- A room. `repo` is `owner/repo` on GitHub: it names the room and it is what invite
 -- redemption checks the invitee's access against.
 --
--- `plan` is kept even though nothing reads it. Billing is out of scope, and re-adding it
--- later should not need a migration.
+-- There is no `plan` column. Crosscode is free, permanently and for everyone: there are no
+-- paid plans to record and nothing that varies by account. 004 drops the vestigial column
+-- from databases created before this was settled.
 CREATE TABLE IF NOT EXISTS projects (
   id          uuid PRIMARY KEY,
   name        text NOT NULL,
   repo        text NOT NULL,
-  plan        text NOT NULL DEFAULT 'free',
   created_by  uuid NOT NULL REFERENCES users (id),
   created_at  timestamptz NOT NULL DEFAULT now()
 );
