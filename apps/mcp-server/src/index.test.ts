@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { connectToDaemon, DaemonUnavailableError } from "./daemon-api.js";
+import { connectToDaemon, DaemonUnavailableError, type DaemonApi } from "./daemon-api.js";
 import { callSyncTool } from "./index.js";
 import { startFakeDaemon, sampleConflict, type FakeDaemon } from "./fake-daemon.js";
 import { TOOL_NAMES } from "./tool-catalog.js";
@@ -84,6 +84,31 @@ describe("the four tools", () => {
     expect(daemon.resolved).toEqual([{ conflictId: "c1", content: "merged\n" }]);
     expect(result.resolved).toBe("c1");
     expect(result.conflicts).toEqual([]);
+  });
+
+  /**
+   * The daemon has already written the merged file by the time the follow-up refresh runs, so
+   * a refresh that fails -- the daemon going down in the moment between the two calls is
+   * enough -- must not be reported as a failed resolve. It was: the whole call threw, and an
+   * agent told its resolve failed is an agent that merges the same conflict again over the
+   * merged file.
+   */
+  it("reports a resolve that succeeded even when the conflicts refresh afterwards fails", async () => {
+    const daemon = await fakeDaemon([sampleConflict("src/a.ts", "c1")]);
+    const api = await apiFor(daemon);
+    const failing: DaemonApi = {
+      status: () => api.status(),
+      conflicts: async () => { throw new Error("the daemon went away"); },
+      resolve: (request) => api.resolve(request),
+      pause: (request) => api.pause(request)
+    };
+
+    const result = await callSyncTool(failing, "resolve", { conflictId: "c1", content: "merged\n" });
+
+    expect(daemon.resolved).toEqual([{ conflictId: "c1", content: "merged\n" }]);
+    expect(result.resolved).toBe("c1");
+    expect(result.conflicts).toEqual([]);
+    expect(result.attention).toContain("resolved");
   });
 
   it("pauses and resumes, and answers with the new state", async () => {
