@@ -78,6 +78,24 @@ describe("a HEAD move on the branch we are already on", () => {
     expect(alice!.engine.shadowHash("a.txt")).toBe(await gitText(alice!.dir, ["hash-object", "a.txt"]));
   });
 
+  it("resets rather than guessing when the commit we last saw no longer resolves", async () => {
+    const target = await world(["alice", "bob"], { files: { "a.txt": "a\n" } });
+    const [alice, bob] = target.peers;
+    // Committed and never synced: bob has not pulled, so these bytes are not his to receive
+    // as a working-tree change.
+    await alice!.edit("a.txt", "committed by alice\n");
+    await commit(alice!.dir, ["a.txt"], "commit a");
+
+    // The commit we last saw was amended, reset away, or otherwise pruned. Reading that as
+    // "the tree was empty" makes every path look locally edited, so the shadow keeps its
+    // stale hashes and the next sweep pushes committed bytes at a peer who has not pulled.
+    await alice!.engine.rebaseOntoHead("0".repeat(40));
+
+    expect(await alice!.engine.publishAll()).toEqual([]);
+    expect(alice!.engine.shadowHash("a.txt")).toBe(await gitText(alice!.dir, ["rev-parse", "HEAD:a.txt"]));
+    expect((await bob!.read("a.txt"))!.toString("utf8")).toBe("a\n");
+  });
+
   it("does not lose an incoming change that is still in flight", async () => {
     const clock = new Clock();
     const target = await world(["alice", "bob"], { clock, files: { "a.txt": "base\n", "notes.txt": "notes\n" } });

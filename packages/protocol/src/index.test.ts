@@ -35,6 +35,21 @@ describe("file version invariants", () => {
   it("rejects a modify with no contentHash", () => {
     expect(() => fileVersionSchema.parse({ ...modify, contentHash: null })).toThrow();
   });
+
+  // Git tracks exactly one bit of a file's mode, so the wire carries exactly that and not a
+  // permissions channel a peer could chmod 0777 a file through.
+  it("carries a mode of 100644 or 100755, and nothing else", () => {
+    expect(fileVersionSchema.parse({ ...modify, mode: "100755" }).mode).toBe("100755");
+    expect(() => fileVersionSchema.parse({ ...modify, mode: "100777" })).toThrow();
+    expect(() => fileVersionSchema.parse({ ...modify, mode: 0o755 })).toThrow();
+  });
+
+  // Absent means "no opinion", not 0644: an older peer omits it and its silence must not
+  // strip the executable bit off a file at the receiver.
+  it("leaves the mode absent when the sender did not send one, and forbids it on a delete", () => {
+    expect(fileVersionSchema.parse(modify).mode).toBeUndefined();
+    expect(() => fileVersionSchema.parse({ path: "src/a.ts", op: "delete", baseHash: "base", contentHash: null, mode: "100755" })).toThrow();
+  });
 });
 
 describe("local daemon shapes", () => {

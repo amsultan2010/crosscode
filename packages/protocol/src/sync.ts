@@ -27,6 +27,16 @@ export const fileVersionSchema = z.object({
   content: z.string().optional(),
   patch: z.string().optional(),
   encoding: z.enum(["utf8", "base64"]).default("utf8"),
+  /**
+   * The file's mode, in git's spelling of it. Git tracks exactly one bit here -- executable
+   * or not -- so this is that bit and not a permissions channel: a receiver that honoured
+   * arbitrary modes would be letting a peer chmod 0777 a file it never chose to receive.
+   *
+   * Optional, and absent means "I have nothing to say about the mode", not "0644". A peer
+   * built before this field existed omits it, and a receiver must then leave the mode of an
+   * existing file exactly as it found it.
+   */
+  mode: z.enum(["100644", "100755"]).optional(),
   /** Renames travel as delete + modify; this links them so a conflict can say where it went. */
   renamedFrom: z.string().min(1).optional()
 }).strict().superRefine((version, context) => {
@@ -36,6 +46,9 @@ export const fileVersionSchema = z.object({
     }
     if (version.contentHash !== null) {
       context.addIssue({ code: z.ZodIssueCode.custom, message: "A delete has no contentHash" });
+    }
+    if (version.mode !== undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "A delete has no mode" });
     }
     return;
   }

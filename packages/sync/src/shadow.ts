@@ -32,14 +32,19 @@ export const BACKUP_REF = "refs/crosscode/backup";
 export type TreeEntry = { mode: string; hash: string };
 
 /**
- * Every blob in a tree, by path. A treeish this repository cannot resolve -- HEAD before
- * the first commit -- reads as empty rather than throwing, because "no commit yet" and
- * "commit with no files" mean the same thing to everything that calls this.
+ * Every blob in a tree, by path, or **null when this repository cannot resolve `treeish`**.
+ *
+ * The distinction is the whole point of the null. "HEAD before the first commit" and "a
+ * commit that no longer exists here" both make `ls-tree` fail, and they mean opposite
+ * things: the first is genuinely an empty tree, the second is a question we cannot answer.
+ * Reading the second as empty is how rebaseOnto silently kept every stale hash in the
+ * shadow and republished committed bytes at a peer who had not pulled. The callers decide;
+ * this function only reports which case it is.
  */
-async function readTree(root: string, treeish: string): Promise<Map<string, TreeEntry>> {
+async function readTree(root: string, treeish: string): Promise<Map<string, TreeEntry> | null> {
   const entries = new Map<string, TreeEntry>();
   const result = await gitRaw(root, ["ls-tree", "-r", "-z", treeish]);
-  if (result.status !== 0) return entries;
+  if (result.status !== 0) return null;
   for (const record of result.stdout.toString("utf8").split("\0")) {
     if (!record) continue;
     // "<mode> <type> <hash>\t<path>" -- the tab is what makes a path with spaces safe.
@@ -74,8 +79,13 @@ export class ShadowTree {
   }
 
   private async load(): Promise<void> {
+    const tree = await readTree(this.root, this.ref);
+    // open() and resetTo() both point the ref at a commit before getting here, so an
+    // unresolvable ref means the ref moved out from under us or the object store is broken.
+    // Loading an empty tree in that state would silently un-agree every synced file.
+    if (tree === null) throw new Error(`Cannot read ${this.ref}: the shadow ref does not resolve`);
     this.entries.clear();
-    for (const [path, entry] of await readTree(this.root, this.ref)) this.entries.set(path, entry);
+    for (const [path, entry] of tree) this.entries.set(path, entry);
   }
 
   /** The blob hash we last agreed on for `path`, or null if the shadow has no such path. */
@@ -136,10 +146,24 @@ export class ShadowTree {
    *
    * A path committed away (present in `from`, absent from `to`, never edited locally)
    * leaves the shadow, so nothing is published for a file git itself deleted.
+   *
+   * All of that rests on being able to read `from`. When we cannot -- the commit we last saw
+   * was amended, reset away, or otherwise pruned out of this object store -- there is no
+   * per-path answer to be had: every comparison against a tree we cannot read says
+   * "different", the shadow keeps every hash it had, and the next sweep republishes bytes
+   * git committed at a peer who never pulled them. This is the branch-switch situation in
+   * all but name, so it takes the branch-switch answer and resets to `to` instead.
    */
   async rebaseOnto(from: string | null, to: string): Promise<void> {
-    const before = from ? await readTree(this.root, from) : new Map<string, TreeEntry>();
     const after = await readTree(this.root, to);
+    // `to` is HEAD, and the only way HEAD does not resolve is a repository with no commits
+    // at all -- where there is nothing to rebase onto and the agreed state is all there is.
+    if (after === null) return;
+    const before = from === null ? new Map<string, TreeEntry>() : await readTree(this.root, from);
+    if (before === null) {
+      await this.resetTo(to);
+      return;
+    }
     for (const path of new Set([...this.entries.keys(), ...after.keys()])) {
       // undefined on both sides compares equal, which is the "neither knows this path" case.
       if (this.entries.get(path)?.hash !== before.get(path)?.hash) continue;

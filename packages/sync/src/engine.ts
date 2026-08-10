@@ -1,6 +1,6 @@
 import { isUtf8 } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import {
   conflictSchema,
@@ -54,6 +54,18 @@ export type ApplyOutcome =
   | "rejected";
 
 export type ApplyResult = { path: string; outcome: ApplyOutcome; conflict?: Conflict };
+
+/** Git's two file modes, which are the only two Crosscode carries. See `mode` in the protocol. */
+type FileMode = NonNullable<FileVersion["mode"]>;
+
+/**
+ * A git tree entry's mode narrowed to one of those two. A tree can legitimately hold others
+ * -- 120000 for a symlink, 160000 for a submodule -- and neither is a mode this engine has
+ * any business writing to a regular file, so they read as "no opinion" rather than as 0644.
+ */
+function fileMode(mode: string | undefined): FileMode | undefined {
+  return mode === "100755" || mode === "100644" ? mode : undefined;
+}
 
 export type EngineOptions = {
   hotWindowMs?: number;
@@ -109,7 +121,11 @@ export class SyncEngine {
   private readonly pendingConflicts = new Map<string, Conflict>();
   /** conflict id -> the hash the resolution should claim as its base. See resolveConflict. */
   private readonly conflictBase = new Map<string, string | null>();
+  /** conflict id -> the mode the resolution should be written with, when the sender named one. */
+  private readonly conflictMode = new Map<string, FileMode>();
   private readonly deferred = new Map<string, Deferred>();
+  /** path -> tail of the chain of applies in flight for it. Dropped when the chain drains. */
+  private readonly applying = new Map<string, Promise<void>>();
   private tracked = new Set<string>();
 
   readonly stats: EngineStats = { writes: 0, merges: 0, deletes: 0, noops: 0, conflicts: 0, deferrals: 0, forced: 0, catchups: 0, published: 0 };
@@ -207,9 +223,19 @@ export class SyncEngine {
     return content === null ? null : hashBlob(this.root, content);
   }
 
-  private async modeOf(path: string): Promise<string> {
+  private async modeOf(path: string): Promise<FileMode> {
     const info = await stat(this.absolute(path)).catch(() => undefined);
     return info && (info.mode & 0o111) !== 0 ? "100755" : "100644";
+  }
+
+  /**
+   * Applies a mode with no content write. `chmod +x` alone changes no bytes, so there is
+   * nothing to rename into place -- and the watcher event it provokes is still one of ours,
+   * which is why the self-write is recorded even though the hash did not move.
+   */
+  private async setMode(path: string, mode: FileMode): Promise<void> {
+    await chmod(this.absolute(path), mode === "100755" ? 0o755 : 0o644);
+    this.selfWrites.set(path, await this.diskHash(path));
   }
 
   /**
@@ -217,7 +243,7 @@ export class SyncEngine {
    * mistaken for the user typing -- a daemon that marks its own writes hot deadlocks sync
    * on the first change it applies.
    */
-  private async writeSynced(path: string, content: Buffer, mode: string): Promise<void> {
+  private async writeSynced(path: string, content: Buffer, mode: FileMode): Promise<void> {
     const destination = this.absolute(path);
     await mkdir(dirname(destination), { recursive: true });
     const temporary = join(dirname(destination), `.${basename(destination)}.${randomUUID().slice(0, 8)}.crosscode`);
@@ -270,8 +296,14 @@ export class SyncEngine {
       if (!this.publishable(path)) continue;
       const content = await this.read(path);
       const local = content === null ? null : await writeBlob(this.root, content);
-      const agreed = this.shadow.get(path);
-      if (local === agreed) continue;
+      const entry = this.shadow.entry(path);
+      const agreed = entry?.hash ?? null;
+      const mode = content === null ? null : await this.modeOf(path);
+      // Same bytes *and* the same mode is what "nothing to say" means. Comparing content
+      // alone would leave `chmod +x` stranded on the machine it was run on: git tracks the
+      // executable bit, so a script that is executable here and not at the peer is a real
+      // difference between the two checkouts, and this is the only sweep that can notice it.
+      if (local === agreed && (agreed === null || mode === entry?.mode)) continue;
 
       if (local === null) {
         versions.push(fileVersionSchema.parse({ path, op: "delete", baseHash: agreed, contentHash: null }));
@@ -280,10 +312,10 @@ export class SyncEngine {
         continue;
       }
 
-      const version = await this.modify(path, content!, local, agreed);
+      const version = await this.modify(path, content!, local, agreed, mode!);
       versions.push(version);
       if (agreed === null) created.push(version);
-      this.shadow.set(path, local, await this.modeOf(path));
+      this.shadow.set(path, local, mode!);
     }
     // A rename travels as a delete plus a modify with no relation between them. Linking
     // them here is what lets a conflict on the old path say where the work went, instead
@@ -302,7 +334,7 @@ export class SyncEngine {
     return this.publish([...this.tracked, ...this.shadow.paths()]);
   }
 
-  private async modify(path: string, content: Buffer, local: string, agreed: string | null): Promise<FileVersion> {
+  private async modify(path: string, content: Buffer, local: string, agreed: string | null, mode: FileMode): Promise<FileVersion> {
     const base = await readBlob(this.root, agreed);
     // Text that is not valid UTF-8 -- latin-1, shift-jis, a stray 0xff -- has no NUL byte, so
     // isBinary() calls it text, and `toString("utf8")` would replace every offending byte with
@@ -313,7 +345,7 @@ export class SyncEngine {
     if (!binary && base && content.length > this.patchThresholdBytes) {
       const patch = await makePatch(this.root, base, content);
       if (patch !== null && Buffer.byteLength(patch) < content.length) {
-        return fileVersionSchema.parse({ path, op: "modify", baseHash: agreed, contentHash: local, patch });
+        return fileVersionSchema.parse({ path, op: "modify", baseHash: agreed, contentHash: local, patch, mode });
       }
     }
     return fileVersionSchema.parse({
@@ -322,13 +354,44 @@ export class SyncEngine {
       baseHash: agreed,
       contentHash: local,
       content: binary ? content.toString("base64") : content.toString("utf8"),
-      encoding: binary ? "base64" : "utf8"
+      encoding: binary ? "base64" : "utf8",
+      mode
     });
   }
 
   // ---- apply ------------------------------------------------------------
 
+  /**
+   * Applies one incoming version, serialized against everything else in flight for the same
+   * path.
+   *
+   * The lock is the whole of the correctness argument here: every clause of the apply rule
+   * reads the disk and the shadow, decides, and only then writes, with an await at each
+   * step. Two versions for one path arriving close together -- two peers, or a peer and a
+   * retried deferral -- would otherwise both read the *pre-write* state, both conclude the
+   * sender built on the state they hold, and both write. The second wins and the first
+   * peer's edit is gone with no conflict recorded, which is the one failure mode this engine
+   * exists to prevent. Per path, not global: unrelated files have no reason to wait on each
+   * other, and a repository-wide lock would serialize a whole checkout behind one slow merge.
+   */
   async receive(version: FileVersion, options: { peer?: string; allowCatchup?: boolean } = {}): Promise<ApplyResult> {
+    return this.serialize(version.path, () => this.receiveNow(version, options));
+  }
+
+  private serialize<T>(path: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.applying.get(path) ?? Promise.resolve();
+    // `then(work, work)` and not `finally`: one apply throwing must not cancel the next.
+    const result = previous.then(work, work);
+    const tail = result.then(() => {}, () => {});
+    this.applying.set(path, tail);
+    void tail.then(() => {
+      // Only if nothing chained on behind us, or we would drop somebody else's tail.
+      if (this.applying.get(path) === tail) this.applying.delete(path);
+    });
+    return result;
+  }
+
+  private async receiveNow(version: FileVersion, options: { peer?: string; allowCatchup?: boolean }): Promise<ApplyResult> {
     const { path } = version;
     if (!this.receivable(path)) return { path, outcome: "rejected" };
 
@@ -338,7 +401,19 @@ export class SyncEngine {
     // Loop suppression: I already have exactly these bytes, or we already agreed on them.
     // Never write, never rebroadcast.
     if (version.op === "modify" && version.contentHash === local) {
-      if (agreed !== local) this.shadow.set(path, local!, await this.modeOf(path));
+      const disk = await this.modeOf(path);
+      // ...except that identical bytes can still differ in mode, and a `chmod +x` carrying
+      // the bytes it did not change is exactly what that looks like on the wire. Suppressing
+      // it with the content is how the executable bit would silently never propagate.
+      if (version.mode && version.mode !== disk && !this.quarantined.has(path)) {
+        await this.setMode(path, version.mode);
+        this.shadow.set(path, local!, version.mode);
+        this.stats.writes += 1;
+        return { path, outcome: "write" };
+      }
+      // The shadow describes this checkout's disk, so it records the mode actually there --
+      // not one we declined to apply because the path is quarantined.
+      if (agreed !== local) this.shadow.set(path, local!, disk);
       this.stats.noops += 1;
       return { path, outcome: "noop" };
     }
@@ -367,6 +442,17 @@ export class SyncEngine {
   ): Promise<ApplyResult> {
     const { path } = version;
     if (await this.escapesRoot(path)) return { path, outcome: "rejected" };
+    // The patch path checks its rebuilt bytes against `contentHash` and falls back when they
+    // do not match; full content was taken on trust. Anything that mangles a payload in
+    // transit -- a bad encode at the sender, a truncated frame -- would then be written to
+    // disk *and* recorded in the shadow as the state we agreed on, so every baseHash we
+    // advertise for this path afterwards names bytes no peer can resolve. One hash is
+    // cheaper than that, and there is no useful recovery from bytes that are not what the
+    // sender said they were, so the version is refused outright rather than merged.
+    if (version.content !== undefined
+      && (await hashBlob(this.root, Buffer.from(version.content, version.encoding))) !== version.contentHash) {
+      return { path, outcome: "rejected" };
+    }
     const allowCatchup = options.allowCatchup ?? true;
     const base = await readBlob(this.root, version.baseHash);
     if (version.baseHash && base === null) {
@@ -378,7 +464,7 @@ export class SyncEngine {
       }
       // Catch-up already happened and the base is still absent. Merging is impossible, so
       // the one safe answer is to surface it rather than pick a side.
-      return this.conflict(path, await this.read(path), await this.contentOf(version), null, options.peer, version.renamedFrom);
+      return this.conflict(path, await this.read(path), await this.contentOf(version), null, options.peer, version.renamedFrom, version.mode);
     }
 
     if (version.op === "delete") {
@@ -393,7 +479,7 @@ export class SyncEngine {
       // Delete versus edit is not a 3-way merge and never will be: it is a policy call
       // with no correct answer. Keep the edited file and let the agent decide, because
       // losing an edit is worse than keeping a stale file.
-      return this.conflict(path, await this.read(path), null, base, options.peer, version.renamedFrom);
+      return this.conflict(path, await this.read(path), null, base, options.peer, version.renamedFrom, version.mode);
     }
 
     const theirs = await this.contentOf(version, base);
@@ -404,10 +490,13 @@ export class SyncEngine {
         this.stats.catchups += 1;
         return { path, outcome: "catchup" };
       }
-      return this.conflict(path, await this.read(path), null, base, options.peer, version.renamedFrom);
+      return this.conflict(path, await this.read(path), null, base, options.peer, version.renamedFrom, version.mode);
     }
     await writeBlob(this.root, theirs);
-    const mode = version.op === "modify" ? await this.modeOf(path) : "100644";
+    // The sender's mode when it said one, and otherwise whatever this file already is: a
+    // peer that predates the field has nothing to say about the mode, and reading its
+    // silence as 0644 would strip the executable bit off a file it never touched.
+    const mode = version.mode ?? await this.modeOf(path);
 
     // Clause 1.
     if (local === agreed && version.baseHash === agreed) {
@@ -419,18 +508,18 @@ export class SyncEngine {
 
     if (local === null) {
       // I deleted it, they edited it: the mirror of delete-versus-edit.
-      return this.conflict(path, null, theirs, base, options.peer, version.renamedFrom);
+      return this.conflict(path, null, theirs, base, options.peer, version.renamedFrom, version.mode);
     }
 
     const ours = (await this.read(path))!;
     if (isBinary(ours) || isBinary(theirs) || isBinary(base)) {
       // Binaries are never merged. `git merge-file` refuses them with exit 255 and empty
       // stdout, and there is no third option to concurrent binary edits but a conflict.
-      return this.conflict(path, ours, theirs, base, options.peer, version.renamedFrom);
+      return this.conflict(path, ours, theirs, base, options.peer, version.renamedFrom, version.mode);
     }
     if (base === null) {
       // Both sides created this path independently; there is no ancestor to merge from.
-      return this.conflict(path, ours, theirs, null, options.peer, version.renamedFrom);
+      return this.conflict(path, ours, theirs, null, options.peer, version.renamedFrom, version.mode);
     }
 
     // Clause 2: 3-way merge against the ancestor the *sender* built from, which git still
@@ -438,7 +527,7 @@ export class SyncEngine {
     // sender is behind me because our messages crossed -- and it is the common one.
     const merged = await mergeFile(this.root, ours, base, theirs);
     if (!merged.clean) {
-      return this.conflict(path, ours, theirs, base, options.peer, version.renamedFrom);
+      return this.conflict(path, ours, theirs, base, options.peer, version.renamedFrom, version.mode);
     }
     await this.writeSynced(path, merged.content, mode);
     // Shadow := theirs, so the next publish ships the merged result back exactly once.
@@ -467,7 +556,8 @@ export class SyncEngine {
     theirs: Buffer | null,
     ancestor: Buffer | null,
     peer: string | undefined,
-    renamedFrom: string | undefined
+    renamedFrom: string | undefined,
+    mode: FileMode | undefined
   ): Promise<ApplyResult> {
     // Not valid UTF-8 is as unpresentable here as a NUL byte is, and for the same reason as
     // in modify(): the three sides go out as strings, and the agent's resolution comes back
@@ -490,6 +580,11 @@ export class SyncEngine {
     // instead of merging our resolution against the change it already applied. A delete
     // has no bytes to claim, so that case falls back to the shadow at publish time.
     this.conflictBase.set(conflict.id, theirs === null ? null : await writeBlob(this.root, theirs));
+    // The mode travels with the resolution for the same reason the base does: the agent
+    // hands back text, not a mode, and the file the resolution replaces may not exist here
+    // yet -- two peers each creating the same executable script is a conflict whose
+    // resolution would otherwise land 0644 on both of them.
+    if (mode) this.conflictMode.set(conflict.id, mode);
     // Quarantine. If the receiver only recorded the conflict, its own unpublished edit
     // would still go out on the next debounce, the peer would record the mirror-image
     // conflict, and both agents would sit down to fix the same collision.
@@ -525,7 +620,11 @@ export class SyncEngine {
         this.stats.forced += 1;
       }
       this.deferred.delete(path);
-      results.push(await this.applyNow(entry.version, await this.diskHash(path), this.shadow.get(path), { peer: entry.peer }));
+      // Same chain a live receive takes: a retried deferral reads the disk and the shadow
+      // exactly like one, so letting it race a fresh arrival for the same path would lose
+      // an edit in precisely the way the lock in receive() exists to stop.
+      results.push(await this.serialize(path, async () =>
+        this.applyNow(entry.version, await this.diskHash(path), this.shadow.get(path), { peer: entry.peer })));
     }
     return results;
   }
@@ -548,13 +647,14 @@ export class SyncEngine {
     const conflict = this.pendingConflicts.get(id);
     if (!conflict) return null;
     const bytes = Buffer.from(content, "utf8");
-    const mode = this.shadow.entry(conflict.path)?.mode ?? "100644";
+    const mode = this.conflictMode.get(id) ?? fileMode(this.shadow.entry(conflict.path)?.mode) ?? await this.modeOf(conflict.path);
     const base = this.conflictBase.get(id) ?? this.shadow.get(conflict.path);
     const hash = await writeBlob(this.root, bytes);
     await this.writeSynced(conflict.path, bytes, mode);
     this.shadow.set(conflict.path, hash, mode);
     this.pendingConflicts.delete(id);
     this.conflictBase.delete(id);
+    this.conflictMode.delete(id);
     this.quarantined.delete(conflict.path);
     return fileVersionSchema.parse({
       path: conflict.path,
@@ -562,7 +662,8 @@ export class SyncEngine {
       baseHash: base,
       contentHash: hash,
       content,
-      encoding: "utf8"
+      encoding: "utf8",
+      mode
     });
   }
 
@@ -572,6 +673,7 @@ export class SyncEngine {
     if (!conflict) return false;
     this.pendingConflicts.delete(id);
     this.conflictBase.delete(id);
+    this.conflictMode.delete(id);
     this.quarantined.delete(conflict.path);
     return true;
   }
@@ -589,6 +691,7 @@ export class SyncEngine {
     this.quarantined.clear();
     this.pendingConflicts.clear();
     this.conflictBase.clear();
+    this.conflictMode.clear();
     this.lastEdit.clear();
     this.selfWrites.clear();
     await this.refreshTracked();
