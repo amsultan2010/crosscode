@@ -5,7 +5,7 @@ daemon, the coordination service, and the local clients. everything below is a d
 of that file; if the two disagree, the file is right. all schemas are zod and `.strict()`,
 and the cli, mcp server, daemon, and service validate against the same definitions.
 
-`PROTOCOL_VERSION` is `3`.
+`PROTOCOL_VERSION` is `4`.
 
 ## the sync unit
 
@@ -22,6 +22,7 @@ fileVersionSchema = {
   patch?: string;
   encoding: "utf8" | "base64";
   renamedFrom?: string;         // renames travel as delete + modify, linked by this
+  mode?: "100644" | "100755";   // git's one bit: executable or not. absent means unchanged
 }
 ```
 

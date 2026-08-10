@@ -163,7 +163,9 @@ it reads the client's hook payload as json on stdin (or takes a path as its argu
 
 ### claude code
 
-`.claude/settings.json`:
+`.claude/settings.local.json`, which is the untracked counterpart to
+`settings.json` -- the hook names a binary only this machine has installed, so it must not
+ship to the rest of the repo:
 
 ```json
 {

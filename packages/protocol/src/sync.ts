@@ -8,7 +8,7 @@ import { z } from "zod";
 // replaced still imports them. They get deleted when their last consumer does, not
 // before -- deleting an export ahead of its consumer is what forced a full revert last time.
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /* ------------------------------------------------------------------ sync unit */
 

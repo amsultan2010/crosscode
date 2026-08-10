@@ -31,9 +31,11 @@ crosscode status
 ```
 
 if your agent is finding out about conflicts on its next tool call rather than before it
-edits a file, check `.claude/settings.json`: `crosscode start` on 0.1.0 wrote the wrong
-command into the `PreToolUse` hook. re-running `start` on a later release repairs it in
-place, and [mcp client setup](./mcp-clients.md) has the entry that works.
+edits a file, check `.claude/settings.local.json`: `crosscode start` on 0.1.0 wrote the
+wrong command into the `PreToolUse` hook, and releases before 0.1.5 wrote it into the
+committed `settings.json` instead. re-running `start` on a later release repairs both in
+place -- it installs the working entry in `settings.local.json` and takes the committed one
+back out -- and [mcp client setup](./mcp-clients.md) has the entry that works.
 
 `status` reports the branch, whether the daemon is connected, whether sync is paused, the
 cursor, pending conflicts, and who else is on the branch. it prints no tokens and no file
