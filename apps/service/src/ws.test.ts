@@ -5,7 +5,7 @@ import { WebSocket } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
 import { StoreUnauthorizedError, type PgStore } from "./store.js";
 import { signTestSupabaseToken, testSupabaseJwks } from "./test-jwks.js";
-import { attachWebSocketGateway, type WebSocketGateway } from "./ws.js";
+import { attachWebSocketGateway, type WebSocketGateway, type WebSocketGatewayOptions } from "./ws.js";
 
 const supabaseUrl = "https://rzsslbmahvoesjxmgefr.supabase.co";
 const projectId = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
@@ -196,6 +196,81 @@ describe("service WebSocket gateway", () => {
     expect(await closedWith).toBe(1009);
   });
 
+  /**
+   * The token is checked once, at the upgrade. Without a deadline on the live connection an
+   * open stream keeps delivering a repository's source indefinitely after the credential that
+   * opened it expired -- so the socket is closed at the token's own `exp` and the client comes
+   * back with a fresh one.
+   */
+  it("closes a live socket once its access token expires", async () => {
+    // The gateway's clock is pinned just before this token's own `exp`, so the timer the
+    // connection arms fires in 150 ms rather than the token's full lifetime. Reading `exp`
+    // off the token itself avoids the second-granularity rounding in the `exp` claim.
+    let clock = Date.now;
+    const { base } = await listen(storeWith([]), { now: () => clock() });
+    const token = await signToken();
+    clock = () => tokenExpiry(token) - 150;
+
+    const socket = await open(base, token);
+    socket.send(JSON.stringify({ type: "subscribe", projectId, branch: "main", replicaId: replicaA, since: 0 }));
+    const closedWith = new Promise<number>((resolve) => { socket.once("close", resolve); });
+
+    // 4001, not a protocol code: the daemon reconnects after any close, and this says why.
+    expect(await closedWith).toBe(4001);
+  });
+
+  /**
+   * A consumer that stops reading must not turn its room's change stream into an unbounded
+   * server-side allocation. Past the buffered-bytes ceiling the connection goes, and the
+   * client resyncs on reconnect from its own cursor.
+   */
+  it("drops a client that is not draining rather than buffering its room's stream for it", async () => {
+    const { base, gateway } = await listen(storeWith([]), { maxBufferedBytes: 64 * 1_024 });
+    const socket = await connect(base, { replicaId: replicaA, since: 0 });
+    const closed = new Promise<void>((resolve) => { socket.once("close", () => resolve()); });
+
+    // A client that has stopped reading its socket: the kernel's window closes, the server's
+    // writes stop draining, and its buffered bytes climb -- which is the stalled consumer the
+    // ceiling exists for, reproduced without having to fake a socket.
+    socket.pause();
+    const large = "x".repeat(64 * 1_024);
+    gateway.broadcastChanges(
+      projectId,
+      "main",
+      Array.from({ length: 200 }, (_, index) => ({ ...change(index + 1, replicaB), version: { ...change(index + 1, replicaB).version, content: large } })),
+      replicaB
+    );
+
+    // Reading again only so this side notices it was dropped: a paused socket does not
+    // process the close either.
+    await pause(100);
+    socket.resume();
+    await closed;
+  });
+
+  /**
+   * One presence frame fans out to every peer in the room, so an unbounded sender spends
+   * every other socket in it. Frames past the limit are dropped, not answered.
+   */
+  it("stops fanning out presence frames past the per-connection rate limit", async () => {
+    const { base } = await listen(storeWith([]), { presenceRatePerMinute: 2 });
+    const first = await connect(base, { replicaId: replicaA, since: 0 });
+    const second = await connect(base, { replicaId: replicaB, since: 0 });
+    expect(await nextPresence(first)).toEqual([]);
+    expect(await nextPresence(first)).toEqual([expect.objectContaining({ replicaId: replicaB })]);
+
+    for (const path of ["src/a.ts", "src/b.ts", "src/c.ts"]) {
+      second.send(JSON.stringify({
+        type: "presence",
+        peers: [{ replicaId: replicaB, actor: userId, branch: "main", paths: [path] }]
+      }));
+    }
+
+    expect(await nextPresence(first)).toEqual([expect.objectContaining({ paths: ["src/a.ts"] })]);
+    expect(await nextPresence(first)).toEqual([expect.objectContaining({ paths: ["src/b.ts"] })]);
+    await expect(nextPresence(first, 150)).rejects.toThrow(/timed out/);
+  });
+
   it("refuses an upgrade without a valid token and a subscribe for somebody else's replica", async () => {
     const { base } = await listen(storeWith([]));
     await expect(open(base, undefined)).rejects.toThrow(/401/);
@@ -212,9 +287,12 @@ describe("service WebSocket gateway", () => {
   });
 });
 
-async function listen(store: PgStore): Promise<{ base: string; gateway: WebSocketGateway }> {
+async function listen(
+  store: PgStore,
+  overrides: Partial<WebSocketGatewayOptions> = {}
+): Promise<{ base: string; gateway: WebSocketGateway }> {
   const server = createServer();
-  const gateway = attachWebSocketGateway(server, { store, jwks: await testSupabaseJwks(), supabaseUrl });
+  const gateway = attachWebSocketGateway(server, { store, jwks: await testSupabaseJwks(), supabaseUrl, ...overrides });
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   return { base: `ws://127.0.0.1:${(server.address() as AddressInfo).port}`, gateway };
@@ -222,6 +300,12 @@ async function listen(store: PgStore): Promise<{ base: string; gateway: WebSocke
 
 function signToken(): Promise<string> {
   return signTestSupabaseToken(supabaseUrl, { sub: userId });
+}
+
+/** The `exp` claim of a token this test signed, in milliseconds. */
+function tokenExpiry(token: string): number {
+  const payload = JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString()) as { exp: number };
+  return payload.exp * 1_000;
 }
 
 /** Opens the socket, or rejects with the upgrade's refusal. */
