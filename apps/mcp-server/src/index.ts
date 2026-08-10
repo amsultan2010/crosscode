@@ -59,7 +59,17 @@ export async function callSyncTool(api: DaemonApi, name: ToolName, input: unknow
     case "resolve": {
       const request = input as ResolveConflictRequest;
       await api.resolve(request);
-      return withConflicts(api, { resolved: request.conflictId });
+      // The resolve is done -- the daemon has written the file -- so the refresh that follows
+      // it is decoration and must not be able to turn a success into a failure. It used to:
+      // a `conflicts()` that failed (the daemon going down in the moment between the two
+      // calls is enough) threw out of here and the agent was told its resolve had failed,
+      // which invites it to merge the same conflict a second time over the merged file.
+      return withConflicts(api, { resolved: request.conflictId }).catch(() => ({
+        resolved: request.conflictId,
+        conflicts: [],
+        attention: "The conflict was resolved. The remaining conflicts could not be re-read just now, "
+          + "so this list is empty rather than current -- call `conflicts` to see them, and do not resolve this one again."
+      }));
     }
     case "pause": {
       await api.pause(input as PauseRequest);

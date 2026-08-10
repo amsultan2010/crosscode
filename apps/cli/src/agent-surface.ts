@@ -1,7 +1,7 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { isObject, readJsonObject, writeFileAtomic, writeJsonObjectIfChanged } from "./json-file.js";
-import { registerMcpServer, resolveMcpLaunch, type McpClient } from "./mcp-config.js";
+import { registerMcpServer, resolveMcpLaunch, type McpClient, type McpLaunch } from "./mcp-config.js";
 import { SKILL_MARKDOWN } from "./skill-text.js";
 import { VERSION } from "./version.js";
 
@@ -27,14 +27,13 @@ export type AgentSurface = {
   hooks: InstalledPiece;
 };
 
-export async function installAgentSurface(repoRoot: string, client: McpClient = "claude"): Promise<AgentSurface> {
-  const launch = resolveMcpLaunch(VERSION);
+export async function installAgentSurface(repoRoot: string, client: McpClient = "claude", launch: McpLaunch = resolveMcpLaunch(VERSION)): Promise<AgentSurface> {
   const registration = await registerMcpServer(repoRoot, client, launch);
   return {
     mcp: { path: registration.path, changed: registration.changed, client: registration.client, command: [launch.command, ...launch.args].join(" ") },
     skill: await installSkill(repoRoot),
     agents: await installAgentsMd(repoRoot),
-    hooks: await installHooks(repoRoot)
+    hooks: await installHooks(repoRoot, launch)
   };
 }
 
@@ -92,15 +91,43 @@ function withoutFrontmatter(markdown: string): string {
   return match ? markdown.slice(match[0].length).replace(/^\n+/, "") : markdown;
 }
 
-// `crosscode-mcp hook` -- the second entrypoint of the MCP bundle, which reads the tool
-// payload on stdin and exits 2 on a conflicted path. Not `crosscode status`: that ignores
-// stdin, so it never learns which file is about to be edited.
-const HOOK_COMMAND = "crosscode-mcp hook";
 const HOOK_MATCHER = "Edit|Write|MultiEdit|NotebookEdit";
+
+/**
+ * The `hook` entrypoint of the MCP bundle, which reads the tool payload on stdin and exits 2
+ * on a conflicted path. Not `crosscode status`: that ignores stdin, so it never learns which
+ * file is about to be edited.
+ *
+ * Spelled with whatever `resolveMcpLaunch` decided, not a bare `crosscode-mcp`. The bare name
+ * only resolves while npx's own PATH is in effect, so for everyone who installed with `npx
+ * crosscode` the hook was command-not-found on every single edit. A globally installed user
+ * still gets the short command and pays nothing; only an npx user pays npx's startup, and
+ * paying it is strictly better than a hook that never runs. There is no cheaper third option
+ * for that user: npx installs nothing durable, so there is no absolute path to write instead
+ * -- the binary it ran from lives in a cache directory npm is free to evict, which is the
+ * very reason `resolveMcpLaunch` refuses to write it.
+ *
+ * On Windows the marker the MCP entry carries in its `env` has to be written inline, because
+ * a hook entry is a command string with nowhere to put an environment object. Without it npm's
+ * `.cmd` shim leaves `shouldServeMcp()` nothing to read (see apps/cli/src/index.ts), the CLI
+ * treats `hook` as a sixth command it does not have, and every edit fails. `set NAME=value&&`
+ * is cmd.exe's spelling, and cmd.exe is the shell hooks run through there.
+ */
+function hookCommand(launch: McpLaunch): string {
+  const prefix = Object.entries(launch.env ?? {}).map(([name, value]) => `set ${name}=${value}&& `).join("");
+  return `${prefix}${[launch.command, ...launch.args, "hook"].join(" ")}`;
+}
 
 /**
  * A PreToolUse hook so the agent sees a pending conflict *before* it edits the file, rather
  * than after it has written over one side of it.
+ *
+ * Written to `settings.local.json`, which git ignores, rather than `settings.json`, which most
+ * repositories commit. A committed hook ships to every teammate, including the ones who have
+ * never installed Crosscode and whose shell therefore has no such command; the teammate who
+ * does want it runs `crosscode start` and gets their own. An entry a previous version left in
+ * the committed file is removed as part of installing this one -- otherwise an upgrade leaves
+ * the hook in both places and it fires twice per edit.
  *
  * Idempotent by command, not by position: the matcher entry is only appended when no hook in
  * it already runs a `crosscode` command, so a second `crosscode start` -- or a user who moved
@@ -108,21 +135,41 @@ const HOOK_MATCHER = "Edit|Write|MultiEdit|NotebookEdit";
  * rewritten in place rather than left alone, because 0.1.0 installed one that pointed at the
  * wrong command and an upgrade has to repair it.
  */
-async function installHooks(repoRoot: string): Promise<InstalledPiece> {
-  const path = join(repoRoot, ".claude", "settings.json");
+async function installHooks(repoRoot: string, launch: McpLaunch): Promise<InstalledPiece> {
+  const command = hookCommand(launch);
+  const movedOut = await removeHooks(join(repoRoot, ".claude", "settings.json"));
+  const path = join(repoRoot, ".claude", "settings.local.json");
   const existing = await readJsonObject(path);
   const base = existing ?? {};
   const hooks = isObject(base.hooks) ? base.hooks : {};
   const preToolUse = Array.isArray(hooks.PreToolUse) ? hooks.PreToolUse : [];
-  const repaired = preToolUse.map(withCurrentCommand);
+  const repaired = preToolUse.map((entry) => withCurrentCommand(entry, command));
   const merged = {
     ...base,
     hooks: {
       ...hooks,
-      PreToolUse: repaired.some(mentionsCrosscode) ? repaired : [...repaired, { matcher: HOOK_MATCHER, hooks: [{ type: "command", command: HOOK_COMMAND }] }]
+      PreToolUse: repaired.some(mentionsCrosscode) ? repaired : [...repaired, { matcher: HOOK_MATCHER, hooks: [{ type: "command", command }] }]
     }
   };
-  return { path, changed: await writeJsonObjectIfChanged(path, existing, merged) };
+  const changed = await writeJsonObjectIfChanged(path, existing, merged);
+  return { path, changed: changed || movedOut };
+}
+
+/**
+ * Takes the crosscode hooks back out of a settings file an older version wrote them into,
+ * leaving every other hook -- and every other setting -- exactly as it is. An entry whose only
+ * hook was ours goes with it, rather than being left behind as an empty matcher.
+ */
+async function removeHooks(path: string): Promise<boolean> {
+  const existing = await readJsonObject(path);
+  if (!existing || !isObject(existing.hooks) || !Array.isArray(existing.hooks.PreToolUse)) return false;
+  const kept = existing.hooks.PreToolUse
+    .map((entry) => (mentionsCrosscode(entry) && isObject(entry) && Array.isArray(entry.hooks)
+      ? { ...entry, hooks: entry.hooks.filter((hook) => !(isObject(hook) && typeof hook.command === "string" && hook.command.includes("crosscode"))) }
+      : entry))
+    .filter((entry) => !(isObject(entry) && Array.isArray(entry.hooks) && entry.hooks.length === 0));
+  const merged = { ...existing, hooks: { ...existing.hooks, PreToolUse: kept } };
+  return writeJsonObjectIfChanged(path, existing, merged);
 }
 
 function mentionsCrosscode(entry: unknown): boolean {
@@ -131,10 +178,10 @@ function mentionsCrosscode(entry: unknown): boolean {
 }
 
 /** Points an entry's crosscode hooks at the current command, leaving everything else as it is. */
-function withCurrentCommand(entry: unknown): unknown {
+function withCurrentCommand(entry: unknown, command: string): unknown {
   if (!mentionsCrosscode(entry) || !isObject(entry) || !Array.isArray(entry.hooks)) return entry;
   return {
     ...entry,
-    hooks: entry.hooks.map((hook) => (isObject(hook) && typeof hook.command === "string" && hook.command.includes("crosscode") ? { ...hook, command: HOOK_COMMAND } : hook))
+    hooks: entry.hooks.map((hook) => (isObject(hook) && typeof hook.command === "string" && hook.command.includes("crosscode") ? { ...hook, command } : hook))
   };
 }

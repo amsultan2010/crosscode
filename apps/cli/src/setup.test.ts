@@ -10,6 +10,7 @@ import { syncDaemonConfigSchema } from "../../../packages/protocol/src/sync.js";
 import { readSyncConfig, syncConfigPath } from "../../daemon/src/sync-config.js";
 import { installAgentSurface } from "./agent-surface.js";
 import { configPath, readConfig, writeConfig } from "./config.js";
+import type { McpLaunch } from "./mcp-config.js";
 import type { DaemonControl } from "./daemon.js";
 import { httpSyncService, type SyncService } from "./service.js";
 import { setup, type Environment } from "./setup.js";
@@ -112,6 +113,20 @@ function stubEnvironment(overrides: { service?: Partial<SyncService>; refreshSes
   return { environment, calls, legal };
 }
 
+/**
+ * The same real installer, with the launch pinned instead of resolved from this machine's
+ * PATH -- which decides whether the hook is spelled `crosscode-mcp` or an npx invocation, and
+ * is exactly what the hook tests below are asserting about.
+ */
+function withLaunch(environment: Environment, launch: McpLaunch): Environment {
+  return { ...environment, installAgentSurface: (repoRoot) => installAgentSurface(repoRoot, "claude", launch) };
+}
+
+async function hooksOf(root: string): Promise<unknown[]> {
+  const settings = JSON.parse(await readFile(join(root, ".claude", "settings.local.json"), "utf8"));
+  return settings.hooks.PreToolUse.flatMap((entry: { hooks: unknown[] }) => entry.hooks);
+}
+
 describe("crosscode start", () => {
   it("configures a fresh checkout end to end", async () => {
     const root = await checkout();
@@ -198,20 +213,42 @@ describe("crosscode start", () => {
 
     const mcp = JSON.parse(await readFile(join(root, ".mcp.json"), "utf8"));
     expect(Object.keys(mcp.mcpServers)).toEqual(["crosscode"]);
-    const settings = JSON.parse(await readFile(join(root, ".claude", "settings.json"), "utf8"));
+    const settings = JSON.parse(await readFile(join(root, ".claude", "settings.local.json"), "utf8"));
     expect(settings.hooks.PreToolUse).toHaveLength(1);
   });
 
-  // The hook has to reach the entrypoint that reads the tool payload on stdin and can exit 2.
-  // `crosscode status` cannot: it ignores stdin and prints CLI status JSON.
-  it("installs a hook that runs the pre-edit hook entrypoint", async () => {
+  /**
+   * The hook has to reach the entrypoint that reads the tool payload on stdin and can exit 2
+   * -- `crosscode status` cannot: it ignores stdin and prints CLI status JSON -- and it has to
+   * be spelled the way the MCP entry is spelled. A bare `crosscode-mcp` only resolves inside
+   * npx's own PATH, so for everyone who installed with `npx crosscode` the hook used to be
+   * command-not-found on every edit while the MCP entry beside it worked fine.
+   */
+  it("installs a hook that runs the pre-edit hook entrypoint, spelled the way the MCP entry is", async () => {
+    const direct = await checkout();
+    const npx = await checkout();
+
+    await setup(direct, withLaunch(stubEnvironment().environment, { command: "crosscode-mcp", args: [] }));
+    await setup(npx, withLaunch(stubEnvironment().environment, { command: "npx", args: ["-y", "--package", "crosscode-cli@1.2.3", "crosscode-mcp"] }));
+
+    expect(await hooksOf(direct)).toEqual([{ type: "command", command: "crosscode-mcp hook" }]);
+    expect(await hooksOf(npx)).toEqual([{ type: "command", command: "npx -y --package crosscode-cli@1.2.3 crosscode-mcp hook" }]);
+  });
+
+  /**
+   * Windows only, and unverifiable on this platform: npm's `.cmd` shim passes the resolved
+   * script path as argv[1], so the bin-name dispatch in index.ts reads nothing, the CLI treats
+   * `hook` as a command it does not have, and it exits 1 on every edit. The MCP entry already
+   * carries `CROSSCODE_SERVE_MCP=1` in its `env`; a hook entry has nowhere to put an
+   * environment object, so it carries the same marker inline instead.
+   */
+  it("carries the Windows serve-MCP marker into the hook command", async () => {
     const root = await checkout();
-    const { environment } = stubEnvironment();
+    const launch = { command: "crosscode-mcp", args: [], env: { CROSSCODE_SERVE_MCP: "1" } };
 
-    await setup(root, environment);
+    await setup(root, withLaunch(stubEnvironment().environment, launch));
 
-    const settings = JSON.parse(await readFile(join(root, ".claude", "settings.json"), "utf8"));
-    expect(settings.hooks.PreToolUse[0].hooks).toEqual([{ type: "command", command: "crosscode-mcp hook" }]);
+    expect(await hooksOf(root)).toEqual([{ type: "command", command: "set CROSSCODE_SERVE_MCP=1&& crosscode-mcp hook" }]);
   });
 
   // 0.1.0 installed a hook pointing at `crosscode status --json`, which never blocks an edit.
@@ -219,7 +256,7 @@ describe("crosscode start", () => {
   it("repairs the broken hook a previous version installed", async () => {
     const root = await checkout();
     const { environment } = stubEnvironment();
-    const settingsPath = join(root, ".claude", "settings.json");
+    const settingsPath = join(root, ".claude", "settings.local.json");
     await mkdir(join(root, ".claude"), { recursive: true });
     await writeFile(settingsPath, JSON.stringify({
       hooks: {
@@ -230,7 +267,7 @@ describe("crosscode start", () => {
       }
     }));
 
-    const result = await setup(root, environment);
+    const result = await setup(root, withLaunch(environment, { command: "crosscode-mcp", args: [] }));
 
     expect(result.agent).toMatchObject({ hooks: { changed: true } });
     const settings = JSON.parse(await readFile(settingsPath, "utf8"));
@@ -238,6 +275,39 @@ describe("crosscode start", () => {
       { matcher: "Bash", hooks: [{ type: "command", command: "./scripts/audit.sh" }] },
       { matcher: "Edit|Write|MultiEdit|NotebookEdit", hooks: [{ type: "command", command: "crosscode-mcp hook" }] }
     ]);
+  });
+
+  /**
+   * `.claude/settings.json` is committed in most repositories, so the hook shipped to
+   * teammates who have never installed Crosscode and got a command they do not have on every
+   * edit. It belongs in the untracked `settings.local.json`; a teammate who wants it runs
+   * `crosscode start` themselves. Upgrading has to take the old entry back out, or the hook is
+   * installed in both files and fires twice.
+   */
+  it("installs the hook in the untracked settings file and takes the committed one back out", async () => {
+    const root = await checkout();
+    const { environment } = stubEnvironment();
+    const committed = join(root, ".claude", "settings.json");
+    await mkdir(join(root, ".claude"), { recursive: true });
+    await writeFile(committed, JSON.stringify({
+      permissions: { allow: ["Bash(npm test)"] },
+      hooks: {
+        PreToolUse: [
+          { matcher: "Bash", hooks: [{ type: "command", command: "./scripts/audit.sh" }] },
+          { matcher: "Edit|Write|MultiEdit|NotebookEdit", hooks: [{ type: "command", command: "crosscode-mcp hook" }] }
+        ]
+      }
+    }));
+
+    const result = await setup(root, environment);
+
+    expect(result.agent.hooks.path).toBe(join(root, ".claude", "settings.local.json"));
+    expect(await hooksOf(root)).toHaveLength(1);
+    // Everything the user had in the committed file survives; only our own entry leaves.
+    expect(JSON.parse(await readFile(committed, "utf8"))).toEqual({
+      permissions: { allow: ["Bash(npm test)"] },
+      hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "./scripts/audit.sh" }] }] }
+    });
   });
 
   /**
