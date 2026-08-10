@@ -1,5 +1,9 @@
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -14,10 +18,12 @@ const mcpMain = join(repoRoot, "apps/mcp-server/src/main.ts");
 
 const daemons: FakeDaemon[] = [];
 const clients: Client[] = [];
+const directories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close()));
   await Promise.all(daemons.splice(0).map((daemon) => daemon.close()));
+  await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
 async function fakeDaemon(conflicts: ReturnType<typeof sampleConflict>[] = []): Promise<FakeDaemon> {
@@ -153,6 +159,22 @@ describe("no daemon", () => {
     delete process.env.CROSSCODE_DAEMON_URL;
     delete process.env.CROSSCODE_DAEMON_SECRET;
     await expect(connectToDaemon("/")).rejects.toThrow(DaemonUnavailableError);
+  });
+
+  // A descriptor a dying daemon left half-written is one more way of not reaching one. It
+  // used to come out as a raw SyntaxError, which the tool handler cannot tell from a failed
+  // request -- so the agent was told "the daemon request failed" and never shown the one
+  // hint that fixes it.
+  it("reports an unreadable descriptor as DAEMON_UNAVAILABLE, with the hint that fixes it", async () => {
+    delete process.env.CROSSCODE_DAEMON_URL;
+    delete process.env.CROSSCODE_DAEMON_SECRET;
+    const root = await mkdtemp(join(tmpdir(), "crosscode-mcp-descriptor-"));
+    directories.push(root);
+    await promisify(execFile)("git", ["init", "-q", root]);
+    await mkdir(join(root, ".git", "crosscode"), { recursive: true });
+    await writeFile(join(root, ".git", "crosscode", "daemon.json"), '{"port": 4');
+
+    await expect(connectToDaemon(root)).rejects.toThrow(DaemonUnavailableError);
   });
 });
 

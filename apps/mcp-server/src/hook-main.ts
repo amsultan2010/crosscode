@@ -1,10 +1,23 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { connectToDaemon } from "./daemon-api.js";
 import { runHook } from "./hook.js";
+
+/**
+ * A hook runs in front of the agent's edit, so it has to end. A client that hands us a pipe
+ * and does not close it -- Claude Code closes its own, other clients are their own
+ * implementations -- would otherwise leave this loop waiting for an EOF that never comes,
+ * and the edit blocked behind it forever. Whatever arrived by then is what gets parsed;
+ * nothing usable means exit 0 and out of the way.
+ */
+const STDIN_TIMEOUT_MS = 5_000;
 
 async function readStdin(): Promise<string> {
   if (process.stdin.isTTY) return "";
   let text = "";
-  for await (const chunk of process.stdin) text += chunk;
+  const drain = (async () => { for await (const chunk of process.stdin) text += chunk; })().catch(() => {});
+  // Unreferenced, so waiting for EOF is still what ends this on the normal path.
+  await Promise.race([drain, delay(STDIN_TIMEOUT_MS, undefined, { ref: false })]);
+  process.stdin.destroy();
   return text;
 }
 

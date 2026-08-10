@@ -38,7 +38,16 @@ export function localDaemon(repoRoot: string): DaemonControl {
     const path = await handshakePath();
     const contents = await readFile(path, "utf8").catch(() => undefined);
     if (contents === undefined) return undefined;
-    const parsed = daemonDescriptorSchema.safeParse(JSON.parse(contents));
+    // A descriptor half-written by a daemon that died mid-handshake is not valid JSON, and
+    // `JSON.parse` throwing here took `status`, `stop`, and `start` down with a SyntaxError
+    // -- leaving no command that could clear it. Unreadable means the same as absent.
+    let descriptor: unknown;
+    try {
+      descriptor = JSON.parse(contents);
+    } catch {
+      return undefined;
+    }
+    const parsed = daemonDescriptorSchema.safeParse(descriptor);
     if (!parsed.success) return undefined;
     // A handshake file outliving its process is the normal aftermath of a crash or a reboot,
     // so liveness is the pid, not the file.

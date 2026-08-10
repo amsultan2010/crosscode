@@ -80,6 +80,31 @@ describe("pre-edit hook", () => {
     });
   }, 20_000);
 
+  /**
+   * The hook runs in front of the agent's edit, so it has to end. A client that writes the
+   * payload and leaves the pipe open -- which nothing obliges it to close -- left the read
+   * waiting for an EOF that never came, and the edit blocked behind a hook that would never
+   * answer. It answers on what it was given.
+   */
+  it("answers on a payload whose stdin is never closed, rather than waiting forever", async () => {
+    const daemon = await fakeDaemon([sampleConflict("src/auth.ts")]);
+    const child = execFile(
+      tsxBin,
+      [mcpMain, "hook"],
+      { env: { ...process.env, CROSSCODE_DAEMON_URL: daemon.url, CROSSCODE_DAEMON_SECRET: daemon.secret } }
+    );
+    child.stdin!.write(JSON.stringify(claudeEditPayload("/repo/src/auth.ts")));
+
+    const exit = await Promise.race([
+      new Promise<number | null>((resolve) => child.on("exit", resolve)),
+      // Comfortably past the hook's own cap; the point is that something ends it at all.
+      new Promise<"never">((resolve) => setTimeout(() => resolve("never"), 30_000))
+    ]);
+    child.kill();
+
+    expect(exit).toBe(2);
+  }, 45_000);
+
   it("lets an unrelated edit through with exit 0 and no output", async () => {
     const daemon = await fakeDaemon([sampleConflict("src/auth.ts")]);
     const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {

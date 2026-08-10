@@ -1,6 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { isObject, readJsonObject, writeJsonObjectIfChanged } from "./json-file.js";
+import { isObject, readJsonObject, writeFileAtomic, writeJsonObjectIfChanged } from "./json-file.js";
 import { registerMcpServer, resolveMcpLaunch, type McpClient } from "./mcp-config.js";
 import { SKILL_MARKDOWN } from "./skill-text.js";
 import { VERSION } from "./version.js";
@@ -48,7 +48,7 @@ async function installSkill(repoRoot: string): Promise<InstalledPiece> {
   const existing = await readFile(path, "utf8").catch(() => undefined);
   if (existing === SKILL_MARKDOWN) return { path, changed: false };
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, SKILL_MARKDOWN);
+  await writeFileAtomic(path, SKILL_MARKDOWN);
   return { path, changed: true };
 }
 
@@ -72,7 +72,7 @@ async function installAgentsMd(repoRoot: string): Promise<InstalledPiece> {
   const merged = existing === undefined ? block : withBlock(existing, block);
   if (existing === merged) return { path, changed: false };
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, merged);
+  await writeFileAtomic(path, merged);
   return { path, changed: true };
 }
 

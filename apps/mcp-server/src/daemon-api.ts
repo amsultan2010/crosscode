@@ -133,6 +133,14 @@ export async function connectToDaemon(directory = process.cwd()): Promise<Daemon
   } catch {
     throw new DaemonUnavailableError("no daemon is running for this checkout");
   }
-  const connection = daemonConnectionSchema.parse(JSON.parse(raw));
+  // A descriptor a dying daemon left half-written is one more way of not reaching one, and
+  // it has the same answer: a raw SyntaxError or ZodError here reached the agent as "the
+  // daemon request failed", without the one hint that fixes it.
+  let connection: z.infer<typeof daemonConnectionSchema>;
+  try {
+    connection = daemonConnectionSchema.parse(JSON.parse(raw));
+  } catch {
+    throw new DaemonUnavailableError("the daemon descriptor for this checkout is unreadable");
+  }
   return new HttpDaemonApi(`http://127.0.0.1:${connection.port}`, connection.secret);
 }

@@ -1,8 +1,27 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseMcpClient, registerMcpServer, resolveMcpLaunch } from "./mcp-config.js";
+
+/**
+ * Stands in for the run that dies partway through a write -- Ctrl-C, a laptop lid, a killed
+ * terminal. `writeFile` empties the destination before the first byte lands, so what the
+ * user is left with is whatever that emptied file becomes.
+ */
+let interruptWrites = false;
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    writeFile: async (path: string, data: string, options?: unknown) => {
+      if (!interruptWrites) return actual.writeFile(path, data, options as undefined);
+      await actual.writeFile(path, "");
+      throw new Error("interrupted");
+    }
+  };
+});
 
 const directories: string[] = [];
 
@@ -22,6 +41,7 @@ async function binDir(name: string): Promise<string> {
 }
 
 afterEach(async () => {
+  interruptWrites = false;
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -122,6 +142,21 @@ describe("registerMcpServer", () => {
     expect(JSON.parse(await readFile(registration.path, "utf8"))).toEqual({
       mcp: { crosscode: { type: "local", command: ["npx", "-y", "crosscode-cli"], enabled: true } }
     });
+  });
+
+  // The same file, and the same stake, one step later: refusing to parse it is no use if a
+  // run interrupted during the write leaves a zero-byte `.mcp.json` behind. Every MCP server
+  // the user configured would be gone, deleted by a command asked only to add one.
+  it("leaves the existing config intact when the write is interrupted", async () => {
+    const root = await tempDir();
+    const path = join(root, ".mcp.json");
+    const before = JSON.stringify({ mcpServers: { other: { command: "other-mcp" } } });
+    await writeFile(path, before);
+    interruptWrites = true;
+
+    await expect(registerMcpServer(root, "claude", launch)).rejects.toThrow("interrupted");
+
+    expect(await readFile(path, "utf8")).toBe(before);
   });
 
   // Overwriting a file we cannot parse would destroy MCP entries the user depends on.

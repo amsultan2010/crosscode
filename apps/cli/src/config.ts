@@ -1,6 +1,7 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { resolveGitPath } from "@crosscode/git";
+import { writeFileAtomic } from "./json-file.js";
 // Imported from the sync module by path, not from the package root: the legacy
 // transaction-shaped schemas in packages/protocol/src/index.ts still export names the sync
 // contract also uses (`createInviteRequestSchema`), and a local declaration shadows a
@@ -47,7 +48,10 @@ export async function writeConfig(repoRoot: string, config: SyncDaemonConfig): P
   const validated = syncDaemonConfigSchema.parse(config);
   const path = await configPath(repoRoot);
   await mkdir(dirname(path), { recursive: true });
-  // 0600: the session tokens in here are a credential.
-  await writeFile(path, `${JSON.stringify(validated, null, 2)}\n`, { mode: 0o600 });
+  // 0600: the session tokens in here are a credential. Written through a fresh file and
+  // renamed into place, because `writeFile`'s mode only applies to a file it creates -- a
+  // config left at 0644 by an earlier version would otherwise keep those permissions for
+  // every refreshed token written into it afterwards.
+  await writeFileAtomic(path, `${JSON.stringify(validated, null, 2)}\n`, 0o600);
   return validated;
 }

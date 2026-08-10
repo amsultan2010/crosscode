@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { CliError } from "./errors.js";
 
@@ -45,6 +45,25 @@ export async function readJsonObject(path: string): Promise<JsonObject | undefin
 export async function writeJsonObjectIfChanged(path: string, existing: JsonObject | undefined, merged: JsonObject): Promise<boolean> {
   if (JSON.stringify(merged) === JSON.stringify(existing ?? {})) return false;
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(merged, null, 2)}\n`);
+  await writeFileAtomic(path, `${JSON.stringify(merged, null, 2)}\n`);
   return true;
+}
+
+/**
+ * Writes beside the destination and renames onto it, so a run that dies partway through
+ * leaves the user's file exactly as it was. `writeFile` opens the destination itself and
+ * empties it before the first byte lands: interrupt that and what is left is a zero-byte
+ * `.mcp.json` -- every MCP server the user had, gone, by a command that was only asked to
+ * add one. The temporary sits in the same directory so the rename stays within one
+ * filesystem, which is what makes it atomic.
+ */
+export async function writeFileAtomic(path: string, contents: string, mode?: number): Promise<void> {
+  const temporary = `${path}.crosscode-${process.pid}.tmp`;
+  try {
+    await writeFile(temporary, contents, mode === undefined ? undefined : { mode });
+    await rename(temporary, path);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
 }
