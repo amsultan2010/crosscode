@@ -21,6 +21,20 @@ function payload(server: LoginCallbackServer, overrides: Record<string, unknown>
   };
 }
 
+/**
+ * Whether the login has settled either way. A pending promise cannot be observed directly,
+ * so it races a tick of the event loop: nothing here waits on a duration, and a promise that
+ * has already settled wins that race however loaded the machine is.
+ */
+async function settled(server: LoginCallbackServer): Promise<boolean> {
+  const pending = Symbol("pending");
+  const raced = await Promise.race([
+    server.session.then(() => true, () => true),
+    new Promise<typeof pending>((resolve) => setImmediate(() => resolve(pending)))
+  ]);
+  return raced !== pending;
+}
+
 describe("crosscode login callback server", () => {
   it("mints a 32-character state and accepts the session the website posts back", async () => {
     const server = await startLoginCallbackServer();
@@ -50,16 +64,46 @@ describe("crosscode login callback server", () => {
     }
   });
 
-  it("rejects a callback whose state does not match, and one with no state at all", async () => {
+  /**
+   * Refusing the *request* and not the login is a deliberate change of contract. Anything on
+   * this machine can POST here once it guesses the ephemeral port -- a stale tab from an
+   * earlier `crosscode login`, or a page that is fishing for it -- and failing the whole
+   * login on one of those meant any of them could kill a sign-in the user was in the middle
+   * of, with a state-mismatch error they did not cause. The real callback is still coming.
+   */
+  it("refuses a callback whose state does not match while the login keeps waiting", async () => {
     for (const body of [{ state: "not-the-state" }, {}]) {
       const server = await startLoginCallbackServer();
       try {
         const response = await post(server, { ...payload(server), ...body, state: (body as { state?: string }).state });
         expect(response.status).toBe(400);
-        await expect(server.session).rejects.toMatchObject({ code: "LOGIN_STATE_MISMATCH" });
+        await expect(settled(server)).resolves.toBe(false);
+
+        // ...and the sign-in the user actually started still completes.
+        expect((await post(server, payload(server))).status).toBe(200);
+        await expect(server.session).resolves.toMatchObject({ user: { email: "alice@example.com" } });
       } finally {
         await server.close();
       }
+    }
+  });
+
+  /**
+   * The body was buffered with no ceiling, so any local page that found the port could POST
+   * unbounded data into the CLI's memory for as long as a login was pending.
+   */
+  it("refuses a callback body past the cap, and the login is untouched by it", async () => {
+    const server = await startLoginCallbackServer();
+    try {
+      // Well past the 64KiB cap, and valid JSON, so nothing but the size can be refusing it.
+      const response = await post(server, { ...payload(server), padding: "x".repeat(512 * 1024) });
+      expect(response.status).toBe(413);
+      await expect(settled(server)).resolves.toBe(false);
+
+      expect((await post(server, payload(server))).status).toBe(200);
+      await expect(server.session).resolves.toMatchObject({ user: { email: "alice@example.com" } });
+    } finally {
+      await server.close();
     }
   });
 

@@ -10,6 +10,14 @@ import { DEFAULT_WEB_URL } from "./hosted.js";
 export const LOGIN_CALLBACK_TIMEOUT_MS = 300_000;
 
 /**
+ * Ceiling on a callback body. A Supabase session is a couple of kilobytes, so this is orders
+ * of magnitude of headroom -- it exists because the endpoint is reachable by any page that
+ * finds the ephemeral port, and an unbounded buffer there is unbounded memory in the CLI for
+ * as long as the login is pending.
+ */
+const MAX_CALLBACK_BODY_BYTES = 64 * 1024;
+
+/**
  * The website posts this to `http://127.0.0.1:<port>/callback` after a successful Supabase
  * sign-in. Field names are the Supabase session's own snake_case shape on purpose: the page
  * forwards what its client handed it rather than renaming anything in the browser.
@@ -65,17 +73,28 @@ export async function startLoginCallbackServer(options: { timeoutMs?: number } =
     if (request.method === "OPTIONS") { response.writeHead(204, CORS_HEADERS).end(); return; }
     if (request.method !== "POST") { response.writeHead(405, CORS_HEADERS).end(); return; }
     const chunks: Buffer[] = [];
-    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    let size = 0;
+    let oversized = false;
+    request.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      // Past the cap the bytes are counted and dropped rather than kept, which is the whole
+      // point: what is bounded is this process's memory. The rest of the body is still read
+      // to the end so the 413 below can be written on a socket the sender is still reading,
+      // instead of racing a destroy against its own response.
+      if (size > MAX_CALLBACK_BODY_BYTES) { oversized = true; chunks.length = 0; return; }
+      chunks.push(chunk);
+    });
     request.on("end", () => {
+      if (oversized) { respond(response, 413, { ok: false, error: "callback body too large" }); return; }
       const body = parseJson(Buffer.concat(chunks).toString("utf8"));
       const echoed = typeof body?.state === "string" ? body.state : undefined;
       if (echoed !== state) {
+        // Only this request is refused. Anything can POST here -- a stale tab from an
+        // earlier login, a page that guessed the port -- and failing the whole login on one
+        // would let any of them kill a sign-in the user is in the middle of. The real
+        // callback echoes the state, so the login goes on waiting for it, and the timeout
+        // is what ends the wait if it never comes.
         respond(response, 400, { ok: false, error: "state mismatch" });
-        settle.reject(new BrowserLoginError(
-          "LOGIN_STATE_MISMATCH",
-          "The sign-in callback did not echo this login's state value",
-          "Run `crosscode login` again and complete the sign-in in the tab it opens."
-        ));
         return;
       }
       const parsed = cliCallbackSessionSchema.safeParse(body);

@@ -48,6 +48,8 @@ export type SyncDaemonOptions = {
   gitPollMs?: number;
   /** How often changes are pulled when the stream is unavailable. Real default is 3s. */
   streamPollMs?: number;
+  /** First delay before retrying a stream that could not be started. Real default is 1s. */
+  streamRetryMs?: number;
   port?: number;
   actor?: string;
   engine?: EngineOptions;
@@ -56,6 +58,10 @@ export type SyncDaemonOptions = {
 };
 
 const IGNORED = /(^|\/)(\.git|node_modules|dist|build|coverage|\.next|target|vendor)(\/|$)/;
+
+/** Restarting a stream backs off the way the client's own reconnect does, and for the same reason. */
+const STREAM_RETRY_MS = 1_000;
+const MAX_STREAM_RETRY_MS = 15_000;
 
 /**
  * Roots with a live daemon in *this* process. The on-disk descriptor catches a second
@@ -75,6 +81,8 @@ export class SyncDaemon {
   /** Built when the loopback server binds, published only once start-up has fully succeeded. */
   private pendingDescriptor?: DaemonDescriptor;
   private timers: NodeJS.Timeout[] = [];
+  /** Pending retry of a stream that could not be started. See restartStream. */
+  private streamRetry?: NodeJS.Timeout;
   private readonly debounce = new Map<string, NodeJS.Timeout>();
   private readonly dirty = new Set<string>();
   /** Changes that arrived while sync was paused, applied in order when it resumes. */
@@ -257,6 +265,35 @@ export class SyncDaemon {
     }, () => this.cursor);
   }
 
+  /**
+   * Starts the stream on a client that has just replaced another one, and keeps trying if it
+   * cannot. Only the branch-switch path uses this; start-up wants the opposite, a daemon that
+   * fails loudly rather than one that comes up half-connected.
+   *
+   * `register()` is a network call, and a branch switch is the one place it happens after
+   * start-up. The old client is already stopped by then, so an error here was swallowed into
+   * `lastError` by the caller's enqueue and nothing ever tried again: a live daemon, holding a
+   * stopped client, syncing nothing until somebody restarted it. Backed off rather than
+   * immediate because the reason register failed is usually that the service is unavailable,
+   * and a switch back and forth is a normal thing to do.
+   */
+  private async restartStream(backoffMs = this.options.streamRetryMs ?? STREAM_RETRY_MS): Promise<void> {
+    const client = this.client;
+    try {
+      await this.startStream();
+    } catch (error) {
+      // A later branch switch has already built its own client; this one is nobody's now.
+      if (this.stopped || this.client !== client) return;
+      this.lastError = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`Crosscode sync error: ${this.lastError} (retrying in ${Math.round(backoffMs / 1_000)}s)\n`);
+      this.streamRetry = setTimeout(() => {
+        if (this.stopped || this.client !== client) return;
+        void this.enqueue(() => this.restartStream(Math.min(backoffMs * 2, MAX_STREAM_RETRY_MS)));
+      }, backoffMs);
+      this.streamRetry.unref();
+    }
+  }
+
   private async receive(change: Change): Promise<void> {
     if (change.replicaId === this.client.id) { this.advance(change.sequence); return; }
     if (change.branch !== this.branch) return;
@@ -373,7 +410,7 @@ export class SyncDaemon {
       this.reviewedHeads = "";
       this.client.stop();
       this.client = new SyncServiceClient(this.config, branch, undefined, persistSession(this.root, this.config), this.options.streamPollMs);
-      if (this.options.stream ?? true) await this.startStream();
+      if (this.options.stream ?? true) await this.restartStream();
       await this.publishAll();
       return;
     }
@@ -565,6 +602,7 @@ export class SyncDaemon {
     this.stopped = true;
     running.delete(this.root);
     for (const timer of this.timers.splice(0)) clearInterval(timer);
+    if (this.streamRetry) clearTimeout(this.streamRetry);
     for (const timer of this.debounce.values()) clearTimeout(timer);
     this.debounce.clear();
     this.client.stop();

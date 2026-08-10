@@ -48,6 +48,17 @@ const POLL_INTERVAL_MS = 3_000;
  * "open" nor "close", so without a deadline nothing ever reconnects or starts polling.
  */
 const CONNECT_TIMEOUT_MS = 10_000;
+/**
+ * How often an established socket is pinged, and how long the pong has to come back.
+ *
+ * A peer that goes away without a FIN -- a laptop that sleeps, a NAT that forgets the flow,
+ * a host that is power-cycled -- leaves `readyState === OPEN` for as long as the daemon
+ * runs. Nothing is ever read from it, so no "close" fires: `streaming` stays true, the poll
+ * fallback never starts, and `crosscode status` reports `connected: true` about a socket
+ * that carries nothing. A ping that goes unanswered is the only thing that tells that
+ * socket from a quiet one.
+ */
+const HEARTBEAT_INTERVAL_MS = 30_000;
 /** Reconnects are spread across this fraction of the delay, so peers do not retry in step. */
 const BACKOFF_JITTER = 0.3;
 /** Refresh this far ahead of expiry, so a request in flight never crosses the boundary. */
@@ -75,7 +86,8 @@ export class SyncServiceClient {
     /** Called with a refreshed session so the caller can persist it for the next start-up. */
     private readonly onSession?: (session: StoredSession) => Promise<void>,
     private readonly pollIntervalMs = POLL_INTERVAL_MS,
-    private readonly connectTimeoutMs = CONNECT_TIMEOUT_MS
+    private readonly connectTimeoutMs = CONNECT_TIMEOUT_MS,
+    private readonly heartbeatIntervalMs = HEARTBEAT_INTERVAL_MS
   ) {
     this.session = config.service.session;
   }
@@ -158,6 +170,12 @@ export class SyncServiceClient {
     // "close" below, which is what schedules the reconnect and starts the poll fallback.
     const handshake = setTimeout(() => { if (socket.readyState === WebSocket.CONNECTING) socket.terminate(); }, this.connectTimeoutMs);
     handshake.unref();
+    // The pong deadline is one interval: the tick that finds the previous ping still
+    // unanswered is the one that gives up. Terminating produces the "close" below, which is
+    // what schedules the reconnect and starts polling -- the same path a clean drop takes.
+    let heartbeat: NodeJS.Timeout | undefined;
+    let awaitingPong = false;
+    socket.on("pong", () => { awaitingPong = false; });
     socket.on("open", () => {
       clearTimeout(handshake);
       socket.send(JSON.stringify({
@@ -169,6 +187,13 @@ export class SyncServiceClient {
       }));
       this.backoffMs = INITIAL_BACKOFF_MS;
       this.stopPolling();
+      heartbeat = setInterval(() => {
+        if (socket.readyState !== WebSocket.OPEN) return;
+        if (awaitingPong) { socket.terminate(); return; }
+        awaitingPong = true;
+        socket.ping();
+      }, this.heartbeatIntervalMs);
+      heartbeat.unref();
       this.handlers?.onConnected?.();
     });
     socket.on("message", (data) => {
@@ -182,6 +207,7 @@ export class SyncServiceClient {
     });
     socket.on("close", () => {
       clearTimeout(handshake);
+      if (heartbeat) clearInterval(heartbeat);
       if (this.socket === socket) this.socket = undefined;
       this.handlers?.onDisconnected?.();
       this.scheduleReconnect();

@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { createServer as createSocketServer, type AddressInfo, type Server, type Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { StoredSession } from "./supabase-client.js";
+import { startSyncServiceStub } from "./sync-service-stub.js";
 
 /**
  * Supabase access tokens last an hour and a daemon is expected to outlive that. Before
@@ -153,5 +154,37 @@ describe("the sync client's stream", () => {
 
     // 500, 1000, 2000 exactly is the lockstep sequence; jitter makes each one its own value.
     expect(delays.slice(0, 3).some((delay) => !Number.isInteger(delay) || ![500, 1_000, 2_000].includes(delay))).toBe(true);
+  }, 10_000);
+
+  /**
+   * A peer that disappears without a FIN leaves the socket OPEN for as long as the daemon
+   * runs. Nothing is read from it, so no "close" fires: `streaming` stayed true, the poll
+   * fallback never started, and `crosscode status` reported `connected: true` about a socket
+   * carrying nothing -- a healthy-looking daemon silently syncing nothing.
+   *
+   * Nothing here waits on wall-clock: the stub is driven into the silent state, and the
+   * heartbeat interval is injected at 40ms so the pong deadline is a beat rather than 30s.
+   */
+  it("terminates a socket whose peer has stopped answering, and falls back to polling", async () => {
+    const service = await startSyncServiceStub();
+    const client = new SyncServiceClient(configFor(service.url, inAnHour()), "main", undefined, undefined, 20, 1_000, 40);
+    let polls = 0;
+    try {
+      await client.register();
+      client.start({ onChange: () => {}, onPoll: async () => { polls += 1; } }, () => 0);
+      await waitFor("the stream to open", () => client.streaming);
+
+      // The socket stays up at the TCP level and nobody is behind it any more.
+      service.silenceAll();
+
+      await waitFor("the dead socket to be noticed", () => !client.streaming);
+      await waitFor("the poll fallback to take over", () => polls > 0);
+    } finally {
+      client.stop();
+      await service.close();
+    }
+
+    expect(client.streaming).toBe(false);
+    expect(polls).toBeGreaterThan(0);
   }, 10_000);
 });
