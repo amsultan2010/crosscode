@@ -30,10 +30,20 @@ export type SyncServiceStub = {
   changes: Change[];
   /** How many times `GET /v1/changes` has been asked, so a test can catch a spin. */
   readonly listCalls: number;
+  /** How many replicas have registered successfully, so a test can see a stream restart. */
+  readonly registrations: number;
   /** Sequences at or below this are "no longer retained", to exercise cursor-too-old. */
   retentionFloor: number;
+  /** Registrations to fail before the next one succeeds, to exercise a stream that cannot start. */
+  registerFailures: number;
   /** Drops every open stream, as a network partition would. */
   disconnectAll(): void;
+  /**
+   * Stops reading from every open stream without closing it: the peer that vanished without
+   * a FIN. Frames sent to it are never read, so nothing answers a ping and no "close" ever
+   * reaches the client -- which is the state only a heartbeat can tell from a quiet socket.
+   */
+  silenceAll(): void;
   close(): Promise<void>;
 };
 
@@ -50,7 +60,9 @@ export async function startSyncServiceStub(options: SyncServiceStubOptions = {})
   const changes: Change[] = [];
   const subscribers = new Set<Subscriber>();
   let sequence = 0;
-  const state = { retentionFloor: 0, listCalls: 0 };
+  const state = { retentionFloor: 0, listCalls: 0, registerFailures: 0, registrations: 0 };
+  /** The raw TCP sockets behind the streams, which is the only level `silenceAll` works at. */
+  const streams = new Set<import("node:net").Socket>();
 
   const send = (response: import("node:http").ServerResponse, status: number, body: unknown) => {
     response.writeHead(status, { "content-type": "application/json" });
@@ -64,6 +76,12 @@ export async function startSyncServiceStub(options: SyncServiceStubOptions = {})
 
       if (request.method === "POST" && url.pathname === "/v1/replicas") {
         registerSyncReplicaRequestSchema.parse(body);
+        if (state.registerFailures > 0) {
+          state.registerFailures -= 1;
+          send(response, 503, { ok: false, error: "registration is unavailable" });
+          return;
+        }
+        state.registrations += 1;
         send(response, 200, { ok: true, data: { replicaId: randomUUID(), cursor: sequence } });
         return;
       }
@@ -128,7 +146,9 @@ export async function startSyncServiceStub(options: SyncServiceStubOptions = {})
   // No upgrade listener at all when streams are off, which is what makes node destroy the
   // socket -- the client's view of a host that does not serve WebSockets.
   const sockets = options.streams === false ? undefined : new WebSocketServer({ server, path: "/v1/stream" });
-  sockets?.on("connection", (socket) => {
+  sockets?.on("connection", (socket, request) => {
+    streams.add(request.socket);
+    request.socket.once("close", () => streams.delete(request.socket));
     let subscriber: Subscriber | undefined;
     socket.on("message", (data) => {
       const message: unknown = JSON.parse(data.toString());
@@ -160,14 +180,26 @@ export async function startSyncServiceStub(options: SyncServiceStubOptions = {})
     url: `http://127.0.0.1:${port}`,
     changes,
     get listCalls() { return state.listCalls; },
+    get registrations() { return state.registrations; },
     get retentionFloor() { return state.retentionFloor; },
     set retentionFloor(value: number) { state.retentionFloor = value; },
+    get registerFailures() { return state.registerFailures; },
+    set registerFailures(value: number) { state.registerFailures = value; },
     disconnectAll() {
       for (const subscriber of [...subscribers]) subscriber.socket.terminate();
       subscribers.clear();
     },
+    silenceAll() {
+      // Pausing the TCP socket stops ws from ever seeing another frame on it, so the ping
+      // it would otherwise answer automatically is never read. Nothing is sent either way,
+      // which is what leaves the client's end OPEN with nobody behind it.
+      for (const stream of streams) stream.pause();
+    },
     async close() {
       for (const subscriber of [...subscribers]) subscriber.socket.terminate();
+      // A paused socket is not one of the http server's connections any more, so
+      // closeAllConnections below cannot reach it.
+      for (const stream of [...streams]) stream.destroy();
       sockets?.close();
       // `server.close` only stops new connections; it waits for the open ones, and the
       // daemon's fetch keeps its sockets alive between requests. Without this the close

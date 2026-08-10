@@ -38,6 +38,7 @@ const FAST: SyncDaemonOptions = {
   deferralMs: 60,
   gitPollMs: 100,
   streamPollMs: 100,
+  streamRetryMs: 100,
   // The 10s hot window is real behaviour, not a constant worth waiting out in a test.
   engine: { hotWindowMs: 150, maxDeferrals: 3 }
 };
@@ -385,6 +386,42 @@ describe("the daemon around the engine", () => {
     await rm(join(roots[0]!, ".git", "MERGE_HEAD"));
     await waitFor("alice to resume and resync", () => allEqual(roots, "a.txt", "mid-merge\n"));
     expect(alice.status().paused).toBe(false);
+  }, 60_000);
+
+  /**
+   * A branch switch stops the old client and builds a new one, and registering that new one
+   * is a network call that can fail -- the service restarting, a token that will not refresh.
+   * The error was swallowed into `lastError` by the enqueue around observeGit and nothing
+   * ever tried again: the daemon was still up, still watching, still reporting itself, and
+   * holding a client that had been stopped and never started. Silently syncing nothing on
+   * the new branch until someone restarted it.
+   */
+  it("keeps retrying the stream when registering on the new branch fails", async () => {
+    const service = await startSyncServiceStub();
+    services.push(service);
+    const origin = await seedOrigin({ "a.txt": "0\n" });
+    const root = await checkout(origin, "alice", service);
+    const alice = await start(root);
+    await waitFor("alice to connect", async () => alice.status().connected);
+
+    // The next registration -- the one the branch switch is about to make -- fails.
+    const registered = service.registrations;
+    service.registerFailures = 1;
+    await git(root, "checkout", "-qb", "feature");
+
+    // The stub, not `connected`: the old client is still open for the moment between the
+    // branch being adopted and it being stopped, so `connected` is true there for the wrong
+    // reason. A second successful registration can only be the retry.
+    await waitFor("the failed register to be retried and succeed", async () => service.registrations > registered);
+    expect(alice.status().branch).toBe("feature");
+    // Waited for rather than asserted outright: registering is answered a beat before the
+    // socket it leads to is open, and `connected` is about the socket.
+    await waitFor("alice's stream to come back up", async () => alice.status().connected);
+
+    // And the client that came back is a working one: publishing needs the replica id the
+    // failed registration never returned.
+    await type(root, "a.txt", "published after the retry\n");
+    await waitFor("alice to publish on the new branch", async () => service.changes.some((change) => change.branch === "feature"));
   }, 60_000);
 
   it("notices a plain commit on the same branch without republishing anything", async () => {
