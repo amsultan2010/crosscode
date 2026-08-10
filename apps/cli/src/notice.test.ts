@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { confirmTerms, FIRST_RUN_NOTICE, noticeStatePath, PRIVACY_URL, TERMS_URL } from "./notice.js";
 
@@ -75,6 +75,24 @@ describe("the first-run notice", () => {
       kind: "first-run", configHome: home, report: () => {}, waitForKeypress: async () => { asked = true; return true; }
     });
     expect(asked).toBe(true);
+  });
+});
+
+describe("where the flag file goes", () => {
+  // `XDG_CONFIG_HOME=` exported but empty is an ordinary shell environment, and it is not
+  // "no XDG_CONFIG_HOME": read with ??, it made the path relative, so the flag was written
+  // into whatever directory the user happened to run `crosscode start` from -- a stray file
+  // in their repository, and a notice that appeared again in the next checkout.
+  it("falls back to the home directory when XDG_CONFIG_HOME is set but empty", () => {
+    const previous = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = "";
+    try {
+      expect(isAbsolute(noticeStatePath())).toBe(true);
+      expect(noticeStatePath()).toBe(join(homedir(), ".config", "crosscode", "first-run.json"));
+    } finally {
+      if (previous === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = previous;
+    }
   });
 });
 

@@ -94,7 +94,10 @@ export async function confirmTerms(options: ConfirmTermsOptions): Promise<boolea
 
 /** Where the "this machine has seen the notice" flag lives. */
 export function noticeStatePath(configHome?: string): string {
-  const base = configHome ?? process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
+  // `||`, not `??`: an exported but empty XDG_CONFIG_HOME is a real shell environment, and
+  // it made this a relative path -- the flag went into whatever directory `crosscode start`
+  // was run from, so the notice reappeared in every checkout and left a stray file in each.
+  const base = configHome || process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
   return join(base, "crosscode", "first-run.json");
 }
 

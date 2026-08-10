@@ -1,8 +1,26 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { installAgentSurface } from "./agent-surface.js";
+
+/**
+ * A run that dies mid-write, on one named file; see the same stand-in in mcp-config.test.ts.
+ * Named, because the surface installs four files and the interesting one here is the third.
+ */
+let interruptWritesTo: string | undefined;
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    writeFile: async (path: string, data: string, options?: unknown) => {
+      if (interruptWritesTo === undefined || !path.includes(interruptWritesTo)) return actual.writeFile(path, data, options as undefined);
+      await actual.writeFile(path, "");
+      throw new Error("interrupted");
+    }
+  };
+});
 
 /**
  * What `crosscode start` leaves in the checkout for the agent to read. The question these
@@ -16,6 +34,7 @@ const SKILL_SOURCE = new URL("../../../skills/crosscode/SKILL.md", import.meta.u
 const directories: string[] = [];
 
 afterEach(async () => {
+  interruptWritesTo = undefined;
   await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
@@ -80,6 +99,22 @@ describe("the installed agent surface", () => {
     expect(written).not.toContain("stale guidance");
     expect(written.startsWith("# House rules\n\n<!-- crosscode:start -->\n")).toBe(true);
     expect(written.endsWith("<!-- crosscode:end -->\n\nCall the tests yourself.\n")).toBe(true);
+  });
+
+  // AGENTS.md is the user's document, and appending a block to it is not worth the risk of
+  // losing it: an interrupted write must leave what they wrote, not an empty file.
+  it("leaves the user's AGENTS.md intact when the write is interrupted", async () => {
+    const root = await checkout();
+    const path = join(root, "AGENTS.md");
+    const user = "# House rules\n\nRun `pnpm test` before you claim anything passes.\n";
+    await writeFile(path, user);
+    interruptWritesTo = "AGENTS.md";
+
+    await expect(installAgentSurface(root)).rejects.toThrow("interrupted");
+
+    expect(await readFile(path, "utf8")).toBe(user);
+    // And no half-written scratch file left in the checkout to be committed by mistake.
+    expect((await readdir(root)).filter((entry) => entry.includes("crosscode-"))).toEqual([]);
   });
 
   it("installs everything exactly once, so a second start rewrites nothing", async () => {

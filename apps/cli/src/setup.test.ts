@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -359,6 +359,25 @@ describe("crosscode join <code>", () => {
       code: "WRONG_REPOSITORY",
       hint: expect.stringContaining("git clone git@github.com:acme/app.git")
     });
+  });
+});
+
+/**
+ * The config holds the session tokens the daemon runs on, so its permissions are part of
+ * what `crosscode start` is responsible for -- including on a checkout configured by an
+ * earlier version that did not set them.
+ */
+describe("the config file's permissions", () => {
+  it("is readable only by its owner, even when the file was already there at 0644", async () => {
+    const root = await checkout();
+    const config = { projectId: "p1", repo: "acme/app", service: { url: "https://www.getcrosscode.dev", session: SESSION } };
+    await writeConfig(root, config);
+    const path = await configPath(root);
+    await chmod(path, 0o644);
+
+    await writeConfig(root, config);
+
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
   });
 });
 

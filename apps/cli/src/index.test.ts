@@ -1,11 +1,12 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveGitPath } from "@crosscode/git";
 import type { DaemonControl } from "./daemon.js";
 import { runCli } from "./index.js";
 import type { Environment } from "./setup.js";
@@ -97,6 +98,22 @@ describe("crosscode status", () => {
 
     await expect(runCli(["status"], root)).rejects.toMatchObject({ code: "DAEMON_UNAVAILABLE" });
     await expect(runCli(["status"], root)).rejects.toSatisfy((error) => !(error as Error).message.includes(root));
+  });
+
+  /**
+   * A descriptor a daemon was still writing when it died is not JSON, and `JSON.parse`
+   * throwing out of the liveness check took every command that asks it with it: `status`
+   * and `stop` both answered with a raw SyntaxError, so nothing in the CLI could clear the
+   * state and nothing said what to do about it. Unreadable means the same as absent.
+   */
+  it("treats a half-written daemon descriptor as no daemon, rather than a SyntaxError", async () => {
+    const root = await repo();
+    const descriptor = await resolveGitPath(root, "crosscode/daemon.json");
+    await mkdir(dirname(descriptor), { recursive: true });
+    await writeFile(descriptor, '{"pid": 421');
+
+    await expect(runCli(["status"], root)).rejects.toMatchObject({ code: "DAEMON_UNAVAILABLE" });
+    expect(await runCli(["stop"], root)).toEqual({ value: { wasRunning: false } });
   });
 });
 
