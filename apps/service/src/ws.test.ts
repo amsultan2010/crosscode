@@ -100,6 +100,102 @@ describe("service WebSocket gateway", () => {
     expect(await nextPresence(first)).toEqual([]);
   });
 
+  /**
+   * A presence frame says what a replica is working on. It does not get to say who it is:
+   * the actor and the branch were settled at the handshake, against a token and a
+   * membership check, and a message that restates them is a replica naming somebody else as
+   * the author of an edit -- or claiming to be in a branch's room it never subscribed to.
+   */
+  it("takes only the paths out of a presence frame, never the identity it claims", async () => {
+    const { base } = await listen(storeWith([]));
+    const first = await connect(base, { replicaId: replicaA, since: 0 });
+    const second = await connect(base, { replicaId: replicaB, since: 0 });
+    expect(await nextPresence(first)).toEqual([]);
+    expect(await nextPresence(first)).toEqual([expect.objectContaining({ replicaId: replicaB })]);
+
+    second.send(JSON.stringify({
+      type: "presence",
+      peers: [{
+        replicaId: replicaB,
+        actor: "00000000-1111-4222-8333-444455556666",
+        branch: "someone-elses-room",
+        paths: ["src/billing.ts"]
+      }]
+    }));
+
+    expect(await nextPresence(first)).toEqual([
+      { replicaId: replicaB, actor: userId, branch: "main", paths: ["src/billing.ts"] }
+    ]);
+  });
+
+  /**
+   * The handshake is asynchronous, so a socket can die while it is still in flight -- which
+   * is what a daemon killed at the wrong moment, or a laptop lid, looks like. The close
+   * handler runs before there is anything registered to remove, so without a second look
+   * the room is left holding a connection nobody is on the other end of: it collects every
+   * broadcast and appears in every later subscriber's presence list for the life of the
+   * process.
+   */
+  it("does not leave a room holding a connection whose socket died mid-handshake", async () => {
+    let admit = (): void => {};
+    const gate = new Promise<void>((resolve) => { admit = resolve; });
+    const slow = {
+      requireMembership: async () => {
+        await gate;
+        return { projectId, userId, role: "member" as const, repo: "acme/app" };
+      },
+      touchReplica: async () => ({ branch: "main" }),
+      listChanges: async ({ since }: { since: number }) => ({ status: "ok" as const, changes: [], cursor: since })
+    } as unknown as PgStore;
+    const { base } = await listen(slow);
+
+    const ghost = await open(base, await signToken());
+    ghost.send(JSON.stringify({ type: "subscribe", projectId, branch: "main", replicaId: replicaA, since: 0 }));
+    await pause(50);
+    ghost.terminate();
+    await pause(50);
+    admit();
+    await pause(50);
+
+    // The next subscriber to that room is the only one in it.
+    const live = await connect(base, { replicaId: replicaB, since: 0 });
+    expect(await nextPresence(live)).toEqual([]);
+  });
+
+  /**
+   * A frame that is not valid WebSocket at all. `ws` reports it by emitting `error` on the
+   * socket, and an `error` nobody listens for is an uncaught exception: one malformed frame
+   * from one client would otherwise end the process, and with it every other room it is
+   * serving.
+   */
+  it("survives a malformed frame rather than dying of an unhandled socket error", async () => {
+    const { base } = await listen(storeWith([]));
+    const socket = await connect(base, { replicaId: replicaA, since: 0 });
+    const crashes: unknown[] = [];
+    const record = (error: unknown): void => { crashes.push(error); };
+    process.on("uncaughtException", record);
+    try {
+      // A text frame whose payload is not UTF-8.
+      socket.send(Buffer.from([0xff, 0xfe, 0xfd]), { binary: false });
+      await pause(200);
+    } finally {
+      process.off("uncaughtException", record);
+    }
+
+    expect(crashes).toEqual([]);
+  });
+
+  /** Without a cap, `ws` buffers 100 MiB per message for anyone who asks. */
+  it("closes a socket that sends a frame past the message limit", async () => {
+    const { base } = await listen(storeWith([]));
+    const socket = await connect(base, { replicaId: replicaA, since: 0 });
+    const closedWith = new Promise<number>((resolve) => { socket.once("close", resolve); });
+
+    socket.send(JSON.stringify({ type: "presence", peers: [], padding: "x".repeat(2_000_000) }));
+
+    expect(await closedWith).toBe(1009);
+  });
+
   it("refuses an upgrade without a valid token and a subscribe for somebody else's replica", async () => {
     const { base } = await listen(storeWith([]));
     await expect(open(base, undefined)).rejects.toThrow(/401/);
@@ -169,6 +265,10 @@ function inbox(socket: WebSocket): WsSyncServerMessage[] {
     socket.on("message", (data) => messages!.push(JSON.parse(data.toString()) as WsSyncServerMessage));
   }
   return messages;
+}
+
+function pause(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function poll(socket: WebSocket, ready: () => boolean, timeoutMs: number): Promise<void> {

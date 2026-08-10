@@ -30,6 +30,13 @@ const HANDSHAKE_TIMEOUT_MS = 10_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 /** One replay page. Matches the contract's ceiling on `limit`. */
 const REPLAY_PAGE = 500;
+/**
+ * The largest frame a client may send. Matches http.ts's default body limit, and is orders
+ * of magnitude more than the two things a client ever sends -- a subscribe and a presence
+ * frame. Without it `ws` accepts 100 MiB per message, which is 100 MiB a single
+ * unauthenticated-until-subscribe socket can make the process buffer.
+ */
+const MAX_MESSAGE_BYTES = 1_048_576;
 
 /**
  * A room is a project *and* a branch. Two branches of one repository are two rooms that
@@ -56,7 +63,7 @@ type Connection = {
 };
 
 export function attachWebSocketGateway(server: Server, options: WebSocketGatewayOptions): WebSocketGateway {
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
   const rooms = new Map<string, Map<string, Connection>>();
 
   server.on("upgrade", (request: IncomingMessage, socket: Duplex, head: Buffer) => {
@@ -133,6 +140,7 @@ function handleConnection(
   // The handshake is asynchronous, so a client that sends two subscribes back to back
   // would otherwise get two registrations for one socket.
   let subscribing = false;
+  let closed = false;
 
   const handshakeTimer = setTimeout(() => {
     if (!connection) socket.close(1008, "Subscribe timeout");
@@ -158,7 +166,13 @@ function handleConnection(
           return;
         }
         try {
-          connection = await subscribe(socket, userId, request.data, options, rooms);
+          const established = await subscribe(socket, userId, request.data, options, rooms);
+          // The socket can die while the handshake is still in flight, and the close handler
+          // had nothing to remove when it ran. Without this the room keeps an entry nobody
+          // is on the other end of: it collects every broadcast and appears in every peer's
+          // presence list for the lifetime of the process.
+          if (closed) release(rooms, established);
+          else connection = established;
         } catch {
           subscribing = false;
           send(socket, { type: "error", message: "Subscription rejected" });
@@ -171,7 +185,11 @@ function handleConnection(
       if (!message.success || message.data.type !== "presence") return;
       const own = message.data.peers.find((peer) => peer.replicaId === connection!.replicaId);
       if (!own) return;
-      connection.presence = own;
+      // Only the paths are the client's to report. Taking the frame whole would let a
+      // replica publish any `actor` it liked into every peer's presence list -- naming
+      // somebody else as the one editing a file -- and any `branch`, which is the room it
+      // was authorized for and not something a message may restate.
+      connection.presence = { ...connection.presence, paths: own.paths };
       publishPresence(rooms, connection.room);
     })();
   });
@@ -180,19 +198,30 @@ function handleConnection(
     if (connection) connection.isAlive = true;
   });
 
+  // `ws` reports a protocol failure -- a frame past the payload limit, a reserved opcode,
+  // invalid UTF-8 in a text frame -- by emitting `error` on the socket, and an `error` with
+  // no listener is an uncaught exception that takes the whole process down. One malformed
+  // frame from one client is not an outage for everybody else's rooms. `ws` closes the
+  // connection itself; the close handler does the rest.
+  socket.on("error", () => {});
+
   socket.on("close", () => {
     clearTimeout(handshakeTimer);
-    if (!connection) return;
-    const closed = connection;
-    const room = rooms.get(closed.room);
-    if (room?.get(closed.replicaId) !== closed) return;
-    room.delete(closed.replicaId);
-    if (room.size === 0) {
-      rooms.delete(closed.room);
-      return;
-    }
-    publishPresence(rooms, closed.room);
+    closed = true;
+    if (connection) release(rooms, connection);
   });
+}
+
+/** Takes a gone connection back out of its room, and tells whoever is left. */
+function release(rooms: Map<string, Map<string, Connection>>, gone: Connection): void {
+  const room = rooms.get(gone.room);
+  if (room?.get(gone.replicaId) !== gone) return;
+  room.delete(gone.replicaId);
+  if (room.size === 0) {
+    rooms.delete(gone.room);
+    return;
+  }
+  publishPresence(rooms, gone.room);
 }
 
 /**
