@@ -42,6 +42,14 @@ export type SyncStreamHandlers = {
 const INITIAL_BACKOFF_MS = 500;
 const MAX_BACKOFF_MS = 15_000;
 const POLL_INTERVAL_MS = 3_000;
+/**
+ * A host can accept the TCP connection and never answer the upgrade -- a proxy that holds
+ * the request open, a machine that went away mid-handshake. That socket emits neither
+ * "open" nor "close", so without a deadline nothing ever reconnects or starts polling.
+ */
+const CONNECT_TIMEOUT_MS = 10_000;
+/** Reconnects are spread across this fraction of the delay, so peers do not retry in step. */
+const BACKOFF_JITTER = 0.3;
 /** Refresh this far ahead of expiry, so a request in flight never crosses the boundary. */
 const EXPIRY_MARGIN_MS = 60_000;
 
@@ -66,7 +74,8 @@ export class SyncServiceClient {
     private replicaId?: string,
     /** Called with a refreshed session so the caller can persist it for the next start-up. */
     private readonly onSession?: (session: StoredSession) => Promise<void>,
-    private readonly pollIntervalMs = POLL_INTERVAL_MS
+    private readonly pollIntervalMs = POLL_INTERVAL_MS,
+    private readonly connectTimeoutMs = CONNECT_TIMEOUT_MS
   ) {
     this.session = config.service.session;
   }
@@ -145,7 +154,12 @@ export class SyncServiceClient {
     if (this.stopped) return;
     const socket = new WebSocket(`${streamUrl(this.config.service.url)}/v1/stream`, authorization ? { headers: { authorization } } : {});
     this.socket = socket;
+    // Nothing else can end a handshake that is never answered: terminating it produces the
+    // "close" below, which is what schedules the reconnect and starts the poll fallback.
+    const handshake = setTimeout(() => { if (socket.readyState === WebSocket.CONNECTING) socket.terminate(); }, this.connectTimeoutMs);
+    handshake.unref();
     socket.on("open", () => {
+      clearTimeout(handshake);
       socket.send(JSON.stringify({
         type: "subscribe",
         projectId: this.config.projectId,
@@ -167,6 +181,7 @@ export class SyncServiceClient {
       else process.stderr.write(`Crosscode stream error: ${message.data.message}\n`);
     });
     socket.on("close", () => {
+      clearTimeout(handshake);
       if (this.socket === socket) this.socket = undefined;
       this.handlers?.onDisconnected?.();
       this.scheduleReconnect();
@@ -179,7 +194,10 @@ export class SyncServiceClient {
 
   private scheduleReconnect(): void {
     if (this.stopped) return;
-    const delay = this.backoffMs;
+    // Jittered, because every daemon in the room loses the socket at the same instant when
+    // the service restarts: a bare doubling sequence lands them all on it together, on
+    // every attempt, which is the reconnect storm that keeps it from coming back up.
+    const delay = this.backoffMs * (1 - BACKOFF_JITTER * Math.random());
     this.backoffMs = Math.min(this.backoffMs * 2, MAX_BACKOFF_MS);
     this.reconnectTimer = setTimeout(() => void this.connect(), delay);
     this.reconnectTimer.unref();

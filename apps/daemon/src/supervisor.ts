@@ -46,12 +46,15 @@ export function supervise(spawnChild: () => ChildProcess, options: SupervisorOpt
     options.onEvent?.({ type: restarts === 0 ? "start" : "restart", restarts });
     const current = spawnChild();
     child = current;
-    current.once("exit", (code, signal) => {
+    let settled = false;
+    const ended = (clean: boolean, detail: string) => {
+      if (settled) return;
+      settled = true;
       if (child === current) child = undefined;
-      if (stopped || (code === 0 && !signal)) { finish(); return; }
+      if (stopped || clean) { finish(); return; }
       if (Date.now() - startedAt >= healthyAfterMs) { restarts = 0; backoff = initialBackoff; }
       if (restarts >= maxRestarts) {
-        options.onEvent?.({ type: "gave-up", restarts, detail: `exit ${code ?? signal}` });
+        options.onEvent?.({ type: "gave-up", restarts, detail });
         finish();
         return;
       }
@@ -59,8 +62,12 @@ export function supervise(spawnChild: () => ChildProcess, options: SupervisorOpt
       timer = setTimeout(run, backoff);
       timer.unref();
       backoff = Math.min(backoff * 2, maxBackoff);
-    });
-    current.once("error", () => current.kill());
+    };
+    current.once("exit", (code, signal) => ended(code === 0 && !signal, `exit ${code ?? signal}`));
+    // A child that never spawned -- a missing or non-executable daemon binary -- emits
+    // "error" and no "exit" at all. Waiting only for "exit" left the supervisor holding a
+    // process that does not exist: no restart, no "gave up", and nothing on stderr.
+    current.once("error", (error) => { current.kill(); ended(false, error.message); });
   };
 
   run();
