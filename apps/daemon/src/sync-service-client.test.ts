@@ -1,5 +1,5 @@
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer } from "node:http";
+import { createServer as createSocketServer, type AddressInfo, type Server, type Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { StoredSession } from "./supabase-client.js";
 
@@ -32,6 +32,18 @@ async function recordingService(): Promise<{ url: string; bearers: string[] }> {
   servers.push(server);
   await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
   return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, bearers };
+}
+
+/** Captured before any spy replaces it, so a spy's own implementation can still schedule. */
+const realSetTimeout = globalThis.setTimeout;
+
+async function waitFor(description: string, probe: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (probe()) return;
+    await new Promise((next) => realSetTimeout(next, 25));
+  }
+  throw new Error(`Timed out waiting for ${description}`);
 }
 
 const session = (expiresAt: string, accessToken = "old-token"): StoredSession =>
@@ -84,4 +96,62 @@ describe("the sync client's session", () => {
     expect(refreshStoredSession).toHaveBeenCalledTimes(1);
     expect(service.bearers).toEqual(["Bearer new-token", "Bearer new-token", "Bearer new-token"]);
   });
+});
+
+describe("the sync client's stream", () => {
+  /** Accepts the TCP connection and answers nothing at all: a half-open upgrade. */
+  async function silentHost(): Promise<{ url: string; connections: Socket[] }> {
+    const connections: Socket[] = [];
+    const server = createSocketServer((socket) => connections.push(socket));
+    servers.push(server);
+    await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
+    return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, connections };
+  }
+
+  /**
+   * A host that accepts the connection and never completes the WebSocket upgrade emits
+   * neither "open" nor "close", so nothing ever scheduled a reconnect or started the poll
+   * fallback. The daemon sat there reporting `connected: false` and receiving nothing, for
+   * as long as it ran -- exactly the case polling exists to cover.
+   */
+  it("falls back to polling when the host accepts the connection but never answers the upgrade", async () => {
+    const host = await silentHost();
+    const client = new SyncServiceClient(configFor(host.url, inAnHour()), "main", "11111111-2222-4333-8444-555566667777", undefined, 20, 100);
+    let polls = 0;
+    try {
+      client.start({ onChange: () => {}, onPoll: async () => { polls += 1; } }, () => 0);
+      await waitFor("the poll fallback to start", () => polls > 0);
+    } finally {
+      client.stop();
+      for (const connection of host.connections) connection.destroy();
+    }
+
+    expect(polls).toBeGreaterThan(0);
+  }, 10_000);
+
+  /**
+   * Every daemon watching a checkout reconnects on the same schedule when the service
+   * restarts, so a fixed doubling sequence lands them all on the service at the same
+   * instant, over and over. The delays have to be spread.
+   */
+  it("spreads its reconnect delays rather than retrying in lockstep", async () => {
+    const host = await silentHost();
+    const delays: number[] = [];
+    const timer = vi.spyOn(globalThis, "setTimeout").mockImplementation(((handler: TimerHandler, ms?: number, ...rest: unknown[]) => {
+      if (ms !== undefined && ms >= 300) delays.push(ms);
+      return realSetTimeout(handler as () => void, ms, ...rest);
+    }) as typeof setTimeout);
+    const client = new SyncServiceClient(configFor(host.url, inAnHour()), "main", "11111111-2222-4333-8444-555566667777", undefined, 20, 30);
+    try {
+      client.start({ onChange: () => {}, onPoll: async () => {} }, () => 0);
+      await waitFor("three reconnect delays", () => delays.length >= 3);
+    } finally {
+      timer.mockRestore();
+      client.stop();
+      for (const connection of host.connections) connection.destroy();
+    }
+
+    // 500, 1000, 2000 exactly is the lockstep sequence; jitter makes each one its own value.
+    expect(delays.slice(0, 3).some((delay) => !Number.isInteger(delay) || ![500, 1_000, 2_000].includes(delay))).toBe(true);
+  }, 10_000);
 });

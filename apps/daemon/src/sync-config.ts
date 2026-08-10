@@ -96,8 +96,14 @@ export async function assertNotAlreadyRunning(directory: string): Promise<void> 
   const path = await daemonDescriptorPath(directory);
   const existing = await readFile(path, "utf8").then((raw) => daemonDescriptorSchema.parse(JSON.parse(raw))).catch(() => undefined);
   if (!existing || existing.pid === process.pid) return;
+  // Only ESRCH -- "no such process" -- means the descriptor is stale. `process.kill(pid, 0)`
+  // also throws EPERM for a live process this user may not signal, and treating that as
+  // stale deleted a running daemon's descriptor and started a second daemon on the same
+  // worktree, where each publishes the other's writes back as its own.
+  let stale = false;
   try { process.kill(existing.pid, 0); }
-  catch { await rm(path, { force: true }); return; }
+  catch (error) { stale = (error as NodeJS.ErrnoException).code === "ESRCH"; }
+  if (stale) { await rm(path, { force: true }); return; }
   throw new Error("A Crosscode daemon is already running for this worktree");
 }
 

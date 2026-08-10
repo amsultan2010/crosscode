@@ -515,6 +515,31 @@ describe("the daemon around the engine", () => {
     await expect(SyncDaemon.start(root, FAST)).rejects.toThrow("already running");
   }, 30_000);
 
+  /**
+   * `process.kill(pid, 0)` throws EPERM for a live process this user may not signal, and
+   * ESRCH only when there is no such process. Treating every throw as "stale" deleted a
+   * running daemon's descriptor and started a second one on the same worktree, where each
+   * publishes the other's writes back as its own.
+   *
+   * pid 1 is the process every platform has and nobody but root may signal. Running as
+   * root the kill simply succeeds, which reaches the same refusal by the other path.
+   */
+  it("refuses to start when the descriptor names a live process it cannot signal", async () => {
+    const service = await startSyncServiceStub();
+    services.push(service);
+    const origin = await seedOrigin({ "a.txt": "0\n" });
+    const root = await checkout(origin, "alice", service);
+    const descriptorPath = join(root, ".git", "crosscode", "daemon.json");
+    await mkdir(dirname(descriptorPath), { recursive: true });
+    await writeFile(descriptorPath, JSON.stringify({
+      pid: 1, port: 65_000, secret: "not-ours", startedAt: "2026-01-01T00:00:00.000Z"
+    }));
+
+    await expect(SyncDaemon.start(root, FAST)).rejects.toThrow("already running");
+    // ...and the live daemon's descriptor is still where it left it.
+    expect(await read(root, ".git/crosscode/daemon.json")).not.toBeNull();
+  }, 30_000);
+
   it("serves the local API the CLI and MCP server use", async () => {
     const service = await startSyncServiceStub();
     services.push(service);
