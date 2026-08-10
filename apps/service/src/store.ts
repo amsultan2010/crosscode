@@ -250,7 +250,7 @@ export class PgStore {
     return this.transaction(async (client) => {
       const inserted = await client.query<ProjectRow>(
         `INSERT INTO projects (id, name, repo, created_by) VALUES ($1, $2, $3, $4)
-         RETURNING id, name, repo, plan, created_at`,
+         RETURNING id, name, repo, created_at`,
         [id, input.name, input.repo, userId]
       );
       await client.query(
@@ -609,10 +609,10 @@ export function safePoolConfig(connectionString: string, caCertificate?: string)
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-type ProjectRow = { id: string; name: string; repo: string; plan: string; created_at: Date };
+type ProjectRow = { id: string; name: string; repo: string; created_at: Date };
 
 function mapProject(row: ProjectRow): SyncProject {
-  return { id: row.id, name: row.name, repo: row.repo, plan: row.plan, createdAt: row.created_at.toISOString() };
+  return { id: row.id, name: row.name, repo: row.repo, createdAt: row.created_at.toISOString() };
 }
 
 type ChangeRow = {

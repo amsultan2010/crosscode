@@ -1083,95 +1083,6 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 
 /* --- pricing ------------------------------------------------------------- */
 
-.billing-toggle {
-  display: inline-flex;
-  gap: 0.25rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 0.25rem;
-  margin-bottom: 2rem;
-  background: var(--bg-raise);
-}
-
-.billing-option {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  background: none;
-  border: 0;
-  border-radius: 999px;
-  color: var(--text-3);
-  font: inherit;
-  font-size: 0.87rem;
-  padding: 0.4rem 1rem;
-  cursor: pointer;
-  transition: background 0.2s ease, color 0.2s ease;
-}
-
-.billing-option.is-active { background: var(--accent); color: var(--accent-fg); font-weight: 600; }
-.billing-option .save { font-size: 0.72rem; opacity: 0.7; }
-
-.plans {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
-  gap: 1rem;
-}
-
-.plan {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 1.5rem;
-  background: var(--bg-raise);
-  transition: border-color 0.2s ease, transform 0.2s ease;
-}
-
-.plan:hover { border-color: var(--line-2); transform: translateY(-2px); }
-
-.plan-featured { border-color: rgba(255, 255, 255, 0.32); background: #101013; }
-
-.plan-name {
-  font-family: var(--mono);
-  font-size: 0.76rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text-3);
-  margin: 0 0 0.9rem;
-}
-
-.plan-price { display: flex; align-items: baseline; gap: 0.25rem; margin: 0 0 0.3rem; }
-.plan-price .amount { font-size: 2.1rem; font-weight: 750; letter-spacing: -0.04em; color: var(--text); }
-.plan-price .per { font-size: 0.85rem; color: var(--text-3); }
-.plan-sub { font-size: 0.82rem; color: var(--text-3); margin: 0 0 1.3rem; }
-
-.plan-feat {
-  list-style: none;
-  margin: 0 0 1.5rem;
-  padding: 0;
-  flex: 1;
-}
-
-.plan-feat li {
-  position: relative;
-  padding: 0.28rem 0 0.28rem 1.1rem;
-  font-size: 0.89rem;
-  color: var(--text-2);
-}
-
-.plan-feat li::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0.95em;
-  width: 0.4rem;
-  height: 1px;
-  background: var(--text-3);
-}
-
-.plan-feat b { color: var(--text); font-weight: 640; }
-.plan-cta { width: 100%; }
-
 .plan-strip {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
@@ -1767,5 +1678,5 @@ main:not(.docs-layout):not(#main) {
   .scene .note-before { display: none; }
   .scene .note-after { display: block; color: var(--accent); }
   .scene-toggle { display: none; }
-  .btn:hover, .plan:hover, .card:hover { transform: none; }
+  .btn:hover, .card:hover { transform: none; }
 }

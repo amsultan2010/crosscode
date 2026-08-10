@@ -63,7 +63,7 @@ function stubEnvironment(overrides: { service?: Partial<SyncService>; refreshSes
     },
     createProject: async (request) => {
       calls.createProject += 1;
-      return { id: `project-${calls.createProject}`, name: request.name, repo: request.repo, plan: "free", createdAt: "2026-01-01T00:00:00.000Z" };
+      return { id: `project-${calls.createProject}`, name: request.name, repo: request.repo, createdAt: "2026-01-01T00:00:00.000Z" };
     },
     createInvite: async () => {
       throw new Error("not used");

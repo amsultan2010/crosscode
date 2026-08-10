@@ -35,7 +35,7 @@ describe("service HTTP boundary", () => {
       latestAcceptedVersions: ACCEPTED,
       upsertUser: async () => ({ created: true }),
       createProject: async () => ({
-        id: projectId, name: "app", repo: "acme/app", plan: "free", createdAt: "2026-01-01T00:00:00.000Z"
+        id: projectId, name: "app", repo: "acme/app", createdAt: "2026-01-01T00:00:00.000Z"
       }),
       requireMembership: async () => ({ projectId, userId, role: "owner" as const, repo: "acme/app" }),
       registerReplica: async () => ({ replicaId, cursor: 0 })
@@ -56,7 +56,7 @@ describe("service HTTP boundary", () => {
       latestAcceptedVersions: ACCEPTED,
       upsertUser: async () => ({ created: false }),
       createProject: async () => ({
-        id: projectId, name: "app", repo: "acme/app", plan: "free", createdAt: "2026-01-01T00:00:00.000Z"
+        id: projectId, name: "app", repo: "acme/app", createdAt: "2026-01-01T00:00:00.000Z"
       }),
       createInvite: async () => ({
         code: "CC-7F3A-9C2E", projectId, repo: "acme/app", expiresAt: "2026-01-08T00:00:00.000Z", redeemedAt: null
@@ -70,7 +70,7 @@ describe("service HTTP boundary", () => {
     const created = await post(base, "/v1/projects", { name: "app", repo: "acme/app" }, token);
     expect(created.status).toBe(201);
     expect((await created.json() as Envelope).data).toEqual({
-      id: projectId, name: "app", repo: "acme/app", plan: "free", createdAt: "2026-01-01T00:00:00.000Z"
+      id: projectId, name: "app", repo: "acme/app", createdAt: "2026-01-01T00:00:00.000Z"
     });
 
     const invited = await post(base, "/v1/invites", { projectId }, token);

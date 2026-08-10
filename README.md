@@ -317,8 +317,9 @@ more in [architecture](./docs/architecture.md) and [protocol](./docs/protocol.md
 
 ## pricing
 
-the hosted service is free. there are no paid plans, no seats, and no payment details
-collected. see [docs/terms.md](./docs/terms.md).
+everything is free, permanently. the cli is mit licensed and the hosted service costs
+nothing: no paid plans, no tiers, no seats, no usage limits, no trial that ends, and no
+payment details collected. see [docs/terms.md](./docs/terms.md).
 
 ## what your agent sees
 

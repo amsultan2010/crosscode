@@ -5,7 +5,8 @@ daemon, the coordination service, and the local clients. everything below is a d
 of that file; if the two disagree, the file is right. all schemas are zod and `.strict()`,
 and the cli, mcp server, daemon, and service validate against the same definitions.
 
-`PROTOCOL_VERSION` is `4`.
+`PROTOCOL_VERSION` is `5`. version 5 removed `plan` from `syncProject`: crosscode is free
+for everyone with no paid plans, so there was never anything for the field to say.
 
 ## the sync unit
 

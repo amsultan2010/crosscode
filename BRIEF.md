@@ -56,8 +56,8 @@ honesty section stays exactly as candid as it is now.
    competing one.
 
 3. **Do not touch these sections, at all, beyond leaving them where a reader still reaches
-   them:** `#privacy` ("We can read the files you sync"), `#pricing` ("Free, with no paid
-   plans yet"), `#status` ("where things stand" limitations), `#safety` ("Five rules it
+   them:** `#privacy` ("We can read the files you sync"), `#pricing` ("Everything is free,
+   permanently"), `#status` ("where things stand" limitations), `#safety` ("Five rules it
    will not break"), and the FAQ `#faq` — including the "is it worth it for one person?
    No" answer. No softening, no shortening, no moving them below the footer, no collapsing
    them behind a `<details>`. They may keep their current order and position.
@@ -191,7 +191,7 @@ not new claims.
    Move whole sections. Do not rewrite section bodies except for minimal transition
    fixes (e.g. a heading rename, or a sentence that now points backwards instead of
    forwards). Every honest disclosure stays verbatim: the no-end-to-end-encryption
-   sentences, what the service stores, the free-no-paid-plans pricing status, and the
+   sentences, what the service stores, the everything-is-free-permanently pricing status, and the
    "What Crosscode is not" section.
 
 ## Out of scope — do not touch

@@ -50,7 +50,7 @@ function inMemoryStore(seed: Row[] = []) {
     // not a stub that was never going to answer.
     async upsertUser() { return { created: false }; },
     async createProject() {
-      return { id: projectId, name: "app", repo: "acme/app", plan: "free", createdAt: "2026-01-01T00:00:00.000Z" };
+      return { id: projectId, name: "app", repo: "acme/app", createdAt: "2026-01-01T00:00:00.000Z" };
     },
     async requireMembership() { return { projectId, userId, role: "owner" as const, repo: "acme/app" }; },
     async registerReplica() { return { replicaId, cursor: 0 }; },
