@@ -6,16 +6,24 @@ import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const exec = promisify(execFile);
-async function git(root: string, args: string[]): Promise<string> { return (await exec("git", ["-C", root, ...args])).stdout.trim(); }
+/**
+ * `execFile` buffers stdout in memory and rejects with "maxBuffer length exceeded" past its
+ * 1 MiB default -- a size an ordinary lockfile, bundle, or `status --porcelain` of a big
+ * checkout passes without being remarkable, and one that turns a routine restore or diff
+ * into a hard failure. Every git call here is bounded content, so the ceiling is raised
+ * rather than removed.
+ */
+const MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
+async function git(root: string, args: string[]): Promise<string> { return (await exec("git", ["-C", root, ...args], { maxBuffer: MAX_OUTPUT_BYTES })).stdout.trim(); }
 async function gitBuffer(root: string, args: string[]): Promise<Buffer> {
   return new Promise((resolveOutput, rejectOutput) => {
-    execFile("git", ["-C", root, ...args], { encoding: null }, (error, stdout) => {
+    execFile("git", ["-C", root, ...args], { encoding: null, maxBuffer: MAX_OUTPUT_BYTES }, (error, stdout) => {
       if (error) rejectOutput(error);
       else resolveOutput(stdout);
     });
   });
 }
-async function gitWithIndex(root: string, index: string, args: string[]): Promise<string> { return (await exec("git", ["-C", root, ...args], { env: { ...process.env, GIT_INDEX_FILE: index } })).stdout.trim(); }
+async function gitWithIndex(root: string, index: string, args: string[]): Promise<string> { return (await exec("git", ["-C", root, ...args], { env: { ...process.env, GIT_INDEX_FILE: index }, maxBuffer: MAX_OUTPUT_BYTES })).stdout.trim(); }
 
 export type RepositoryState = { root: string; head?: string; headReflog?: string; branch?: string; worktree: string; remotes: string[]; dirty: boolean; indexTree?: string; operation?: "merge" | "rebase" | "cherry-pick" | "revert" };
 export async function discoverRepository(directory: string): Promise<RepositoryState> {
@@ -161,7 +169,7 @@ export async function findSymbolReferences(root: string, symbols: string[], excl
   const files = new Set<string>();
   for (const symbol of symbols) {
     if (!symbol) continue;
-    const output = await exec("git", ["-C", root, "grep", "-l", "-e", symbol, "--", `:!${excludePath}`])
+    const output = await exec("git", ["-C", root, "grep", "-l", "-e", symbol, "--", `:!${excludePath}`], { maxBuffer: MAX_OUTPUT_BYTES })
       .then(({ stdout }) => stdout)
       .catch((error: { code?: number }) => { if (error.code === 1) return ""; throw error; });
     for (const file of output.split("\n").filter(Boolean)) if (file !== excludePath) files.add(file);
@@ -174,7 +182,7 @@ export async function unifiedDiff(before: string | undefined, after: string | un
   try {
     const beforePath = join(directory, "before"); const afterPath = join(directory, "after");
     await Promise.all([writeFile(beforePath, before ?? ""), writeFile(afterPath, after ?? "")]);
-    return await exec("git", ["diff", "--no-index", "--unified=0", "--no-color", "--", beforePath, afterPath])
+    return await exec("git", ["diff", "--no-index", "--unified=0", "--no-color", "--", beforePath, afterPath], { maxBuffer: MAX_OUTPUT_BYTES })
       .then(({ stdout }) => stdout)
       .catch((error: { code?: number; stdout?: string }) => { if (error.code === 1) return error.stdout ?? ""; throw error; });
   } finally { await rm(directory, { recursive: true, force: true }); }
@@ -189,7 +197,7 @@ export async function threeWayMerge(base: string, current: string, proposed: str
     // count for a conflicted merge, negative on a real error. Either way the merge is not
     // clean, and the partially-merged stdout is only useful to show a human, so both
     // collapse to the same result.
-    return await exec("git", ["merge-file", "-p", currentPath, basePath, proposedPath])
+    return await exec("git", ["merge-file", "-p", currentPath, basePath, proposedPath], { maxBuffer: MAX_OUTPUT_BYTES })
       .then(({ stdout }) => ({ clean: true, content: stdout }))
       .catch((error: { stdout?: string }) => ({ clean: false, content: error.stdout ?? "" }));
   } finally { await rm(directory, { recursive: true, force: true }); }

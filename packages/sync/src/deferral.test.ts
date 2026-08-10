@@ -1,6 +1,8 @@
+import { mkdir, readFile, symlink } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { HOT_WINDOW_MS } from "./engine.js";
-import { gitText } from "./git.js";
+import { git, gitText } from "./git.js";
 import { Clock, createWorld, type World } from "./test-harness.js";
 
 const worlds: World[] = [];
@@ -120,5 +122,24 @@ describe("denylist and path safety", () => {
       path: ".env", op: "modify", baseHash: null, contentHash: "x", content: "SECRET=3\n", encoding: "utf8"
     }, { peer: "alice" })).outcome).toBe("rejected");
     expect((await bob!.read(".env"))!.toString("utf8")).toBe("SECRET=1\n");
+  });
+
+  it("refuses a path that leaves the checkout through a symlinked directory", async () => {
+    const target = await world(["alice", "bob"], { files: { "a.txt": "a\n" } });
+    const [, bob] = target.peers;
+    // A symlink is an ordinary tracked file to git, so a repository can carry one and every
+    // path under it is still `../`-free and passes isSafeRelativePath.
+    const outside = join(target.root, "outside");
+    await mkdir(outside, { recursive: true });
+    await symlink(outside, join(bob!.dir, "link"));
+    await git(bob!.dir, ["add", "link"]);
+    await bob!.engine.refreshTracked();
+
+    const result = await bob!.engine.receive({
+      path: "link/pwned.txt", op: "modify", baseHash: null, contentHash: "x", content: "pwned\n", encoding: "utf8"
+    }, { peer: "alice" });
+
+    expect(result.outcome).toBe("rejected");
+    expect(await readFile(join(outside, "pwned.txt")).catch(() => null)).toBeNull();
   });
 });

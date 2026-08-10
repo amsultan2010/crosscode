@@ -7,8 +7,11 @@ import { redactPath } from "@crosscode/core";
  */
 export function isSafeRelativePath(path: string): boolean {
   if (!path || path.length > 4_096) return false;
-  if (path.includes("\0") || path.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(path)) return false;
-  const parts = path.split("/");
+  if (path.includes("\0") || /^[\\/]/.test(path) || /^[a-zA-Z]:[\\/]/.test(path)) return false;
+  // Split on both separators, not just `/`. The drive-letter check above says this path is
+  // joined on Windows too, and there `..\outside` and `.git\config` are the same escapes as
+  // their forward-slash spellings while containing no `/` to split on.
+  const parts = path.split(/[\\/]/);
   return !parts.some((part) => part === "" || part === "." || part === ".." || part.toLowerCase() === ".git");
 }
 

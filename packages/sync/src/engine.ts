@@ -1,5 +1,6 @@
+import { isUtf8 } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import {
   conflictSchema,
@@ -168,6 +169,26 @@ export class SyncEngine {
     return isSafeRelativePath(path) && !isDenied(path);
   }
 
+  /**
+   * Whether a parent directory of `path` is a symlink.
+   *
+   * A symlink is an ordinary tracked file to git, so a repository can legitimately carry one
+   * and every path under it is still `../`-free and passes isSafeRelativePath. Writing one of
+   * those means `mkdir -p` through the link and landing a peer's bytes wherever it points --
+   * `.git/hooks`, `~/.ssh` -- which is the escape the path check exists to prevent. Only the
+   * parents matter: the final component is replaced by a rename, never followed.
+   */
+  private async escapesRoot(path: string): Promise<boolean> {
+    let current = this.root;
+    for (const part of path.split("/").slice(0, -1)) {
+      current = join(current, part);
+      const info = await lstat(current).catch(() => null);
+      if (!info) return false;
+      if (info.isSymbolicLink()) return true;
+    }
+    return false;
+  }
+
   // ---- working tree -----------------------------------------------------
 
   private absolute(path: string): string {
@@ -283,7 +304,12 @@ export class SyncEngine {
 
   private async modify(path: string, content: Buffer, local: string, agreed: string | null): Promise<FileVersion> {
     const base = await readBlob(this.root, agreed);
-    const binary = isBinary(content) || isBinary(base);
+    // Text that is not valid UTF-8 -- latin-1, shift-jis, a stray 0xff -- has no NUL byte, so
+    // isBinary() calls it text, and `toString("utf8")` would replace every offending byte with
+    // U+FFFD. The peer would then write bytes that do not hash to the contentHash it records in
+    // its shadow, and republish the file forever against a baseHash nobody can resolve. Base64
+    // is the encoding that survives it; the wire has no third option.
+    const binary = isBinary(content) || isBinary(base) || !isUtf8(content);
     if (!binary && base && content.length > this.patchThresholdBytes) {
       const patch = await makePatch(this.root, base, content);
       if (patch !== null && Buffer.byteLength(patch) < content.length) {
@@ -340,6 +366,7 @@ export class SyncEngine {
     options: { peer?: string; allowCatchup?: boolean }
   ): Promise<ApplyResult> {
     const { path } = version;
+    if (await this.escapesRoot(path)) return { path, outcome: "rejected" };
     const allowCatchup = options.allowCatchup ?? true;
     const base = await readBlob(this.root, version.baseHash);
     if (version.baseHash && base === null) {
@@ -442,7 +469,10 @@ export class SyncEngine {
     peer: string | undefined,
     renamedFrom: string | undefined
   ): Promise<ApplyResult> {
-    const binary = isBinary(ours) || isBinary(theirs) || isBinary(ancestor);
+    // Not valid UTF-8 is as unpresentable here as a NUL byte is, and for the same reason as
+    // in modify(): the three sides go out as strings, and the agent's resolution comes back
+    // as one. Mojibake the agent cannot see is worse than a conflict it must open the file for.
+    const binary = [ours, theirs, ancestor].some((side) => isBinary(side) || (side !== null && !isUtf8(side)));
     const conflict = conflictSchema.parse({
       id: randomUUID(),
       path,

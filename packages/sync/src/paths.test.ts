@@ -28,4 +28,14 @@ describe("what Crosscode refuses to sync", () => {
     expect(isSafeRelativePath(".git/config")).toBe(false);
     expect(isSafeRelativePath("src/a.ts")).toBe(true);
   });
+
+  it("refuses the same escapes spelled with a backslash", () => {
+    // The drive-letter check says this path is joined on Windows too, and there `\` is the
+    // separator: `..\outside` escapes the checkout exactly as `../outside` does, while
+    // `.git\config` reaches git's own state, and neither contains a `/` to split on.
+    expect(isSafeRelativePath("..\\outside")).toBe(false);
+    expect(isSafeRelativePath("src\\..\\..\\outside")).toBe(false);
+    expect(isSafeRelativePath(".git\\config")).toBe(false);
+    expect(isSafeRelativePath("src\\a.ts")).toBe(true);
+  });
 });

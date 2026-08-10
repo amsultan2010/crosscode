@@ -120,7 +120,10 @@ export async function readBlob(root: string, hash: string | null): Promise<Buffe
 
 /** Tracked paths, which is the entire universe of files Crosscode will ever sync. */
 export async function trackedPaths(root: string): Promise<string[]> {
-  const output = await gitText(root, ["ls-files", "-z"]);
+  // Not gitText: it trims, and a path may legitimately begin or end with whitespace -- which
+  // `ls-files` sorts first, so the trim silently renames it and the file never syncs. The NUL
+  // separators already delimit the records exactly.
+  const output = (await git(root, ["ls-files", "-z"])).toString("utf8");
   return output.split("\0").filter(Boolean);
 }
 

@@ -58,6 +58,21 @@ describe("git safety", () => {
     expect(await readFile(join(directory, "binary.dat"))).toEqual(binary);
   });
 
+  it("restores a file larger than the default child-process buffer", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "crosscode-git-")); directories.push(directory);
+    await exec("git", ["init", "-q", directory]); await exec("git", ["-C", directory, "config", "user.email", "test@example.com"]); await exec("git", ["-C", directory, "config", "user.name", "Test"]);
+    // execFile buffers stdout in memory and caps it at 1 MiB by default, which is a size an
+    // ordinary lockfile or bundle passes without being remarkable.
+    const large = Buffer.alloc(3 * 1024 * 1024, "x");
+    await writeFile(join(directory, "large.txt"), large); await exec("git", ["-C", directory, "add", "."]); await exec("git", ["-C", directory, "commit", "-qm", "large"]);
+    const checkpoint = await createCheckpoint(directory, "replica", "save large");
+    await writeFile(join(directory, "large.txt"), "truncated\n");
+
+    await restoreCheckpointFile(directory, checkpoint.ref, "large.txt");
+
+    expect(await readFile(join(directory, "large.txt"))).toEqual(large);
+  });
+
   it("uses Git three-way merge analysis without writing files", async () => {
     await expect(threeWayMerge("one\ntwo\nthree\n", "one-local\ntwo\nthree\n", "one\ntwo\nthree-remote\n")).resolves.toMatchObject({ clean: true, content: "one-local\ntwo\nthree-remote\n" });
   });
@@ -69,6 +84,15 @@ describe("git safety", () => {
     expect(patch).toMatch(/^@@ -5,2 \+5,2 @@/m);
     expect(patch).toContain("-line5");
     expect(patch).toContain("+LINE5");
+  });
+
+  it("diffs content whose patch is larger than the default child-process buffer", async () => {
+    const before = "";
+    const after = `${Array.from({ length: 40_000 }, (_, index) => `line ${index} of a file that is not remarkably large`).join("\n")}\n`;
+
+    const patch = await unifiedDiff(before, after);
+
+    expect(patch.length).toBeGreaterThan(1024 * 1024);
   });
 
   it("produces an empty diff for identical content and full-file diffs for add/delete", async () => {

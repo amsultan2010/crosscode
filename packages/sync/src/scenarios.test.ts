@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { HOT_WINDOW_MS } from "./engine.js";
-import { git } from "./git.js";
+import { git, gitText } from "./git.js";
 import { Clock, converged, createWorld, reconnect, shadowCommitCount, type World } from "./test-harness.js";
 
 /**
@@ -46,6 +46,21 @@ describe("1 - disjoint files", () => {
     // Two edits, two peers: two messages. The bound is what fails the test if an applied
     // write ever starts looking like a local edit again and republishes forever.
     expect(target.messages).toBe(2);
+  });
+});
+
+describe("1b - membership", () => {
+  it("syncs a newly tracked file whose name begins with a space", async () => {
+    const target = await world(["alice", "bob"], { files: { "a.txt": "a\n" } });
+    const [alice, bob] = target.peers;
+    await alice!.edit(" spaced.txt", "one\n");
+    await git(alice!.dir, ["add", "--", " spaced.txt"]);
+
+    await target.settle();
+
+    // `ls-files -z` sorts this record first, so trimming its output eats the leading space
+    // and the file is keyed under a name that does not exist: it silently never syncs.
+    expect((await bob!.read(" spaced.txt"))?.toString("utf8")).toBe("one\n");
   });
 });
 
@@ -239,6 +254,55 @@ describe("7 - large file", () => {
     expect(versions[0]!.patch!.length).toBeLessThan(1_000);
     expect((await bob!.engine.receive(versions[0]!, { peer: "alice" })).outcome).toBe("write");
     expect((await bob!.read("large.txt"))!.toString("utf8")).toBe(next);
+  });
+});
+
+describe("6b - text that is not UTF-8", () => {
+  // Latin-1 "café\n": no NUL byte, so isBinary() calls it text, but the bytes are not valid
+  // UTF-8. Shipping them as a utf8 string replaces 0xE9 with U+FFFD, and the receiver then
+  // holds bytes that do not hash to the contentHash its shadow just recorded.
+  const latin1 = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]);
+
+  it("delivers bytes that are not valid UTF-8 exactly as they were written", async () => {
+    const target = await world(["alice", "bob"], { files: { "notes.txt": "cafe\n" } });
+    const [alice, bob] = target.peers;
+    await alice!.edit("notes.txt", latin1);
+
+    await target.settle();
+
+    expect(await bob!.read("notes.txt")).toEqual(latin1);
+    expect(conflictsOf(target)).toHaveLength(0);
+  });
+
+  it("hands the peer a contentHash that matches what it wrote", async () => {
+    const target = await world(["alice", "bob"], { files: { "notes.txt": "cafe\n" } });
+    const [alice, bob] = target.peers;
+    await alice!.edit("notes.txt", latin1);
+
+    const [version] = await alice!.engine.publishAll();
+    expect((await bob!.engine.receive(version!, { peer: "alice" })).outcome).toBe("write");
+
+    // A shadow that names bytes the disk does not hold republishes the file forever, on a
+    // baseHash no peer can resolve.
+    expect(bob!.engine.shadowHash("notes.txt")).toBe(await gitText(bob!.dir, ["hash-object", "notes.txt"]));
+    expect(await bob!.engine.publishAll()).toEqual([]);
+  });
+
+  it("does not hand the agent mojibake as the three sides of a conflict", async () => {
+    const target = await world(["alice", "bob"], { files: { "notes.txt": "cafe\n" } });
+    const [alice, bob] = target.peers;
+    await alice!.edit("notes.txt", Buffer.concat([latin1, Buffer.from("alice\n")]));
+    await bob!.edit("notes.txt", Buffer.concat([latin1, Buffer.from("bob\n")]));
+
+    await target.settle();
+
+    const conflicts = conflictsOf(target);
+    expect(conflicts).toHaveLength(1);
+    // Nothing here round-trips through a string, so the sides are withheld rather than
+    // mangled -- a resolution built on mangled text would be written back as corruption.
+    expect(conflicts[0]!.binary).toBe(true);
+    expect(conflicts[0]!.ours).toBeNull();
+    expect(conflicts[0]!.theirs).toBeNull();
   });
 });
 
