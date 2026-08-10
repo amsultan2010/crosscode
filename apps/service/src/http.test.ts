@@ -201,6 +201,48 @@ describe("service HTTP boundary", () => {
   });
 
   /**
+   * The per-identity quota is charged by a hook the request handler sets up for the caller
+   * it is serving. Kept on the options object every request shares, two requests that
+   * overlap -- which is every request under any load at all -- hand the second's hook to the
+   * first, and the first is then charged against the second's route: the replica route's
+   * ceiling of thirty a minute is spent on whatever else happened to be in flight, and the
+   * retry-after lands on a response that may already have been sent.
+   */
+  it("charges each caller's quota against its own route when requests overlap", async () => {
+    const store = {
+      latestAcceptedVersions: ACCEPTED,
+      requireMembership: async () => ({ projectId, userId, role: "owner" as const, repo: "acme/app" }),
+      registerReplica: async () => ({ replicaId, cursor: 0 }),
+      listChanges: async ({ since }: { since: number }) => ({ status: "ok" as const, changes: [], cursor: since })
+    } as unknown as PgStore;
+    // A verification step the test can hold open, which is where a real request waits too:
+    // authenticate() awaits the token check before it charges anything.
+    const real = await testSupabaseJwks();
+    let gate: Promise<void> | undefined;
+    const jwks: typeof real = async (...args) => {
+      await gate;
+      return real(...args);
+    };
+    const base = await listen(store, { jwks });
+    const token = await signToken();
+
+    const register = () => post(base, "/v1/replicas", { projectId, branch: "main" }, token);
+    for (let attempt = 0; attempt < 30; attempt += 1) expect((await register()).status).toBe(201);
+
+    // The thirty-first, held mid-verification while another request for the same caller
+    // starts and finishes underneath it.
+    let admit = (): void => {};
+    gate = new Promise<void>((resolve) => { admit = resolve; });
+    const overBudget = register();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    gate = undefined;
+    expect((await get(base, `/v1/changes?projectId=${projectId}&branch=main`, token)).status).toBe(200);
+    admit();
+
+    expect((await overBudget).status).toBe(429);
+  });
+
+  /**
    * The outage this route exists to catch. `device_codes` shipped without a grant to the
    * runtime role, every request touching it 500ed with `permission denied`, and health
    * answered `ok` the whole time because it only ever proved the process was running.

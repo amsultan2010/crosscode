@@ -239,7 +239,11 @@ async function handleRequest(
   limiter: FixedWindowRateLimiter,
   gateway: WebSocketGateway
 ): Promise<void> {
-  const options: RequestOptions = baseOptions;
+  // A copy, not the shared options object: chargeIdentity below is per-request, and
+  // assigning it onto the object every request holds would let two overlapping requests
+  // overwrite each other's hook -- the second's would then charge the first's quota, on the
+  // first's route, and write its retry-after onto a response that may already be finished.
+  const options: RequestOptions = { ...baseOptions };
   response.setHeader("cache-control", "no-store");
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", "http://service.local");
