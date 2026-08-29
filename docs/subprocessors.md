@@ -6,8 +6,11 @@ everyone who processes data on crosscode's behalf, what they get, and where it s
 page is the authoritative list referenced by the [privacy policy](./privacy-policy.md) and
 the [data processing agreement](./dpa.md).
 
-six vendors. there is no seventh: the docs site loads no fonts, no cdn scripts and no
-third-party tags, and the only external hostname anywhere in its html is `github.com`.
+six vendors. there is no seventh: every resource the docs site loads comes from its
+own domain, fonts included, and there are no cdn scripts and no third-party tags. the
+only external hostnames in its html are the ones it links out to, which are `github.com`,
+`npmjs.com`, `mcp.so` and the author's own site. following a link is your request to
+that site, not ours.
 
 effective from {{EFFECTIVE_DATE}}.
 
@@ -15,7 +18,7 @@ effective from {{EFFECTIVE_DATE}}.
 
 | subprocessor | what it does for crosscode | data it can access | where it runs | transfer mechanism |
 | --- | --- | --- | --- | --- |
-| **vercel inc.** | hosts the website and the serverless api. everything passes through it in transit | all request and response data in transit, including file contents; server logs including ip addresses | united states (`iad1`, plus edge) | [vercel dpa](https://vercel.com/legal/dpa), eu sccs; vercel is eu–us data privacy framework certified |
+| **vercel inc.** | hosts the website and the serverless api. everything passes through it in transit | all request and response data in transit, including file contents; server logs including ip addresses | united states (`iad1`, plus edge) | [vercel dpa](https://vercel.com/legal/dpa), eu sccs; vercel is eu-us data privacy framework certified |
 | **supabase inc.** | postgres database and authentication | everything stored: file contents and paths, account records, project and invite records, device-code rows, email addresses, password hashes, github identities, sessions; automated backups | **canada**, aws `ca-central-1`, montréal | [supabase dpa](https://supabase.com/legal/dpa), eu sccs, plus the eu adequacy decision for canadian commercial organisations |
 | **github, inc.** (microsoft) | oauth identity provider; hosts the public repository and the uptime workflow | your github account identity; the repository-access check at invite redemption is made against github with your own oauth token | united states | [github dpa](https://github.com/customer-terms/github-data-protection-agreement), eu sccs; microsoft is data privacy framework certified |
 | **posthog, inc.** | product analytics | server-side: seven named events keyed on your supabase user id, with at most a file-version count and a new-user flag. website: four page events with no account id and no persistent identifier. no file contents, no paths, no branch or repository names, no email, no github login | united states (`us.i.posthog.com`) | [posthog dpa](https://posthog.com/dpa), eu sccs |

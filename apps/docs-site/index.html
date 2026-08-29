@@ -3,23 +3,38 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>crosscode cli — an mcp server for real-time codebase sync between coding agents</title>
+  <title>crosscode cli: an mcp server for real-time codebase sync between coding agents</title>
   <meta name="description" content="crosscode cli runs an mcp server next to each checkout. everyone works in their own checkout with their own coding agent, and each settled edit reaches whoever is on the same branch within seconds. the only interruption is a same-line conflict, and that goes to your own agent." />
   <link rel="canonical" href="https://www.getcrosscode.dev/" />
   <link rel="icon" href="/favicon.ico" sizes="48x48" />
   <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml" sizes="any" />
   <link rel="icon" type="image/png" sizes="192x192" href="/brand/favicon-192.png" />
   <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png" />
+  <meta property="og:url" content="https://www.getcrosscode.dev/" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="crosscode" />
-  <meta property="og:title" content="crosscode cli — an mcp server for real-time codebase sync between coding agents" />
+  <meta property="og:title" content="crosscode cli: an mcp server for real-time codebase sync between coding agents" />
   <meta property="og:description" content="crosscode cli runs an mcp server next to each checkout. you edit a file, their checkout updates within seconds. they edit, yours does. the only interruption is a same-line conflict, and that goes to your own coding agent." />
-  <meta property="og:image" content="/brand/logo-social.png" />
+  <meta property="og:image" content="https://www.getcrosscode.dev/brand/logo-social.png" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="crosscode cli — an mcp server for real-time codebase sync between coding agents" />
+  <meta name="twitter:title" content="crosscode cli: an mcp server for real-time codebase sync between coding agents" />
   <meta name="twitter:description" content="crosscode cli runs an mcp server next to each checkout. you edit a file, their checkout updates within seconds. they edit, yours does. the only interruption is a same-line conflict, and that goes to your own coding agent." />
-  <meta name="twitter:image" content="/brand/logo-social.png" />
+  <meta name="twitter:image" content="https://www.getcrosscode.dev/brand/logo-social.png" />
+  <link rel="preload" href="/fonts/space-grotesk-latin.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="/fonts/instrument-sans-latin.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="/src/style.css" />
+  <script>
+    /* Anything that animates in is hidden by CSS before the motion module runs, so
+       there is no flash of an entrance that has already finished. The gate is added
+       here by script rather than sitting in the markup, which means a browser with
+       JavaScript off never applies it and gets the whole page painted normally. The
+       timer is the second half of that promise: if the module fails to parse, fails
+       to fetch, or throws, the page uncovers itself anyway. */
+    document.documentElement.classList.add("motion-pending");
+    setTimeout(function () {
+      document.documentElement.classList.remove("motion-pending");
+    }, 2500);
+  </script>
   <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -29,7 +44,7 @@
       "name": "crosscode cli",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "macOS, Linux, Windows",
-      "description": "crosscode cli — an mcp server for real-time codebase sync between coding agents. everyone works in their own checkout with their own coding agent, and each settled edit reaches whoever is on the same branch within seconds. the only interruption is a same-line conflict, and that goes to your own agent.",
+      "description": "crosscode cli: an mcp server for real-time codebase sync between coding agents. everyone works in their own checkout with their own coding agent, and each settled edit reaches whoever is on the same branch within seconds. the only interruption is a same-line conflict, and that goes to your own agent.",
       "url": "https://github.com/amsultan2010/crosscode",
       "codeRepository": "https://github.com/amsultan2010/crosscode",
       "license": "https://opensource.org/licenses/MIT",
@@ -81,60 +96,71 @@
     <section class="hero">
       <div class="hero-grid" aria-hidden="true"></div>
       <div class="wrap hero-inner">
-        <div class="pill-row reveal">
-          <a class="pill" href="https://www.npmjs.com/package/crosscode-cli" rel="noopener">
-            <span class="pill-tag">npm</span>
-            1,000+ downloads
-            <span class="pill-arrow" aria-hidden="true">&#8599;</span>
-          </a>
-          <a class="pill" href="https://github.com/amsultan2010/crosscode" rel="noopener">
-            <span class="pill-tag">mit</span>
-            open source, and free
-            <span class="pill-arrow" aria-hidden="true">&#8599;</span>
-          </a>
+        <div class="hero-main">
+          <p class="meta-row" data-anim>
+            <a class="meta-item" href="https://www.npmjs.com/package/crosscode-cli" rel="noopener">
+              <b>npm</b> 1,000+ downloads
+            </a>
+            <a class="meta-item" href="https://github.com/amsultan2010/crosscode" rel="noopener">
+              <b>mit</b> open source, and free
+            </a>
+          </p>
+
+          <h1>multiplayer agentic coding</h1>
+
+          <p class="lede hero-lede">
+            real-time sync for coding with others in the agentic era.
+          </p>
+
+          <div class="hero-actions" data-anim="rise">
+            <a class="btn btn-primary btn-lg" href="#install" data-cursor="install">set it up with your agent</a>
+            <a class="btn btn-quiet btn-lg" href="https://github.com/amsultan2010/crosscode" rel="noopener" data-cursor="github">
+              <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+              view on github
+            </a>
+          </div>
         </div>
 
-        <h1 class="reveal">multiplayer agentic coding</h1>
+        <div class="hero-rail">
+          <p class="hero-byline" data-anim="rise">
+            built by <a href="https://www.amsultan.site" rel="noopener">abdullah sultan</a>
+          </p>
 
-        <p class="lede hero-lede reveal">
-          real-time sync for coding with others in the agentic era.
-        </p>
+          <div class="hero-cmd" data-anim>
+            <code>paste one prompt into your coding agent</code>
+            <button class="copy-btn" type="button" data-copy-target="install-prompt-text" data-cursor="copy">copy prompt</button>
+          </div>
 
-        <p class="hero-byline reveal">
-          built by <a href="https://www.amsultan.site" rel="noopener">abdullah sultan</a>
-        </p>
-
-        <div class="hero-actions reveal">
-          <a class="btn btn-primary btn-lg" href="#install">set it up with your agent</a>
-          <a class="btn btn-quiet btn-lg" href="https://github.com/amsultan2010/crosscode" rel="noopener">
-            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-            view on github
-          </a>
+          <p class="hero-foot" data-anim="rise">
+            your agent installs and configures the rest itself. needs node 24 and a git
+            checkout. prefer to type it yourself?
+            <a href="#install">run the two commands</a>.
+          </p>
         </div>
-
-        <div class="hero-cmd reveal">
-          <code>paste one prompt into your coding agent</code>
-          <button class="copy-btn" type="button" data-copy-target="install-prompt-text">copy prompt</button>
-        </div>
-
-        <p class="hero-foot reveal">
-          your agent installs and configures the rest itself. needs node 24 and a git
-          checkout. prefer to type it yourself?
-          <a href="#install">run the two commands</a>.
-        </p>
       </div>
 
       <!-- ================= AGENT WALL ================= -->
-      <section class="agents agents-hero">
+      <!-- The one section that leaves the container and runs the full width of the
+           viewport, and the page's ambient motion: it is still moving long after
+           every entrance has finished. -->
+      <section class="agents agents-hero" aria-label="supported coding agents">
         <div class="wrap">
-          <p class="kicker center reveal">works with the agent you already run</p>
-          <ul class="agent-logos reveal">
-            <li><span class="agent-mark" style="--mark: url('/brand/agents/claude.svg')" aria-hidden="true"></span>claude code</li>
-            <li><span class="agent-mark" style="--mark: url('/brand/agents/codex.svg')" aria-hidden="true"></span>codex cli</li>
-            <li><span class="agent-mark" style="--mark: url('/brand/agents/opencode.svg')" aria-hidden="true"></span>opencode</li>
-            <li><span class="agent-mark" style="--mark: url('/brand/agents/cursor.svg')" aria-hidden="true"></span>cursor</li>
+          <p class="kicker center" data-anim="rise">works with the agent you already run</p>
+        </div>
+        <div class="marquee">
+          <ul class="marquee-track">
+            <li class="marquee-item"><span class="agent-mark" style="--mark: url('/brand/agents/claude.svg')" aria-hidden="true"></span>claude code</li>
+            <li class="marquee-sep" aria-hidden="true"></li>
+            <li class="marquee-item"><span class="agent-mark" style="--mark: url('/brand/agents/codex.svg')" aria-hidden="true"></span>codex cli</li>
+            <li class="marquee-sep" aria-hidden="true"></li>
+            <li class="marquee-item"><span class="agent-mark" style="--mark: url('/brand/agents/opencode.svg')" aria-hidden="true"></span>opencode</li>
+            <li class="marquee-sep" aria-hidden="true"></li>
+            <li class="marquee-item"><span class="agent-mark" style="--mark: url('/brand/agents/cursor.svg')" aria-hidden="true"></span>cursor</li>
+            <li class="marquee-sep" aria-hidden="true"></li>
           </ul>
-          <ul class="chips reveal">
+        </div>
+        <div class="wrap">
+          <ul class="chips" data-anim="rise">
             <li>gemini cli</li>
             <li>vs code</li>
             <li>amp</li>
@@ -148,7 +174,7 @@
 
       <!-- The product, playing. -->
       <div class="wrap wrap-wide">
-        <div class="stage reveal">
+        <div class="stage" data-anim="media">
           <div class="stage-tabs" role="group" aria-label="steps in the loop">
             <button type="button" class="stage-tab" data-step-tab="1" aria-pressed="false" aria-controls="scene">a teammate's agent writes</button>
             <button type="button" class="stage-tab" data-step-tab="2" aria-pressed="false" aria-controls="scene">sent once it settles</button>
@@ -229,21 +255,21 @@
     <!-- ================= FEATURES ================= -->
     <section id="features" class="band">
       <div class="wrap">
-        <div class="section-head reveal">
+        <div class="section-head">
           <p class="kicker">features</p>
           <h2>it sits beside git, never on top of it</h2>
           <p class="lede">turn it off and your repository is exactly what it was.</p>
         </div>
 
-        <ul class="feature-list stagger">
-          <li class="reveal"><b>silent by default.</b> a change that lands cleanly is written with no prompt and no notification. that is most of real use.</li>
-          <li class="reveal"><b>conflicts go to your agent.</b> same-line collisions arrive as ours, theirs, and ancestor, and your own agent merges them.</li>
-          <li class="reveal"><b>pure git underneath.</b> one ref holds the last agreed state. <code>HEAD</code> never moves and nothing appears in <code>git log</code>.</li>
-          <li class="reveal"><b>one-command undo.</b> anything crosscode wrote comes back with <code>git checkout refs/crosscode/shadow -- &lt;path&gt;</code>.</li>
-          <li class="reveal"><b>same-branch rooms.</b> sync happens within one project and one branch name. different branches means you did not want to sync.</li>
-          <li class="reveal"><b>secrets never move.</b> environment files, <code>.ssh/</code>, <code>.aws/</code>, <code>.kube/</code>, private keys and keystores, <code>*credentials*</code>, <code>kubeconfig</code>, <code>*.tfvars</code> and <code>*.tfstate</code> are dropped before capture. untracked files are never sent.</li>
-          <li class="reveal"><b>mcp native.</b> a standard stdio mcp server, so there is no editor extension to install.</li>
-          <li class="reveal"><b>survives the network.</b> the daemon keeps capturing offline and catches up from its cursor when it reconnects.</li>
+        <ul class="feature-list">
+          <li data-anim="rise"><b>silent by default.</b> a change that lands cleanly is written with no prompt and no notification. that is most of real use.</li>
+          <li data-anim="rise"><b>conflicts go to your agent.</b> same-line collisions arrive as ours, theirs, and ancestor, and your own agent merges them.</li>
+          <li data-anim="rise"><b>pure git underneath.</b> one ref holds the last agreed state. <code>HEAD</code> never moves and nothing appears in <code>git log</code>.</li>
+          <li data-anim="rise"><b>one-command undo.</b> anything crosscode wrote comes back with <code>git checkout refs/crosscode/shadow -- &lt;path&gt;</code>.</li>
+          <li data-anim="rise"><b>same-branch rooms.</b> sync happens within one project and one branch name. different branches means you did not want to sync.</li>
+          <li data-anim="rise"><b>secrets never move.</b> environment files, <code>.ssh/</code>, <code>.aws/</code>, <code>.kube/</code>, private keys and keystores, <code>*credentials*</code>, <code>kubeconfig</code>, <code>*.tfvars</code> and <code>*.tfstate</code> are dropped before capture. untracked files are never sent.</li>
+          <li data-anim="rise"><b>mcp native.</b> a standard stdio mcp server, so there is no editor extension to install.</li>
+          <li data-anim="rise"><b>survives the network.</b> the daemon keeps capturing offline and catches up from its cursor when it reconnects.</li>
         </ul>
       </div>
     </section>
@@ -251,7 +277,7 @@
     <!-- ================= SAFETY ================= -->
     <section id="safety">
       <div class="wrap">
-        <div class="section-head reveal">
+        <div class="section-head">
           <p class="kicker">control</p>
           <h2>you keep the last word on your own files</h2>
           <p class="lede">
@@ -260,33 +286,33 @@
           </p>
         </div>
 
-        <div class="seal-grid reveal">
-          <div class="seal seal-plain">
+        <div class="seal-grid">
+          <div data-anim="rise" class="seal seal-plain">
             <h3>it waits for you</h3>
             <p>a file you or your agent touched in the last ten seconds is never written to,
             and syncing pauses outright during a rebase, merge, or bisect.</p>
           </div>
-          <div class="seal seal-plain">
+          <div data-anim="rise" class="seal seal-plain">
             <h3>conflicts go to your agent</h3>
             <p>a same-line collision is never applied. it arrives as ours, theirs, and
             ancestor, and the agent already running on your machine merges it.</p>
           </div>
-          <div class="seal seal-plain">
+          <div data-anim="rise" class="seal seal-plain">
             <h3>git is off limits</h3>
             <p>no commits, branches, index, stash, or remotes. <code>HEAD</code> never moves,
             nothing pushes, and nothing shows up in <code>git log</code>.</p>
           </div>
-          <div class="seal seal-plain">
+          <div data-anim="rise" class="seal seal-plain">
             <h3>undo is one command</h3>
             <p>anything crosscode wrote comes back with
             <code>git checkout refs/crosscode/shadow -- &lt;path&gt;</code>.</p>
           </div>
-          <div class="seal seal-plain">
+          <div data-anim="rise" class="seal seal-plain">
             <h3>tracked files only</h3>
             <p>untracked files never move, and the secret denylist is dropped before capture
             even when those files are tracked.</p>
           </div>
-          <div class="seal seal-plain">
+          <div data-anim="rise" class="seal seal-plain">
             <h3>one branch, one room</h3>
             <p>sync happens inside a single project and branch name. checking out something
             else is how you say you did not want it yet.</p>
@@ -300,7 +326,7 @@
     <!-- ================= PRIVACY ================= -->
     <section id="privacy" class="band">
       <div class="wrap">
-        <div class="section-head reveal">
+        <div class="section-head">
           <p class="kicker">privacy</p>
           <h2>only the files you sync ever leave the room</h2>
           <p class="lede">
@@ -310,8 +336,8 @@
           </p>
         </div>
 
-        <div class="seal-grid reveal">
-          <div class="seal seal-sealed">
+        <div class="seal-grid">
+          <div data-anim="rise" class="seal seal-sealed">
             <h3>never leaves your machine</h3>
             <ul>
               <li>untracked files</li>
@@ -321,7 +347,7 @@
             </ul>
             <p class="seal-note">stop crosscode and an ordinary git repository is left behind.</p>
           </div>
-          <div class="seal seal-open">
+          <div data-anim="rise" class="seal seal-open">
             <h3>what the service stores</h3>
             <ul>
               <li>the tracked files you edit while syncing, with their paths and hashes</li>
@@ -347,7 +373,7 @@
     <!-- ================= PRICING ================= -->
     <section id="pricing">
       <div class="wrap">
-        <div class="section-head reveal">
+        <div class="section-head">
           <p class="kicker">pricing</p>
           <h2>everything is free, permanently</h2>
           <p class="lede">
@@ -357,7 +383,7 @@
           </p>
         </div>
 
-        <div class="plan-strip reveal">
+        <div class="plan-strip" data-anim>
           <div>
             <h3>mit licensed</h3>
             <p>the cli, daemon, and mcp server are yours to read, modify, and fork.</p>
@@ -377,7 +403,7 @@
     <!-- ================= INSTALL ================= -->
     <section id="install" class="band">
       <div class="wrap">
-        <div class="section-head reveal">
+        <div class="section-head">
           <p class="kicker">install</p>
           <h2>hand the setup to the agent you already have open</h2>
           <p class="lede">
@@ -387,10 +413,10 @@
           </p>
         </div>
 
-        <div class="panel install-panel reveal">
+        <div class="panel install-panel" data-anim="media">
           <header class="panel-bar">
             <span class="panel-path">paste into your coding agent</span>
-            <button class="copy-btn" type="button" data-copy-target="install-prompt-text">copy prompt</button>
+            <button class="copy-btn" type="button" data-copy-target="install-prompt-text" data-cursor="copy">copy prompt</button>
           </header>
           <pre tabindex="0"><code id="install-prompt-text">set up crosscode for this project. crosscode syncs uncommitted working-tree files between
 my teammates' checkouts and mine in real time: they edit, my copy updates within seconds,
@@ -433,10 +459,10 @@ unless there is a conflict you cannot merge on your own.</code></pre>
           back, so the browser does not have to be on the same box as the terminal. restart
           your agent afterwards so it picks up the new mcp server. codex cli's config is
           toml and <code>start</code> does not write it, so codex users add a three-line
-          entry by hand &mdash; see <a href="/docs/mcp-clients.html">mcp client setup</a>.
+          entry by hand. see <a href="/docs/mcp-clients.html">mcp client setup</a>.
         </p>
 
-        <details class="disclose reveal">
+        <details class="disclose" data-anim="rise">
           <summary>or run the commands yourself</summary>
           <div class="disclose-body">
             <p class="note">
@@ -447,7 +473,7 @@ unless there is a conflict you cannot merge on your own.</code></pre>
             <div class="panel install-panel">
               <header class="panel-bar">
                 <span class="panel-path">run in your project</span>
-                <button class="copy-btn" type="button" data-copy-target="install-command-text">copy</button>
+                <button class="copy-btn" type="button" data-copy-target="install-command-text" data-cursor="copy">copy</button>
               </header>
               <pre class="code" tabindex="0"><code id="install-command-text">npm install -g crosscode-cli
 cd your-repo
@@ -469,49 +495,49 @@ crosscode start</code></pre>
     <!-- ================= FAQ ================= -->
     <section id="faq">
       <div class="wrap">
-        <div class="section-head reveal">
+        <div class="section-head">
           <p class="kicker">questions</p>
           <h2>asked before installing</h2>
         </div>
 
-        <div class="faq stagger">
-          <details class="faq-item reveal">
+        <div class="faq">
+          <details class="faq-item" data-anim="rise">
             <summary>can you read my code?</summary>
             <div class="faq-body">
               <p>the files you sync, yes. there is no end-to-end encryption: contents travel over tls and are encrypted at rest by our hosts, supabase and vercel, under keys they hold, so a crosscode engineer with production access could read them. if that is not acceptable for a repository, do not sync it: crosscode is opt-in per checkout. the <a href="/docs/privacy.html">privacy page</a> lists everything the service holds.</p>
             </div>
           </details>
-          <details class="faq-item reveal">
+          <details class="faq-item" data-anim="rise">
             <summary>will it overwrite what i am working on?</summary>
             <div class="faq-body">
               <p>no. a file you or your agent touched in the last ten seconds is never written to, and an incoming change only lands silently when your copy matched the last agreed state. anything else is a 3-way merge, and a same-line collision becomes a conflict that is handed to your agent rather than applied.</p>
             </div>
           </details>
-          <details class="faq-item reveal">
+          <details class="faq-item" data-anim="rise">
             <summary>can it rewrite my branch history or force-push?</summary>
             <div class="faq-body">
               <p>no. crosscode never stages, commits, pushes, resets, rebases, or changes remotes, and it never moves <code>HEAD</code>. it keeps one ref of its own, <code>refs/crosscode/shadow</code>, which does not appear in <code>git log</code>.</p>
             </div>
           </details>
-          <details class="faq-item reveal">
+          <details class="faq-item" data-anim="rise">
             <summary>what if we are on different branches?</summary>
             <div class="faq-body">
               <p>nothing syncs. a room is one project plus one branch name, because working on a different branch is how you say you did not want the other person's changes yet.</p>
             </div>
           </details>
-          <details class="faq-item reveal">
+          <details class="faq-item" data-anim="rise">
             <summary>does my code get sent to an ai provider?</summary>
             <div class="faq-body">
               <p>no. crosscode has no ai features and stores no model provider credentials. when there is a conflict, it is handed to the coding agent already running on your machine, which reads your files locally.</p>
             </div>
           </details>
-          <details class="faq-item reveal">
+          <details class="faq-item" data-anim="rise">
             <summary>what happens if i stop running it?</summary>
             <div class="faq-body">
               <p>nothing about your checkout changes. it was an ordinary git repository the whole time, so there is no lock-in format to migrate away from.</p>
             </div>
           </details>
-          <details class="faq-item reveal">
+          <details class="faq-item" data-anim="rise">
             <summary>is it worth it for one person?</summary>
             <div class="faq-body">
               <p>no. crosscode is built for a shared codebase with more than one person on it. if a repository will only ever have you in it, plain git is the better tool.</p>
@@ -523,12 +549,12 @@ crosscode start</code></pre>
 
     <!-- ================= CLOSE ================= -->
     <section class="close">
-      <div class="wrap reveal">
+      <div class="wrap">
         <h2>put it in your team's repo</h2>
         <p class="lede">one prompt, in the checkout you already have.</p>
         <div class="hero-cmd">
           <code>paste one prompt into your coding agent</code>
-          <button class="copy-btn" type="button" data-copy-target="install-prompt-text">copy prompt</button>
+          <button class="copy-btn" type="button" data-copy-target="install-prompt-text" data-cursor="copy">copy prompt</button>
         </div>
       </div>
     </section>
@@ -536,11 +562,11 @@ crosscode start</code></pre>
 
   <footer class="site-footer">
     <div class="wrap footer-grid">
-      <div class="footer-brand">
+      <div class="footer-brand" data-anim="rise">
         <a class="brand" href="/">crosscode</a>
         <p>real-time codebase sync for people and coding agents working in separate checkouts of one repository. mit licensed.</p>
       </div>
-      <nav class="footer-col" aria-label="documentation">
+      <nav class="footer-col" data-anim="rise" aria-label="documentation">
         <h2>docs</h2>
         <a href="/docs/index.html">overview</a>
         <a href="/docs/install.html">install and quickstart</a>
@@ -549,7 +575,7 @@ crosscode start</code></pre>
         <a href="/docs/cli.html">cli reference</a>
         <a href="/docs/mcp-clients.html">mcp clients</a>
       </nav>
-      <nav class="footer-col" aria-label="trust">
+      <nav class="footer-col" data-anim="rise" aria-label="trust">
         <h2>trust</h2>
         <a href="/docs/safety.html">safety model</a>
         <a href="/docs/privacy.html">privacy</a>
@@ -558,7 +584,7 @@ crosscode start</code></pre>
         <a href="/docs/support.html">support</a>
         <a href="/docs/index.html#legal">all policies</a>
       </nav>
-      <nav class="footer-col" aria-label="more">
+      <nav class="footer-col" data-anim="rise" aria-label="more">
         <h2>more</h2>
         <a href="/auth/signin.html">sign in</a>
         <a href="https://github.com/amsultan2010/crosscode" rel="noopener">github</a>

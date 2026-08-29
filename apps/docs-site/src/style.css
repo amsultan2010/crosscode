@@ -14,41 +14,42 @@
 :root {
   color-scheme: dark;
 
-  --bg: #000000;
-  --bg-raise: #0c0c0e;
-  --bg-sunk: #08080a;
-  --line: rgba(255, 255, 255, 0.09);
-  --line-2: rgba(255, 255, 255, 0.2);
+  /* Neutrals carry a slight cool cast rather than sitting on pure black and pure
+     white. #000 on #fff is the default nobody chose; every step of this scale is
+     tinted the same direction so the surfaces read as one material. Contrast was
+     re-measured after the shift: every token below still clears its original
+     ratio (text-3 is 6.1:1 on --bg, 5.8:1 on --bg-raise). */
+  --bg: #0a0b0e;
+  --bg-raise: #111318;
+  --bg-sunk: #06070a;
+  --line: rgba(237, 238, 242, 0.09);
+  --line-2: rgba(237, 238, 242, 0.2);
   /* --line and --line-2 draw dividers and decorative edges, which WCAG 1.4.11 exempts.
      --control-line draws the edge that *is* the control -- an input's box, a button's
      outline -- and has to clear 3:1 against the surface behind it. On --bg-raise it is
-     about 4:1. Anything you can click or type into takes this one. */
-  --control-line: rgba(255, 255, 255, 0.42);
-  --text: #ffffff;
-  --text-2: #9d9da6;
-  /* Was #67676f, which is 3.8:1 on black and fails 1.4.3 at the ~13-14px this token is
-     always used at. #8a8a92 is 6.1:1 on --bg and 5.7:1 on --bg-raise. */
-  --text-3: #8a8a92;
+     about 4.5:1. Anything you can click or type into takes this one. */
+  --control-line: rgba(237, 238, 242, 0.42);
+  --text: #edeef2;
+  --text-2: #a2a6b0;
+  --text-3: #8b909b;
 
-  /* White is the accent. Colour is reserved for things that mean something:
-     a diff sign, a live dot. */
-  --accent: #ffffff;
-  --accent-hot: #e6e6e8;
-  --accent-fg: #000000;
-  --accent-soft: rgba(255, 255, 255, 0.08);
-  --pending: #d6d6db;
-  --pending-soft: rgba(255, 255, 255, 0.07);
+  /* Near-white is the accent. Colour is reserved for things that mean something:
+     a diff sign, a live dot. Two surfaces carry the whole page. */
+  --accent: #edeef2;
+  --accent-hot: #ffffff;
+  --accent-fg: #06070a;
+  --accent-soft: rgba(237, 238, 242, 0.08);
+  --pending: #d3d5dc;
+  --pending-soft: rgba(237, 238, 242, 0.07);
   --add: #5fcf8e;
   --del: #e2756e;
   --live: #4ade80;
 
-  --term-bg: #0a0a0c;
-  --term-bg-2: #0e0e11;
-  --term-line: rgba(255, 255, 255, 0.08);
-  --term-text: #c9c9d1;
-  /* Was #6b6b73: 3.8:1 on --term-bg, and it carries real text (log lines, proposal
-     notes, code comments). #8c8c95 is 6.0:1. */
-  --term-dim: #8c8c95;
+  --term-bg: #0c0d11;
+  --term-bg-2: #101218;
+  --term-line: rgba(237, 238, 242, 0.08);
+  --term-text: #ccced6;
+  --term-dim: #8d919c;
 
   --focus: var(--accent);
   --shadow-lg: 0 40px 90px -50px rgba(0, 0, 0, 1);
@@ -56,19 +57,68 @@
 
   --wrap: 68rem;
   --wrap-wide: 84rem;
+  --wrap-tight: 54rem;
   --prose: 38rem;
-  --radius: 14px;
-  --radius-sm: 8px;
 
-  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  /* Two radii for the whole site and nothing between them: square, or fully
+     round. Cards at 12, buttons at 8, inputs at 6 is the default-settings look,
+     and this product is made of terminals, so square is the honest corner. */
+  --radius: 0px;
+  --radius-sm: 0px;
+  --radius-round: 999px;
+
+  /* Three real cuts, self-hosted, latin subset only. Space Grotesk has a genuine
+     display personality at size; Instrument Sans sets text; JetBrains Mono is the
+     product's own voice, so it carries code, kickers, and every terminal chrome. */
+  --display: "Space Grotesk", "Instrument Sans", system-ui, sans-serif;
+  --sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Motion tokens. src/motion.js mirrors these as D and E so a duration is the
+     same number whether it is spent in CSS or in GSAP. */
+  --d-fast: 0.22s;
+  --d-base: 0.4s;
+  --e-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --e-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+/* Self-hosted so there is no third-party request on first paint and no layout
+   shift when the display face arrives late. */
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("/fonts/space-grotesk-latin.woff2") format("woff2-variations");
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+2000-206F, U+2212;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  src: url("/fonts/instrument-sans-latin.woff2") format("woff2-variations");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+2000-206F, U+2212;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/jetbrains-mono-latin.woff2") format("woff2-variations");
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+2000-206F, U+2212;
 }
 
 * { box-sizing: border-box; }
 
 html {
   font-size: 16px;
-  scroll-behavior: smooth;
+  /* Deliberately not scroll-behavior: smooth. ScrollToPlugin drives every
+     in-page anchor now, and a CSS smooth scroll running at the same time fights
+     the tween for the scroll position. Without JS the jump is instant, which is
+     the correct fallback. */
   scrollbar-color: var(--line-2) transparent;
 }
 
@@ -77,8 +127,10 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
-  font-size: 1rem;
-  line-height: 1.6;
+  font-size: 1.0625rem;
+  line-height: 1.62;
+  letter-spacing: -0.006em;
+  font-weight: 400;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow-x: hidden;
@@ -88,27 +140,31 @@ body {
 
 h1, h2, h3, h4 {
   color: var(--text);
+  font-family: var(--display);
   line-height: 1.1;
   margin: 0 0 0.7rem;
   text-wrap: balance;
 }
 
 h1 {
-  font-size: clamp(2.7rem, 7.4vw, 5rem);
+  font-size: clamp(3.1rem, 8.6vw, 6.4rem);
   letter-spacing: -0.045em;
-  line-height: 0.98;
-  font-weight: 800;
-  margin-bottom: 1.4rem;
+  /* Room for descenders: the display lines animate out of overflow-clipped
+     masks, and a line-height under about 0.95 clips the tails of g and y. */
+  line-height: 0.96;
+  font-weight: 700;
+  margin-bottom: 1.6rem;
 }
 
 h2 {
-  font-size: clamp(1.8rem, 3.9vw, 2.7rem);
+  font-size: clamp(2rem, 4.4vw, 3.1rem);
   letter-spacing: -0.038em;
-  font-weight: 750;
+  line-height: 1.04;
+  font-weight: 700;
 }
 
-h3 { font-size: 1.02rem; font-weight: 640; letter-spacing: -0.012em; }
-h4 { font-size: 0.94rem; font-weight: 640; letter-spacing: -0.01em; }
+h3 { font-size: 1.05rem; font-weight: 600; letter-spacing: -0.014em; }
+h4 { font-size: 0.95rem; font-weight: 600; letter-spacing: -0.012em; }
 
 p { margin: 0 0 1rem; color: var(--text-2); }
 p:last-child { margin-bottom: 0; }
@@ -122,7 +178,7 @@ code {
   font-size: 0.87em;
   background: var(--bg-raise);
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: 0;
   padding: 0.08em 0.36em;
 }
 
@@ -147,8 +203,8 @@ pre code {
 
 :focus-visible {
   outline: 2px solid var(--focus);
-  outline-offset: 2px;
-  border-radius: 3px;
+  outline-offset: 3px;
+  border-radius: 0;
 }
 
 .skip-link {
@@ -235,14 +291,25 @@ pre code {
 
 /* --- header -------------------------------------------------------------- */
 
+/* --header-veil is scrubbed from 0 to 1 over the first 220px of scroll by
+   src/landing-motion.js, so the bar is clear glass over the hero and only takes
+   its ground and its edge once there is content passing underneath it. Without
+   JS it stays at the initial value of 1, which is the old always-on treatment. */
+@property --header-veil {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 1;
+}
+
 .site-header {
   position: sticky;
   top: 0;
   z-index: 40;
-  background: color-mix(in srgb, var(--bg) 72%, transparent);
-  backdrop-filter: blur(14px) saturate(140%);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
-  border-bottom: 1px solid var(--line);
+  --header-veil: 1;
+  background: color-mix(in srgb, var(--bg) calc(var(--header-veil) * 78%), transparent);
+  backdrop-filter: blur(calc(var(--header-veil) * 16px)) saturate(140%);
+  -webkit-backdrop-filter: blur(calc(var(--header-veil) * 16px)) saturate(140%);
+  border-bottom: 1px solid rgba(237, 238, 242, calc(var(--header-veil) * 0.09));
 }
 
 /* Two markups share this header: the landing page's <nav class="nav"> with a
@@ -296,7 +363,7 @@ pre code {
   gap: 0.5rem;
   background: none;
   border: 1px solid var(--control-line);
-  border-radius: 999px;
+  border-radius: var(--radius-round);
   color: var(--text-2);
   font: inherit;
   font-size: 0.85rem;
@@ -344,7 +411,7 @@ pre code {
   align-items: center;
   gap: 0.42rem;
   border: 1px solid var(--control-line);
-  border-radius: 999px;
+  border-radius: var(--radius-round);
   padding: 0.32rem 0.78rem;
   text-decoration: none;
   color: var(--text-2);
@@ -387,7 +454,7 @@ pre code {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  border-radius: 999px;
+  border-radius: var(--radius-round);
   border: 1px solid transparent;
   padding: 0.6rem 1.25rem;
   font: inherit;
@@ -411,7 +478,7 @@ pre code {
   font-weight: 620;
 }
 
-.btn-primary:hover { background: var(--accent-hot); transform: translateY(-1px); }
+.btn-primary:hover { background: var(--accent-hot); }
 
 .btn-quiet {
   background: var(--bg-raise);
@@ -419,23 +486,60 @@ pre code {
   color: var(--text);
 }
 
-.btn-quiet:hover { border-color: var(--line-2); background: #131316; transform: translateY(-1px); }
+.btn-quiet:hover { border-color: var(--line-2); background: #171a20; }
+
+/* --- pressed states -----------------------------------------------------
+   Hover and focus-visible were already covered; this is the third state, which
+   tells you the press registered before the navigation or the copy lands.
+   Opacity and a sub-pixel scale, so it never fights the magnetic transform
+   GSAP owns on these same elements.
+   ------------------------------------------------------------------------- */
+
+.btn:active,
+.copy-btn:active,
+.nav-ghost:active,
+.stage-tab:active,
+.meta-item:active { opacity: 0.72; }
+
+.btn-primary:active { background: var(--accent-hot); }
+.chips li:active { border-color: var(--accent); color: var(--text); }
+
+.faq-item summary:active,
+.disclose > summary:active { color: var(--text-3); }
+
+.btn:disabled,
+.copy-btn:disabled,
+.stage-tab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 
 /* --- sections ------------------------------------------------------------ */
 
-section { padding: 4.75rem 0; }
+/* Vertical air is a composition decision, not a token applied uniformly. Each
+   section below sets its own, and they deliberately do not match: the argument
+   sections breathe, the reference sections run tighter. */
+section { padding: 7rem 0; }
 section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); }
 
+#features { padding: 8rem 0 8.5rem; }
+#safety { padding: 11rem 0 9rem; }
+#privacy { padding: 8rem 0 9.5rem; }
+#pricing { padding: 6.5rem 0 7rem; }
+#install { padding: 10rem 0 8rem; }
+#faq { padding: 8.5rem 0 6rem; }
+
 @media (max-width: 48rem) {
-  section { padding: 3.5rem 0; }
+  section,
+  #features, #safety, #privacy, #pricing, #install, #faq { padding: 4rem 0 4.25rem; }
 }
 
 /* --- hero ---------------------------------------------------------------- */
 
 .hero {
   position: relative;
-  padding: 6rem 0 0;
-  text-align: center;
+  padding: 8.5rem 0 0;
   overflow: hidden;
 }
 
@@ -454,57 +558,104 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   mask-image: radial-gradient(120% 70% at 50% 12%, #000 0%, transparent 72%);
 }
 
+/* Two columns that do not match: the headline takes the width it needs and the
+   supporting meta sits in a narrow rail beside it. A centred headline over a
+   centred subhead over a centred button is the layout you get by default. */
 .hero-inner {
   position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  max-width: 54rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 0.85fr);
+  align-items: end;
+  column-gap: 4rem;
+  max-width: var(--wrap-wide);
 }
 
-.pill-row {
+.hero-main { grid-column: 1; }
+.hero-rail {
+  grid-column: 2;
+  padding-bottom: 0.5rem;
+  border-left: 1px solid var(--line);
+  padding-left: 1.75rem;
+}
+
+@media (max-width: 64rem) {
+  .hero-inner { grid-template-columns: minmax(0, 1fr); row-gap: 2.25rem; }
+  .hero-main, .hero-rail { grid-column: 1; }
+  .hero-rail { border-left: 0; border-top: 1px solid var(--line); padding-left: 0; padding-top: 1.5rem; }
+}
+
+/* Two facts about the project, set as a rule of small caps rather than a row of
+   rounded chips. Badge rows above an H1 are the single most template-shaped
+   thing a landing page can do, and these are real links worth reading. */
+.meta-row {
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
-  gap: 0.5rem;
-  margin-bottom: 2rem;
-}
-
-.pill {
-  display: inline-flex;
   align-items: center;
-  gap: 0.6rem;
-  border: 1px solid var(--line);
-  background: var(--bg-raise);
-  border-radius: 999px;
-  padding: 0.32rem 0.9rem 0.32rem 0.4rem;
-  font-size: 0.84rem;
-  color: var(--text-2);
+  gap: 0.5rem 1.6rem;
+  margin: 0 0 1.9rem;
+  padding-bottom: 1rem;
+  position: relative;
+  /* Drawn left to right on entry rather than faded in. A border can only fade,
+     and scaling the row itself would squash the text sitting on it, so the rule
+     is a pseudo-element scaled by a variable the tween owns. */
+  --rule: 1;
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.meta-row::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: var(--line);
+  transform: scaleX(var(--rule));
+  transform-origin: left center;
+}
+
+.meta-item {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  color: var(--text-3);
   text-decoration: none;
-  transition: border-color 0.15s ease, color 0.15s ease;
+  padding-block: 0.25rem;
 }
 
-.pill:hover { border-color: var(--line-2); color: var(--text); }
+.meta-item b { color: var(--text); font-weight: 500; }
 
-.pill-tag {
-  background: var(--accent);
-  color: var(--accent-fg);
-  border-radius: 999px;
-  padding: 0.1rem 0.5rem;
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+/* The underline is drawn on hover rather than faded, so the direction of the
+   gesture is legible. Kept in CSS: it is one property and GSAP would be waste. */
+.meta-item::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform var(--d-base) var(--e-out);
 }
 
-.pill-arrow { color: var(--text-3); font-size: 0.8rem; }
+.meta-item:hover { color: var(--text); }
+.meta-item:hover::after { transform: scaleX(1); }
+.meta-item:focus-visible::after { transform: scaleX(1); }
 
 .hero-lede {
-  font-size: clamp(1.02rem, 1.6vw, 1.2rem);
-  max-width: 34rem;
+  font-size: clamp(1.1rem, 1.7vw, 1.35rem);
+  max-width: 30rem;
+  line-height: 1.45;
   margin-bottom: 2.2rem;
 }
 
-.hero-lede:has(+ .hero-byline) { margin-bottom: 0.6rem; }
+.hero-lede:has(+ .hero-byline) { margin-bottom: 0.8rem; }
 
 .hero-byline {
   font-size: 0.93rem;
@@ -515,7 +666,6 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 .hero-actions {
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
   gap: 0.75rem;
   margin-bottom: 2rem;
 }
@@ -526,7 +676,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   gap: 0.75rem;
   background: var(--term-bg);
   border: 1px solid var(--term-line);
-  border-radius: 999px;
+  border-radius: var(--radius-round);
   padding: 0.4rem 0.4rem 0.4rem 1.1rem;
   max-width: 100%;
 }
@@ -544,7 +694,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 .copy-btn {
   background: var(--bg-raise);
   border: 1px solid var(--control-line);
-  border-radius: 999px;
+  border-radius: var(--radius-round);
   color: var(--text-2);
   font: inherit;
   font-size: 0.85rem;
@@ -557,6 +707,27 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 .copy-btn:hover { color: var(--text); border-color: var(--line-2); }
 .copy-btn.is-copied { color: var(--accent); border-color: var(--accent); }
 
+/* In the hero rail the bar has a 436px column rather than the full width it gets
+   in the closing section, and the label does not fit on one line there. It wraps
+   to two and squares off instead of being clipped to "paste one prompt into y".
+   Square is already one of the site's two radii, so nothing new is introduced. */
+.hero-rail .hero-cmd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.7rem;
+  border-radius: 0;
+  padding: 0.75rem 0.85rem;
+  width: 100%;
+}
+
+.hero-rail .hero-cmd code {
+  white-space: normal;
+  overflow: visible;
+  flex: 1 1 100%;
+  line-height: 1.4;
+}
+
 .hero-foot {
   margin-top: 1.1rem;
   font-size: 0.93rem;
@@ -567,7 +738,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 
 /* The hero centres its own copy; the product shot below it is a UI, so it opts
    back out rather than inheriting the centring. */
-.stage { margin-top: 4.5rem; text-align: left; }
+.stage { margin-top: 5.5rem; text-align: left; }
 
 .stage-tabs {
   display: flex;
@@ -575,7 +746,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   flex-wrap: wrap;
   gap: 0.25rem;
   border: 1px solid var(--control-line);
-  border-radius: 999px;
+  border-radius: var(--radius-round);
   padding: 0.28rem;
   width: fit-content;
   max-width: 100%;
@@ -586,7 +757,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 .stage-tab {
   background: none;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-round);
   color: var(--text-3);
   font: inherit;
   font-size: 0.85rem;
@@ -608,7 +779,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   margin: 1.5rem auto 0;
   background: none;
   border: 1px solid var(--control-line);
-  border-radius: 999px;
+  border-radius: var(--radius-round);
   color: var(--text-3);
   font: inherit;
   font-size: 0.78rem;
@@ -673,7 +844,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 .file-state {
   flex-shrink: 0;
   border: 1px solid var(--term-line);
-  border-radius: 999px;
+  border-radius: var(--radius-round);
   padding: 0.05rem 0.5rem;
 }
 
@@ -703,7 +874,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 
 .badge {
   display: inline-block;
-  border-radius: 999px;
+  border-radius: var(--radius-round);
   padding: 0.06rem 0.5rem;
   font-family: var(--mono);
   font-size: 0.68rem;
@@ -765,7 +936,7 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   font-size: 0.6rem;
   color: var(--accent-fg);
   background: var(--accent);
-  border-radius: 999px;
+  border-radius: var(--radius-round);
   padding: 0.08rem 0.4rem;
   white-space: nowrap;
 }
@@ -896,7 +1067,68 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 
 /* --- agent wall ---------------------------------------------------------- */
 
-.agents { padding: 5rem 0; border-bottom: 1px solid var(--line); }
+/* The one section that leaves the container and runs the full width of the
+   viewport. It is also the page's ambient motion: after every entrance has
+   finished, this is still moving, which is what separates a page that was
+   animated from a page that is alive. */
+.agents {
+  padding: 5rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.marquee {
+  position: relative;
+  width: 100vw;
+  margin-left: 50%;
+  transform: translateX(-50%);
+  overflow: hidden;
+  /* Fades the ends rather than cutting them, so a name is never half-clipped
+     against a hard edge. */
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 8%, #000 92%, transparent);
+  mask-image: linear-gradient(to right, transparent, #000 8%, #000 92%, transparent);
+}
+
+.marquee-track {
+  display: flex;
+  width: max-content;
+  align-items: center;
+  gap: 3.25rem;
+  padding: 0.4rem 1.6rem;
+  will-change: transform;
+}
+
+.marquee-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-shrink: 0;
+  font-family: var(--display);
+  font-size: clamp(1.35rem, 2.6vw, 2.05rem);
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  color: var(--text-3);
+  white-space: nowrap;
+  transition: color var(--d-base) var(--e-out);
+}
+
+.marquee-item:hover { color: var(--text); }
+
+.marquee-sep {
+  flex-shrink: 0;
+  width: 0.3rem;
+  height: 0.3rem;
+  border-radius: 50%;
+  background: var(--line-2);
+}
+
+.agent-mark {
+  width: 1.05em;
+  height: 1.05em;
+  flex-shrink: 0;
+  background: currentColor;
+  mask: var(--mark) center / contain no-repeat;
+  -webkit-mask: var(--mark) center / contain no-repeat;
+}
 
 .chips {
   list-style: none;
@@ -904,71 +1136,32 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   padding: 0;
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
   gap: 0.5rem;
 }
 
 .chips li {
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--radius-round);
   padding: 0.4rem 1rem;
   font-size: 0.95rem;
   color: var(--text-2);
-  transition: border-color 0.15s ease, color 0.15s ease;
+  transition: border-color var(--d-fast) var(--e-out), color var(--d-fast) var(--e-out);
 }
 
 .chips li:hover { border-color: var(--line-2); color: var(--text); }
-
-/* The four agents most people arrive with get their own row, with the mark next to
-   the name. The SVGs are masks rather than <img>, so they take the row's colour and
-   a replacement file needs no CSS change. */
-.agent-logos {
-  list-style: none;
-  margin: 0 0 1.1rem;
-  padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  align-items: center;
-  gap: 0.6rem 2.4rem;
-}
-
-.agent-logos li {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.55rem;
-  font-size: 1.05rem;
-  font-weight: 560;
-  letter-spacing: -0.01em;
-  color: var(--text-2);
-  transition: color 0.15s ease;
-}
-
-.agent-logos li:hover { color: var(--text); }
-
-.agent-mark {
-  width: 1.35em;
-  height: 1.35em;
-  flex-shrink: 0;
-  background: currentColor;
-  mask: var(--mark) center / contain no-repeat;
-  -webkit-mask: var(--mark) center / contain no-repeat;
-}
 .chips .chip-more { color: var(--text-3); border-style: dashed; }
 
-/* Inside the hero the agent wall has to share the first screen with the install
+/* Inside the hero the wall has to share the first screen with the install
    command, so it drops the section padding and the divider and runs tighter. */
 .agents-hero {
-  padding: 2.2rem 0 0;
+  padding: 3.5rem 0 0;
   border-bottom: 0;
   position: relative;
 }
 
-.agents-hero .kicker { font-size: 0.76rem; margin-bottom: 0.7rem; }
-
-.agents-hero .chips { gap: 0.4rem; }
-
-.agents-hero .chips li { padding: 0.3rem 0.8rem; font-size: 0.9rem; }
+.agents-hero .kicker { font-size: 0.72rem; margin-bottom: 1.1rem; }
+.agents-hero .chips { gap: 0.4rem; margin-top: 1.4rem; justify-content: center; }
+.agents-hero .chips li { padding: 0.3rem 0.8rem; font-size: 0.88rem; }
 
 /* --- features ------------------------------------------------------------ */
 
@@ -1033,13 +1226,34 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   background: var(--bg-raise);
 }
 
+/* The rule under a card heading is a background whose width is a variable, so
+   GSAP can draw it left to right on entry. As a border it could only fade. */
+@property --rule {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 1;
+}
+
 .seal h3 {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   margin-bottom: 1rem;
   padding-bottom: 1rem;
-  border-bottom: 1px solid var(--line);
+  position: relative;
+  --rule: 1;
+}
+
+.seal h3::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: var(--line-2);
+  transform: scaleX(var(--rule));
+  transform-origin: left center;
 }
 
 .seal h3::before {
@@ -1089,7 +1303,20 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   gap: 2rem;
   margin-top: 3rem;
   padding-top: 2.5rem;
-  border-top: 1px solid var(--line);
+  position: relative;
+  --rule: 1;
+}
+
+.plan-strip::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: var(--line);
+  transform: scaleX(var(--rule));
+  transform-origin: left center;
 }
 
 /* h3 rather than h4 so the heading level does not skip one under the section's h2;
@@ -1223,6 +1450,19 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
 
 .footer-col a:hover { color: var(--text); }
 
+/* src/landing-motion.js wraps the label of these links in two stacked copies and
+   slides both up on hover, so the word leaves and returns rather than changing
+   colour. The second copy is parked exactly one line below the first. */
+.footer-col a,
+.nav-links > a:not(.btn):not(.nav-ghost) { position: relative; }
+
+.hov-out {
+  position: absolute;
+  left: 0;
+  top: 100%;
+  color: var(--text);
+}
+
 /* The docs shell renders a plain <footer class="site-footer"> with bare
    paragraphs instead of the landing page's grid. */
 .site-footer > p {
@@ -1241,23 +1481,131 @@ section.band { background: var(--bg-sunk); border-block: 1px solid var(--line); 
   .footer-brand { grid-column: 1 / -1; }
 }
 
-/* --- reveal -------------------------------------------------------------- */
+/* --- motion staging ------------------------------------------------------
+   Everything that animates in is hidden by CSS *before* JS runs and revealed by
+   the same code that animates it, so there is no flash of unstyled entrance. The
+   gate is a class that JS itself adds, which means a browser with JS off, or a
+   motion module that throws, never sees these rules at all and gets the whole
+   page painted normally. src/motion.js removes it, and an inline failsafe in the
+   document head removes it on a timer if the module never arrives.
+   ------------------------------------------------------------------------- */
 
-.reveal {
+.motion-pending [data-anim] { opacity: 0; }
+.motion-pending [data-anim="rise"] { transform: translateY(1.4rem); }
+.motion-pending [data-anim="rule"] { transform: scaleX(0); }
+.motion-pending [data-anim="media"] { clip-path: inset(0 0 100% 0); }
+.motion-pending .marquee-track { opacity: 0; }
+
+/* A split line is moved out of an overflow-clipped wrapper rather than faded.
+   SplitText writes the wrapper; this gives it somewhere to clip to and the
+   descender room that stops g and y losing their tails on the way up. */
+[data-split] { will-change: transform; }
+.split-line { overflow: hidden; padding-bottom: 0.06em; }
+.split-mask { display: block; overflow: hidden; }
+
+/* Rules that draw themselves rather than fading in. */
+[data-anim="rule"] { transform-origin: left center; }
+
+/* --- pointer layer -------------------------------------------------------
+   Desktop only, and attached by src/motion.js behind a (hover: hover) query, so
+   a touch device never loads or pays for any of it.
+   ------------------------------------------------------------------------- */
+
+.cursor {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 90;
+  width: 2.25rem;
+  height: 2.25rem;
+  margin: -1.125rem 0 0 -1.125rem;
+  border: 1px solid var(--control-line);
+  border-radius: 50%;
+  pointer-events: none;
   opacity: 0;
-  transform: translateY(12px);
-  transition: opacity 0.55s ease, transform 0.55s ease;
+  display: grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent-fg);
+  mix-blend-mode: difference;
 }
 
-.reveal.is-visible { opacity: 1; transform: none; }
+.cursor-label { opacity: 0; white-space: nowrap; }
 
-.stagger > .reveal:nth-child(2) { transition-delay: 0.05s; }
-.stagger > .reveal:nth-child(3) { transition-delay: 0.1s; }
-.stagger > .reveal:nth-child(4) { transition-delay: 0.15s; }
-.stagger > .reveal:nth-child(5) { transition-delay: 0.2s; }
-.stagger > .reveal:nth-child(6) { transition-delay: 0.25s; }
-.stagger > .reveal:nth-child(7) { transition-delay: 0.3s; }
-.stagger > .reveal:nth-child(8) { transition-delay: 0.35s; }
+/* Set only once the replacement ring and dot are in the document, so a motion
+   module that never loaded cannot leave the page without a pointer. */
+.has-cursor,
+.has-cursor a,
+.has-cursor button,
+.has-cursor summary { cursor: none; }
+
+.cursor-dot {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 91;
+  width: 0.3rem;
+  height: 0.3rem;
+  margin: -0.15rem 0 0 -0.15rem;
+  border-radius: 50%;
+  background: var(--accent);
+  pointer-events: none;
+  opacity: 0;
+}
+
+/* Tilt needs a perspective ancestor, and the tilted child needs its own plane
+   or its shadow flattens against the card. */
+.tilt-wrap { perspective: 1100px; }
+.tilt { transform-style: preserve-3d; will-change: transform; }
+
+/* --- scroll progress -----------------------------------------------------
+   A single hairline under the sticky header, scrubbed against document
+   progress. It is decorative: nothing depends on reading it.
+   ------------------------------------------------------------------------- */
+
+.scroll-rule {
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  height: 1px;
+  width: 100%;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left center;
+  pointer-events: none;
+}
+
+/* --- pinned set piece ----------------------------------------------------
+   The stage is the page's one pinned, scrubbed sequence: scrolling it plays the
+   sync loop out step by step instead of a timer doing it behind your back. The
+   pin is only taken on a wide viewport with motion allowed; everywhere else the
+   scene keeps its original self-advancing timer and the section scrolls
+   normally.
+   ------------------------------------------------------------------------- */
+
+.stage-pin { position: relative; }
+.stage-progress {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: -2.25rem;
+  width: 7rem;
+  height: 1px;
+  background: var(--line);
+  opacity: 0;
+}
+
+.stage-progress span {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left center;
+}
 
 /* ==========================================================================
    Docs pages. The markup comes from scripts/generate-docs.mjs (owned by another
@@ -1303,7 +1651,7 @@ main:not(.docs-layout):not(#main) {
 .docs-sidebar a {
   display: block;
   padding: 0.3rem 0.6rem;
-  border-radius: 5px;
+  border-radius: 0;
   border-left: 2px solid transparent;
   font-size: 0.88rem;
   color: var(--text-2);
@@ -1433,13 +1781,13 @@ main:not(.docs-layout):not(#main) {
   text-transform: uppercase;
   color: var(--text-3);
   border: 1px solid var(--line-2);
-  border-radius: 999px;
+  border-radius: var(--radius-round);
   padding: 0.25rem 0.7rem;
   margin-bottom: 1.2rem;
 }
 
 .subtitle { font-size: 1.05rem; color: var(--text-2); max-width: var(--prose); }
-.cta { display: inline-flex; align-items: center; gap: 0.45rem; font-weight: 620; padding: 0.7rem 1.35rem; border-radius: 999px; background: var(--accent); color: var(--accent-fg); text-decoration: none; }
+.cta { display: inline-flex; align-items: center; gap: 0.45rem; font-weight: 620; padding: 0.7rem 1.35rem; border-radius: var(--radius-round); background: var(--accent); color: var(--accent-fg); text-decoration: none; }
 .cta.secondary { background: transparent; color: var(--text); border: 1px solid var(--control-line); }
 .install-steps { font-size: 0.88rem; color: var(--text-3); margin-top: 1.4rem; }
 
@@ -1520,7 +1868,7 @@ main:not(.docs-layout):not(#main) {
   display: flex;
   gap: 0.25rem;
   border: 1px solid var(--control-line);
-  border-radius: 999px;
+  border-radius: var(--radius-round);
   padding: 0.25rem;
   margin-bottom: 1.5rem;
   background: var(--bg-sunk);
@@ -1535,7 +1883,7 @@ main:not(.docs-layout):not(#main) {
   border: 0;
   background: transparent;
   color: var(--text-2);
-  border-radius: 999px;
+  border-radius: var(--radius-round);
   padding: 0.42rem 0.75rem;
   transition: background 0.15s ease, color 0.15s ease;
 }
@@ -1581,7 +1929,7 @@ main:not(.docs-layout):not(#main) {
   border: 1px solid transparent;
   background: var(--accent);
   color: var(--accent-fg);
-  border-radius: 999px;
+  border-radius: var(--radius-round);
   padding: 0.65rem 1rem;
   margin-top: 0.2rem;
   transition: background 0.15s ease;
@@ -1666,7 +2014,18 @@ main:not(.docs-layout):not(#main) {
     scroll-behavior: auto !important;
   }
 
-  .reveal { opacity: 1; transform: none; }
+  /* Reduced motion is a different design, not the same one run faster: every
+     element is simply in its final state, with no travel and nothing staged. */
+  .motion-pending [data-anim],
+  .motion-pending .marquee-track {
+    opacity: 1;
+    transform: none;
+    clip-path: none;
+  }
+
+  .cursor, .cursor-dot, .scroll-rule, .stage-progress { display: none; }
+  .tilt { transform: none !important; }
+
   .scene .add,
   .scene .log-line,
   .scene .proposal { opacity: 1; transform: none; }

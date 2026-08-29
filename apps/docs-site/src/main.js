@@ -1,5 +1,9 @@
-// Landing-page behaviour. Plain modules, no framework and no animation library:
-// this site is Vite with hand-written HTML, CSS, and JS and stays that way.
+// Landing-page behaviour: copy buttons, the mobile nav, the FAQ, and the product
+// scene's own state machine. Still no framework and still hand-written HTML and
+// CSS. Motion is the one thing delegated, to GSAP, through src/motion.js, which
+// this file starts at the bottom once the scene has a controller to hand over.
+
+import { init as initMotion } from "./landing-motion.js";
 
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
@@ -70,33 +74,13 @@ for (const item of document.querySelectorAll(".faq-item")) {
   });
 }
 
-/* -- scroll reveal ------------------------------------------------------- */
-
-const revealEls = document.querySelectorAll(".reveal");
-
-if (reduceMotion.matches) {
-  for (const el of revealEls) el.classList.add("is-visible");
-} else {
-  const observer = new IntersectionObserver(
-    (entries) => {
-      for (const entry of entries) {
-        if (!entry.isIntersecting) continue;
-        entry.target.classList.add("is-visible");
-        observer.unobserve(entry.target);
-      }
-    },
-    { threshold: 0.12, rootMargin: "0px 0px -40px 0px" }
-  );
-
-  for (const el of revealEls) observer.observe(el);
-}
-
 /* -- the animated loop --------------------------------------------------- */
 // One [data-step] attribute on .scene drives every transition in CSS. This file
 // only advances the number, which is what makes pausing and reduced motion
 // cheap: stop advancing, or jump straight to the finished frame.
 
 const scene = document.querySelector("#scene");
+let sceneController = null;
 
 if (scene) {
   const stage = scene.closest(".stage") ?? document;
@@ -115,8 +99,11 @@ if (scene) {
   let timer = null;
   let onScreen = false;
   let userPaused = false;
+  // Set when the pinned scroll sequence takes ownership of the scene. The timer
+  // then stops scheduling entirely rather than racing the scrubbed frame.
+  let handedOver = false;
 
-  const running = () => !userPaused && onScreen && !document.hidden;
+  const running = () => !handedOver && !userPaused && onScreen && !document.hidden;
 
   function paint() {
     scene.dataset.step = String(step);
@@ -157,6 +144,24 @@ if (scene) {
     });
   }
 
+  // Handed to src/landing-motion.js, which drives the same steps from scroll on a
+  // wide viewport. Everywhere else the timer below keeps running as it always has.
+  sceneController = {
+    weights: TIMINGS,
+    setStep(next) {
+      step = next;
+      paint();
+    },
+    suspend() {
+      handedOver = true;
+      stop();
+    },
+    resume() {
+      handedOver = false;
+      if (running()) schedule();
+    },
+  };
+
   if (reduceMotion.matches) {
     // Nothing animates, so render the frame that shows the whole story at once:
     // the edit made, the payload sealed, the proposal received and accepted.
@@ -187,3 +192,10 @@ if (scene) {
     });
   }
 }
+
+/* -- motion -------------------------------------------------------------- */
+
+// Last, and with the scene controller in hand: everything above is behaviour the
+// page needs whether or not a tween ever runs, and none of it should be waiting
+// on an animation library to finish parsing.
+initMotion({ scene: sceneController });

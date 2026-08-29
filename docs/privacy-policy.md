@@ -168,7 +168,7 @@ vendor are on [subprocessors](./subprocessors.md); the mechanisms in use are:
   supabase's standard contractual clauses as a belt-and-braces backstop.
 - **united states** (vercel, posthog, sentry, github, npm): each vendor's data processing
   addendum, incorporating the eu standard contractual clauses; several are additionally
-  certified under the eu–us data privacy framework.
+  certified under the eu-us data privacy framework.
 
 <!-- LAWYER: no transfer impact assessment has been written. At this scale that is a
      deliberate deferral, not an oversight. Needed before any enterprise or public-sector

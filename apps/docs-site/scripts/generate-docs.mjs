@@ -337,11 +337,11 @@ function renderPage({ title, activeKey, description, canonicalPath, bodyHtml, md
   <meta property="og:title" content="${fullTitle}" />
   <meta property="og:description" content="${escapeAttr(description)}" />
   <meta property="og:url" content="${canonical}" />
-  <meta property="og:image" content="/brand/logo-social.png" />
+  <meta property="og:image" content="${SITE_URL}/brand/logo-social.png" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="${fullTitle}" />
   <meta name="twitter:description" content="${escapeAttr(description)}" />
-  <meta name="twitter:image" content="/brand/logo-social.png" />
+  <meta name="twitter:image" content="${SITE_URL}/brand/logo-social.png" />
   <link rel="stylesheet" href="/src/style.css" />
   <script type="application/ld+json">
 ${JSON.stringify(jsonLd, null, 2)}

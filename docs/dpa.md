@@ -175,7 +175,7 @@ stated because omitting it is the thing that makes a security annex dishonest:
 - no formal business continuity or disaster recovery plan beyond the managed provider's
   automated backups.
 - no 24/7 on-call. one person, best effort.
-- availability, resilience and restore testing (art. 32(1)(b)–(c)) rest on supabase's and
+- availability, resilience and restore testing (art. 32(1)(b) to (c)) rest on supabase's and
   vercel's platform guarantees, not on anything crosscode operates.
 
 ## 8. sub-processors
