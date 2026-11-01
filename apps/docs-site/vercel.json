@@ -11,5 +11,8 @@
     "api/[...path].ts": {
       "maxDuration": 30
     }
+  },
+  "github": {
+    "silent": true
   }
 }
